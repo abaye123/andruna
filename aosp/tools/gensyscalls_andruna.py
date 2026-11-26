@@ -67,7 +67,9 @@ def main():
     arch, txt = sys.argv[1], Path(sys.argv[2])
     g = load_gensyscalls(txt)
     g.x86_64_call = X86_64_CALL
-    g.arm64_call = ARM64_CALL
+    # bionic's arm64 template carries the ENTRY header itself (the x86_64
+    # generator adds it separately).
+    g.arm64_call = g.syscall_stub_header + ARM64_CALL
     original = g.x86_64_genstub
 
     def x86_64_genstub(syscall):
