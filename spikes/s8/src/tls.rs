@@ -74,7 +74,11 @@ pub fn layout(objs: &mut [Object]) -> Result<(), String> {
         };
         // arm64: bionic's slots occupy tp..tp+64, so blocks are aligned to
         // at least 64 (lld does the same for Android executables).
-        let a = if cfg!(target_arch = "aarch64") { p.p_align.max(64) } else { p.p_align.max(1) };
+        let a = if cfg!(target_arch = "aarch64") {
+            p.p_align.max(64)
+        } else {
+            p.p_align.max(1)
+        };
         l.align = l.align.max(a);
         #[cfg(target_arch = "x86_64")]
         let offset = {
@@ -99,14 +103,20 @@ pub fn layout(objs: &mut [Object]) -> Result<(), String> {
     crate::host::random_bytes(&mut guard);
     // SAFETY: written once, before any guest thread exists.
     unsafe { STACK_GUARD = u64::from_ne_bytes(guard) & !0xff };
-    LAYOUT.set(l).map_err(|_| "TLS layout set twice".to_string())
+    LAYOUT
+        .set(l)
+        .map_err(|_| "TLS layout set twice".to_string())
 }
 
 /// The value a `TPOFF64` relocation stores for module `m` (1-based).
 pub fn tp_offset(m: usize) -> i64 {
     let l = LAYOUT.get().expect("TLS laid out");
     let off = l.modules[m - 1].offset as i64;
-    if cfg!(target_arch = "x86_64") { -off } else { off }
+    if cfg!(target_arch = "x86_64") {
+        -off
+    } else {
+        off
+    }
 }
 
 /// The thread's TLS area: allocated, initialized, owned by the thread.
@@ -132,7 +142,8 @@ impl ThreadArea {
         // Slot -1 below tp, slots 0..7 above it, then the module blocks
         // (the first one at tp + 64 or more).
         let (total, tp_off) = (l.align + align_up(l.size.max(slots), l.align), l.align);
-        let layout = std::alloc::Layout::from_size_align(total as usize, l.align as usize).expect("layout");
+        let layout =
+            std::alloc::Layout::from_size_align(total as usize, l.align as usize).expect("layout");
         // SAFETY: non-zero size.
         let alloc = unsafe { std::alloc::alloc_zeroed(layout) };
         assert!(!alloc.is_null(), "out of memory for TLS");
@@ -145,7 +156,11 @@ impl ThreadArea {
             // SAFETY: the block lies inside the allocation (layout above)
             // and the image is the object's mapped PT_TLS data.
             unsafe {
-                core::ptr::copy_nonoverlapping(m.image as *const u8, block as *mut u8, m.filesz as usize);
+                core::ptr::copy_nonoverlapping(
+                    m.image as *const u8,
+                    block as *mut u8,
+                    m.filesz as usize,
+                );
                 let _ = m.memsz;
             }
         }
@@ -259,7 +274,9 @@ fn has_fs_prefix(rip: u64) -> bool {
         let b = unsafe { *((rip + i) as *const u8) };
         match b {
             0x64 => return true,
-            0x26 | 0x2e | 0x36 | 0x3e | 0x65 | 0x66 | 0x67 | 0xf0 | 0xf2 | 0xf3 | 0x40..=0x4f => continue,
+            0x26 | 0x2e | 0x36 | 0x3e | 0x65 | 0x66 | 0x67 | 0xf0 | 0xf2 | 0xf3 | 0x40..=0x4f => {
+                continue;
+            }
             _ => return false,
         }
     }

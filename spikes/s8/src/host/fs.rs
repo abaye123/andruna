@@ -25,7 +25,11 @@ pub static EXE_PATH: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 fn cwd() -> Vec<u8> {
     let c = CWD.lock().unwrap();
-    if c.is_empty() { b"/".to_vec() } else { c.clone() }
+    if c.is_empty() {
+        b"/".to_vec()
+    } else {
+        c.clone()
+    }
 }
 
 fn linux_path(dirfd: i32, p: &[u8]) -> Result<LinuxPath, i32> {
@@ -77,7 +81,9 @@ fn result(r: std::io::Result<()>) -> i32 {
 /// `p` is NULL or a NUL-terminated string.
 unsafe fn with_path(dirfd: i32, p: *const c_char, f: impl FnOnce(PathBuf) -> i32) -> i32 {
     // SAFETY: forwarded from the caller.
-    let Some(b) = (unsafe { cstr(p) }) else { return fail_with(EFAULT) };
+    let Some(b) = (unsafe { cstr(p) }) else {
+        return fail_with(EFAULT);
+    };
     match win_path(dirfd, b) {
         Ok(w) => f(w),
         Err(e) => fail_with(e),
@@ -329,10 +335,18 @@ fn open_dir(w: PathBuf) -> *mut c_void {
             for e in it.flatten() {
                 use std::os::windows::ffi::OsStrExt;
                 let name: Vec<u16> = e.file_name().encode_wide().collect();
-                let t = if e.file_type().map(|t| t.is_dir()).unwrap_or(false) { DT_DIR } else { DT_REG };
+                let t = if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    DT_DIR
+                } else {
+                    DT_REG
+                };
                 entries.push((decode_component(&name), t));
             }
-            Box::into_raw(Box::new(Dir { entries, pos: 0, ent: [0; 280] })) as *mut c_void
+            Box::into_raw(Box::new(Dir {
+                entries,
+                pos: 0,
+                ent: [0; 280],
+            })) as *mut c_void
         }
         Err(e) => {
             set_errno(io_errno(&e));
@@ -414,12 +428,18 @@ const FTW_DP: i32 = 5;
 const FTW_DEPTH: i32 = 8;
 
 fn walk(path: &[u8], level: i32, f: NftwFn, flags: i32) -> i32 {
-    let Ok(w) = win_path(AT_FDCWD, path) else { return -1 };
+    let Ok(w) = win_path(AT_FDCWD, path) else {
+        return -1;
+    };
     let mut st = [0u8; 160];
     let c = std::ffi::CString::new(path.to_vec()).unwrap();
     // SAFETY: a valid path and a buffer larger than struct stat.
     unsafe { super::lx::h_lstat(c.as_ptr(), st.as_mut_ptr() as *mut c_void) };
-    let base = path.iter().rposition(|&b| b == b'/').map(|i| i + 1).unwrap_or(0) as i32;
+    let base = path
+        .iter()
+        .rposition(|&b| b == b'/')
+        .map(|i| i + 1)
+        .unwrap_or(0) as i32;
     let mut ftw = [base, level];
     if w.is_dir() {
         if flags & FTW_DEPTH == 0 {

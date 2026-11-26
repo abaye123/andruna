@@ -17,8 +17,8 @@ use andruna_lx::linux::time::Timespec;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
     AcquireSRWLockExclusive, AcquireSRWLockShared, CreateThread, INFINITE, ReleaseSRWLockExclusive,
-    ReleaseSRWLockShared, SRWLOCK, THREAD_CREATION_FLAGS, TryAcquireSRWLockExclusive, TryAcquireSRWLockShared,
-    WaitForSingleObject,
+    ReleaseSRWLockShared, SRWLOCK, THREAD_CREATION_FLAGS, TryAcquireSRWLockExclusive,
+    TryAcquireSRWLockShared, WaitForSingleObject,
 };
 
 use super::guard;
@@ -70,7 +70,10 @@ pub fn enter_guest_thread(t: *mut GuestThread) -> ThreadArea {
     area.activate();
     SELF.with(|c| c.set(t as usize));
     // SAFETY: `t` is a live thread record.
-    unsafe { (*t).tid.store(andruna_lx::process::gettid(), Ordering::Relaxed) };
+    unsafe {
+        (*t).tid
+            .store(andruna_lx::process::gettid(), Ordering::Relaxed)
+    };
     area
 }
 
@@ -290,7 +293,11 @@ fn lock_word(word: &AtomicU32, deadline: Option<&Timespec>) -> i32 {
                 }
             }
         }
-        if w & 3 == 1 && word.compare_exchange(w, ty | 2, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+        if w & 3 == 1
+            && word
+                .compare_exchange(w, ty | 2, Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+        {
             w = word.load(Ordering::Relaxed);
             continue;
         }
@@ -309,7 +316,10 @@ fn lock_word(word: &AtomicU32, deadline: Option<&Timespec>) -> i32 {
         // After a wait, take the lock as contended so the unlock wakes the
         // next waiter.
         if w & 3 == 0 {
-            if word.compare_exchange(w, ty | 2, Ordering::Acquire, Ordering::Relaxed).is_ok() {
+            if word
+                .compare_exchange(w, ty | 2, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+            {
                 return 0;
             }
             w = word.load(Ordering::Relaxed);
@@ -331,7 +341,11 @@ unsafe fn mutex_lock(m: *mut u32, deadline: Option<&Timespec>, try_only: bool) -
     }
     let r = if try_only {
         let w = word.load(Ordering::Relaxed);
-        if w & 3 != 0 || word.compare_exchange(w, (w & !3) | 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        if w & 3 != 0
+            || word
+                .compare_exchange(w, (w & !3) | 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+        {
             EBUSY
         } else {
             0
@@ -797,12 +811,21 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("pthread_mutex_init", h_pthread_mutex_init as usize),
         ("pthread_mutex_destroy", h_pthread_mutex_destroy as usize),
         ("pthread_mutex_lock", h_pthread_mutex_lock as usize),
-        ("pthread_mutex_timedlock", h_pthread_mutex_timedlock as usize),
+        (
+            "pthread_mutex_timedlock",
+            h_pthread_mutex_timedlock as usize,
+        ),
         ("pthread_mutex_trylock", h_pthread_mutex_trylock as usize),
         ("pthread_mutex_unlock", h_pthread_mutex_unlock as usize),
         ("pthread_mutexattr_init", h_pthread_mutexattr_init as usize),
-        ("pthread_mutexattr_destroy", h_pthread_mutexattr_destroy as usize),
-        ("pthread_mutexattr_settype", h_pthread_mutexattr_settype as usize),
+        (
+            "pthread_mutexattr_destroy",
+            h_pthread_mutexattr_destroy as usize,
+        ),
+        (
+            "pthread_mutexattr_settype",
+            h_pthread_mutexattr_settype as usize,
+        ),
         ("pthread_cond_init", h_pthread_cond_init as usize),
         ("pthread_cond_destroy", h_pthread_cond_destroy as usize),
         ("pthread_cond_wait", h_pthread_cond_wait as usize),
@@ -810,13 +833,22 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("pthread_cond_signal", h_pthread_cond_signal as usize),
         ("pthread_cond_broadcast", h_pthread_cond_broadcast as usize),
         ("pthread_condattr_init", h_pthread_condattr_init as usize),
-        ("pthread_condattr_setclock", h_pthread_condattr_setclock as usize),
+        (
+            "pthread_condattr_setclock",
+            h_pthread_condattr_setclock as usize,
+        ),
         ("pthread_rwlock_init", h_pthread_rwlock_init as usize),
         ("pthread_rwlock_destroy", h_pthread_rwlock_destroy as usize),
         ("pthread_rwlock_rdlock", h_pthread_rwlock_rdlock as usize),
         ("pthread_rwlock_wrlock", h_pthread_rwlock_wrlock as usize),
-        ("pthread_rwlock_tryrdlock", h_pthread_rwlock_tryrdlock as usize),
-        ("pthread_rwlock_trywrlock", h_pthread_rwlock_trywrlock as usize),
+        (
+            "pthread_rwlock_tryrdlock",
+            h_pthread_rwlock_tryrdlock as usize,
+        ),
+        (
+            "pthread_rwlock_trywrlock",
+            h_pthread_rwlock_trywrlock as usize,
+        ),
         ("pthread_rwlock_unlock", h_pthread_rwlock_unlock as usize),
         ("pthread_once", h_pthread_once as usize),
         ("pthread_key_create", h_pthread_key_create as usize),
@@ -825,11 +857,23 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("pthread_setspecific", h_pthread_setspecific as usize),
         ("pthread_attr_init", h_pthread_attr_init as usize),
         ("pthread_attr_destroy", h_pthread_attr_destroy as usize),
-        ("pthread_attr_setdetachstate", h_pthread_attr_setdetachstate as usize),
-        ("pthread_attr_setstacksize", h_pthread_attr_setstacksize as usize),
-        ("pthread_attr_getstacksize", h_pthread_attr_getstacksize as usize),
+        (
+            "pthread_attr_setdetachstate",
+            h_pthread_attr_setdetachstate as usize,
+        ),
+        (
+            "pthread_attr_setstacksize",
+            h_pthread_attr_setstacksize as usize,
+        ),
+        (
+            "pthread_attr_getstacksize",
+            h_pthread_attr_getstacksize as usize,
+        ),
         ("pthread_setname_np", h_pthread_setname_np as usize),
-        ("__cxa_thread_atexit_impl", h_cxa_thread_atexit_impl as usize),
+        (
+            "__cxa_thread_atexit_impl",
+            h_cxa_thread_atexit_impl as usize,
+        ),
         ("__andruna_libc_thread_exit", h_libc_thread_exit as usize),
         ("__tls_get_addr", h_tls_get_addr as usize),
     ]

@@ -178,7 +178,11 @@ fn code_stub(code: &[u8]) -> usize {
     let _g = STUBS.lock().unwrap();
     // SAFETY: the stub page is only touched under the STUBS lock.
     let (page, used) = unsafe { STUB_PAGE };
-    let (page, used) = if page == 0 || used + 32 > 65536 { (new_stub_page(), 0) } else { (page, used) };
+    let (page, used) = if page == 0 || used + 32 > 65536 {
+        (new_stub_page(), 0)
+    } else {
+        (page, used)
+    };
     // SAFETY: inside the RWX stub page, unused so far.
     unsafe { core::ptr::copy_nonoverlapping(code.as_ptr(), (page + used) as *mut u8, code.len()) };
     // SAFETY: as above.
@@ -190,7 +194,9 @@ fn new_stub_page() -> usize {
     andruna_lx::mem::mmap(
         0,
         65536,
-        andruna_lx::linux::mman::PROT_READ | andruna_lx::linux::mman::PROT_WRITE | andruna_lx::linux::mman::PROT_EXEC,
+        andruna_lx::linux::mman::PROT_READ
+            | andruna_lx::linux::mman::PROT_WRITE
+            | andruna_lx::linux::mman::PROT_EXEC,
         andruna_lx::linux::mman::MAP_PRIVATE | andruna_lx::linux::mman::MAP_ANONYMOUS,
         -1,
         0,
@@ -212,7 +218,9 @@ pub fn unresolved_stub(name: &str) -> usize {
         let p = andruna_lx::mem::mmap(
             0,
             65536,
-            andruna_lx::linux::mman::PROT_READ | andruna_lx::linux::mman::PROT_WRITE | andruna_lx::linux::mman::PROT_EXEC,
+            andruna_lx::linux::mman::PROT_READ
+                | andruna_lx::linux::mman::PROT_WRITE
+                | andruna_lx::linux::mman::PROT_EXEC,
             andruna_lx::linux::mman::MAP_PRIVATE | andruna_lx::linux::mman::MAP_ANONYMOUS,
             -1,
             0,
@@ -264,7 +272,9 @@ gfn! {
 
 /// Random bytes from the system generator.
 pub fn random_bytes(buf: &mut [u8]) {
-    use windows::Win32::Security::Cryptography::{BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom};
+    use windows::Win32::Security::Cryptography::{
+        BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
+    };
     // SAFETY: a valid buffer; no algorithm handle with the preferred-RNG flag.
     let st = unsafe { BCryptGenRandom(None, buf, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
     assert!(st.is_ok(), "BCryptGenRandom failed");

@@ -42,16 +42,30 @@ type ExitFn = extern "sysv64" fn(i32);
 type ExitFn = extern "C" fn(i32);
 
 fn arch_dir() -> &'static str {
-    if cfg!(target_arch = "x86_64") { "x64" } else { "arm64" }
+    if cfg!(target_arch = "x86_64") {
+        "x64"
+    } else {
+        "arm64"
+    }
 }
 
 fn lib_path() -> Vec<PathBuf> {
     if let Ok(p) = std::env::var("S8_LIB_PATH") {
-        return p.split(';').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
+        return p
+            .split(';')
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect();
     }
     let arch = std::env::var("S8_ARCH").unwrap_or_else(|_| arch_dir().to_string());
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out/s8").join(arch);
-    vec![root.join("aosp"), root.join("sysroot/usr/lib"), root.join("libcxx-install/lib")]
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../out/s8")
+        .join(arch);
+    vec![
+        root.join("aosp"),
+        root.join("sysroot/usr/lib"),
+        root.join("libcxx-install/lib"),
+    ]
 }
 
 /// Sets up lx: the guest file tree and the console descriptors.
@@ -66,7 +80,8 @@ fn init_lx() -> Result<(), String> {
     let root = std::fs::canonicalize(&root).map_err(|e| e.to_string())?;
     let r = root.to_string_lossy();
     let r = r.strip_prefix(r"\\?\").unwrap_or(&r).to_string();
-    andruna_lx::fs::mount::mount("/", Path::new(&r)).map_err(|e| format!("mount: errno {}", e.0))?;
+    andruna_lx::fs::mount::mount("/", Path::new(&r))
+        .map_err(|e| format!("mount: errno {}", e.0))?;
     host::lx::init_std_fds()
 }
 
@@ -87,14 +102,21 @@ fn make_args(args: &[String]) -> Args {
         "ANDROID_ROOT=/system",
         "PATH=/system/bin",
     ];
-    let mut store: Vec<CString> = args.iter().map(|a| CString::new(a.as_str()).unwrap()).collect();
+    let mut store: Vec<CString> = args
+        .iter()
+        .map(|a| CString::new(a.as_str()).unwrap())
+        .collect();
     let n = store.len();
     store.extend(env.iter().map(|e| CString::new(*e).unwrap()));
     let mut argv: Vec<*const u8> = store[..n].iter().map(|c| c.as_ptr() as *const u8).collect();
     argv.push(core::ptr::null());
     let mut envp: Vec<*const u8> = store[n..].iter().map(|c| c.as_ptr() as *const u8).collect();
     envp.push(core::ptr::null());
-    Args { _store: store, argv, envp }
+    Args {
+        _store: store,
+        argv,
+        envp,
+    }
 }
 
 fn load(linker: &mut loader::Linker, name: &str) -> Result<usize, String> {
@@ -116,7 +138,11 @@ fn load(linker: &mut loader::Linker, name: &str) -> Result<usize, String> {
 
 fn cmd_run(args: &[String]) -> Result<i32, String> {
     let exe = args.first().ok_or("run: missing executable")?.clone();
-    let name = Path::new(&exe).file_name().unwrap().to_string_lossy().into_owned();
+    let name = Path::new(&exe)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     *host::fs::EXE_PATH.lock().unwrap() = format!("/data/local/tmp/{name}").into_bytes();
     let args = args.to_vec();
     let mut code = Ok(0);
@@ -130,9 +156,12 @@ fn cmd_run(args: &[String]) -> Result<i32, String> {
             linker.run_initializers((a.argv.len() - 1) as i32, a.argv.as_ptr(), a.envp.as_ptr());
             report::initialized(&linker);
             let main = linker.lookup_global("main").ok_or("no exported main")?;
-            let exit = linker.lookup_global("exit").ok_or("guest libc has no exit")?;
+            let exit = linker
+                .lookup_global("exit")
+                .ok_or("guest libc has no exit")?;
             // SAFETY: the guest's main and exit, System V convention.
-            let (main, exit): (MainFn, ExitFn) = unsafe { (core::mem::transmute(main), core::mem::transmute(exit)) };
+            let (main, exit): (MainFn, ExitFn) =
+                unsafe { (core::mem::transmute(main), core::mem::transmute(exit)) };
             let rc = main((a.argv.len() - 1) as i32, a.argv.as_ptr(), a.envp.as_ptr());
             exit(rc);
             Ok(rc)
@@ -179,11 +208,20 @@ extern "sysv64" fn capture(x: u64) -> u64 {
     host::guard(|| {
         let mut frames = [core::ptr::null_mut(); 24];
         // SAFETY: a buffer of 24 entries.
-        let n = unsafe { windows::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace(0, &mut frames, None) };
+        let n = unsafe {
+            windows::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace(
+                0,
+                &mut frames,
+                None,
+            )
+        };
         println!("RtlCaptureStackBackTrace from a host callback: {n} frames");
         for (i, f) in frames[..n as usize].iter().enumerate() {
             let a = *f as u64;
-            println!("  #{i:<2} {a:#x} {}", debug::describe(a).unwrap_or_else(|| "(host or system)".into()));
+            println!(
+                "  #{i:<2} {a:#x} {}",
+                debug::describe(a).unwrap_or_else(|| "(host or system)".into())
+            );
         }
         println!("RtlLookupFunctionEntry + RtlVirtualUnwind from the same callback:");
         virtual_unwind_walk();
@@ -210,7 +248,15 @@ fn virtual_unwind_walk() {
         // SAFETY: looks up the function table for ctx.Rip.
         let f = unsafe { RtlLookupFunctionEntry(ctx.Rip, &mut base, None) };
         let what = debug::describe(ctx.Rip).unwrap_or_else(|| "(host or system)".into());
-        println!("  #{i:<2} {:#x} {what}{}", ctx.Rip, if f.is_null() { "  [no unwind entry: leaf]" } else { "" });
+        println!(
+            "  #{i:<2} {:#x} {what}{}",
+            ctx.Rip,
+            if f.is_null() {
+                "  [no unwind entry: leaf]"
+            } else {
+                ""
+            }
+        );
         if f.is_null() {
             // A leaf function: the return address is at [rsp].
             // SAFETY: rsp points into this thread's stack.
@@ -220,7 +266,18 @@ fn virtual_unwind_walk() {
             let mut data = core::ptr::null_mut();
             let mut frame = 0u64;
             // SAFETY: a function entry for ctx.Rip and a valid context.
-            unsafe { RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, ctx.Rip, f, ctx, &mut data, &mut frame, None) };
+            unsafe {
+                RtlVirtualUnwind(
+                    UNW_FLAG_NHANDLER,
+                    base,
+                    ctx.Rip,
+                    f,
+                    ctx,
+                    &mut data,
+                    &mut frame,
+                    None,
+                )
+            };
         }
         if ctx.Rip == 0 {
             break;
@@ -237,11 +294,16 @@ fn cmd_unwind() -> Result<i32, String> {
             load(&mut linker, "libs8bench.so")?;
             let t = host::threads::new_record();
             let _area = host::threads::enter_guest_thread(t);
-            let f = linker.lookup_global("s8_call_host_outer").ok_or("no s8_call_host_outer")?;
+            let f = linker
+                .lookup_global("s8_call_host_outer")
+                .ok_or("no s8_call_host_outer")?;
             // SAFETY: the guest function, System V convention.
             let f: CallHost = unsafe { core::mem::transmute(f) };
             let v = f(capture, 5);
-            println!("guest returned {v} (expected {})", ((6 + 6 * 3 + (6 ^ 0x55) + 6 + 7) * 2));
+            println!(
+                "guest returned {v} (expected {})",
+                ((6 + 6 * 3 + (6 ^ 0x55) + 6 + 7) * 2)
+            );
             Ok(0)
         })();
     });
@@ -264,7 +326,12 @@ fn cmd_winload(args: &[String]) -> Result<i32, String> {
         let h = unsafe { LoadLibraryW(windows::core::PCWSTR(w.as_ptr())) };
         let d = t.elapsed();
         let size = std::fs::metadata(a).map(|m| m.len()).unwrap_or(0);
-        println!("LoadLibraryW {a} ({:.1} MB): {:.2} ms {}", size as f64 / 1e6, d.as_secs_f64() * 1e3, if h.is_ok() { "ok" } else { "FAILED" });
+        println!(
+            "LoadLibraryW {a} ({:.1} MB): {:.2} ms {}",
+            size as f64 / 1e6,
+            d.as_secs_f64() * 1e3,
+            if h.is_ok() { "ok" } else { "FAILED" }
+        );
     }
     Ok(0)
 }
@@ -309,7 +376,9 @@ fn main() {
             Ok(m.len() as i32)
         }
         _ => {
-            eprintln!("usage: andruna-spike-s8 run <exe> [args] | bench | load <so> | crash | check");
+            eprintln!(
+                "usage: andruna-spike-s8 run <exe> [args] | bench | load <so> | crash | check"
+            );
             Ok(2)
         }
     };

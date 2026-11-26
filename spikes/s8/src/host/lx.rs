@@ -15,7 +15,10 @@ use core::ffi::{c_char, c_void};
 use std::sync::Mutex;
 
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
-use windows::Win32::System::Console::{GetConsoleMode, GetStdHandle, STD_ERROR_HANDLE, STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, CONSOLE_MODE};
+use windows::Win32::System::Console::{
+    CONSOLE_MODE, GetConsoleMode, GetStdHandle, STD_ERROR_HANDLE, STD_HANDLE, STD_INPUT_HANDLE,
+    STD_OUTPUT_HANDLE,
+};
 
 use super::{fail_with, guard};
 use andruna_lx::linux::errno::*;
@@ -39,7 +42,14 @@ mod sys {
         pub fn dup3(o: i32, n: i32, flags: i32) -> i32;
         pub fn dup2(o: i32, n: i32) -> i32;
         pub fn fcntl(fd: i32, cmd: i32, arg: usize) -> i32;
-        pub fn mmap(a: *mut c_void, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut c_void;
+        pub fn mmap(
+            a: *mut c_void,
+            len: usize,
+            prot: i32,
+            flags: i32,
+            fd: i32,
+            off: i64,
+        ) -> *mut c_void;
         pub fn munmap(a: *mut c_void, len: usize) -> i32;
         pub fn mprotect(a: *mut c_void, len: usize, prot: i32) -> i32;
         pub fn madvise(a: *mut c_void, len: usize, advice: i32) -> i32;
@@ -99,7 +109,9 @@ pub fn init_std_fds() -> Result<(), String> {
         // SAFETY: a NUL-terminated path.
         let fd = unsafe { sys::open(c"/dev/null".as_ptr(), 2, 0) };
         if fd != want {
-            return Err(format!("expected lx descriptor {want} for the console, got {fd}"));
+            return Err(format!(
+                "expected lx descriptor {want} for the console, got {fd}"
+            ));
         }
         set_console(fd, Some(s));
     }

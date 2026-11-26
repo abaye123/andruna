@@ -27,7 +27,13 @@ fn alloc(size: usize, align: usize, zero: bool) -> *mut c_void {
         return core::ptr::null_mut();
     };
     // SAFETY: non-zero size.
-    let raw = unsafe { if zero { std::alloc::alloc_zeroed(layout) } else { std::alloc::alloc(layout) } };
+    let raw = unsafe {
+        if zero {
+            std::alloc::alloc_zeroed(layout)
+        } else {
+            std::alloc::alloc(layout)
+        }
+    };
     if raw.is_null() {
         set_errno(ENOMEM);
         return core::ptr::null_mut();
@@ -263,9 +269,12 @@ gfn! {
 
 #[cfg(target_arch = "aarch64")]
 fn hwcap() -> u64 {
-    use windows::Win32::System::Threading::{IsProcessorFeaturePresent, PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE};
+    use windows::Win32::System::Threading::{
+        IsProcessorFeaturePresent, PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE,
+    };
     // SAFETY: a plain query.
-    let lse = unsafe { IsProcessorFeaturePresent(PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE) }.as_bool();
+    let lse =
+        unsafe { IsProcessorFeaturePresent(PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE) }.as_bool();
     // HWCAP_FP | HWCAP_ASIMD, plus HWCAP_ATOMICS when present.
     0b11 | if lse { 1 << 8 } else { 0 }
 }
@@ -287,7 +296,12 @@ static PROPS: Mutex<Option<HashMap<Vec<u8>, &'static Prop>>> = Mutex::new(None);
 static AREA_SERIAL: AtomicU32 = AtomicU32::new(1);
 
 fn find_prop(name: &[u8]) -> Option<&'static Prop> {
-    PROPS.lock().unwrap().get_or_insert_with(HashMap::new).get(name).copied()
+    PROPS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .get(name)
+        .copied()
 }
 
 gfn! {
@@ -561,7 +575,10 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("malloc_usable_size", h_malloc_usable_size as usize),
         ("_exit", h_exit as usize),
         ("abort", h_abort as usize),
-        ("android_set_abort_message", h_android_set_abort_message as usize),
+        (
+            "android_set_abort_message",
+            h_android_set_abort_message as usize,
+        ),
         ("getuid", h_getuid as usize),
         ("geteuid", h_getuid as usize),
         ("getgid", h_getgid as usize),
@@ -576,14 +593,26 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("__system_property_find", h_prop_find as usize),
         ("__system_property_get", h_prop_get as usize),
         ("__system_property_set", h_prop_set as usize),
-        ("__system_property_read_callback", h_prop_read_callback as usize),
+        (
+            "__system_property_read_callback",
+            h_prop_read_callback as usize,
+        ),
         ("__system_property_read", h_prop_read as usize),
         ("__system_property_serial", h_prop_serial as usize),
         ("__system_property_area_serial", h_prop_area_serial as usize),
         ("__system_property_wait", h_prop_wait as usize),
-        ("android_fdsan_create_owner_tag", h_fdsan_create_owner_tag as usize),
-        ("android_fdsan_exchange_owner_tag", h_fdsan_exchange_owner_tag as usize),
-        ("android_fdsan_close_with_tag", h_fdsan_close_with_tag as usize),
+        (
+            "android_fdsan_create_owner_tag",
+            h_fdsan_create_owner_tag as usize,
+        ),
+        (
+            "android_fdsan_exchange_owner_tag",
+            h_fdsan_exchange_owner_tag as usize,
+        ),
+        (
+            "android_fdsan_close_with_tag",
+            h_fdsan_close_with_tag as usize,
+        ),
         ("__andruna_fmt_fp", h_fmt_fp as usize),
         ("strtod", h_strtod as usize),
         ("strtof", h_strtof as usize),

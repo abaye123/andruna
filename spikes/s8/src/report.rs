@@ -45,16 +45,28 @@ pub fn loaded(l: &Linker, total: Duration) {
         s.relocations, s.relr_relocations, s.packed_relocations, s.symbol_lookups, s.host_bindings
     );
     for o in &l.objects {
-        eprintln!("[s8]   {:<24} at {:#x} ({} KiB) tls module {}", o.name, o.base, o.size / 1024, o.tls_module);
+        eprintln!(
+            "[s8]   {:<24} at {:#x} ({} KiB) tls module {}",
+            o.name,
+            o.base,
+            o.size / 1024,
+            o.tls_module
+        );
     }
     if !s.unresolved.is_empty() {
-        eprintln!("[s8]   unresolved (bound to ENOSYS stubs): {}", s.unresolved.join(" "));
+        eprintln!(
+            "[s8]   unresolved (bound to ENOSYS stubs): {}",
+            s.unresolved.join(" ")
+        );
     }
 }
 
 pub fn initialized(l: &Linker) {
     if !quiet() {
-        eprintln!("[s8] initializers ran in {:.2} ms", l.stats.init.as_secs_f64() * 1e3);
+        eprintln!(
+            "[s8] initializers ran in {:.2} ms",
+            l.stats.init.as_secs_f64() * 1e3
+        );
     }
 }
 
@@ -111,7 +123,16 @@ fn bench_inner(path: Vec<PathBuf>) -> Result<i32, String> {
 
     let sym = |n: &str| linker.lookup_global(n).ok_or(format!("missing {n}"));
     // SAFETY: functions of libs8bench.so with the declared signatures.
-    let (lg, lh, lt, lc, ls, ltls, nop, guard): (GuestLoop, GuestLoop, GuestLoop, GuestLoop, GuestLoopStr, GuestLoop, GuestNop, GuestU64) = unsafe {
+    let (lg, lh, lt, lc, ls, ltls, nop, guard): (
+        GuestLoop,
+        GuestLoop,
+        GuestLoop,
+        GuestLoop,
+        GuestLoopStr,
+        GuestLoop,
+        GuestNop,
+        GuestU64,
+    ) = unsafe {
         (
             core::mem::transmute(sym("s8_loop_guest")?),
             core::mem::transmute(sym("s8_loop_host_nop")?),
@@ -126,28 +147,67 @@ fn bench_inner(path: Vec<PathBuf>) -> Result<i32, String> {
     const N: u64 = 10_000_000;
     let per = |d: Duration| d.as_secs_f64() * 1e9 / N as f64;
     let rows: Vec<(&str, f64)> = vec![
-        ("guest -> guest (indirect call, empty function)", per(best(|| { std::hint::black_box(lg(N)); }))),
-        ("guest -> host, empty System V function", per(best(|| { std::hint::black_box(lh(N)); }))),
-        ("guest -> host -> lx gettid (Windows ABI)", per(best(|| { std::hint::black_box(lt(N)); }))),
-        ("guest -> host -> lx clock_gettime(MONOTONIC)", per(best(|| { std::hint::black_box(lc(N)); }))),
-        ("guest -> guest libc strlen(11 bytes)", per(best(|| { std::hint::black_box(ls(N, c"hello world".as_ptr() as *const u8)); }))),
-        ("guest TLS variable ++ (general dynamic)", per(best(|| { std::hint::black_box(ltls(N)); }))),
-        ("host -> guest, empty function (System V call from Rust)", per(best(|| {
-            for _ in 0..N {
-                std::hint::black_box(nop());
-            }
-        }))),
-        ("host -> host, empty function (Windows ABI, no boundary)", per(best(|| {
-            let f: extern "C" fn() -> i32 = std::hint::black_box(host_empty);
-            for _ in 0..N {
-                std::hint::black_box(f());
-            }
-        }))),
-        ("host -> lx gettid directly (Windows ABI, as option 1)", per(best(|| {
-            for _ in 0..N {
-                std::hint::black_box(crate::host::lx::lx_gettid());
-            }
-        }))),
+        (
+            "guest -> guest (indirect call, empty function)",
+            per(best(|| {
+                std::hint::black_box(lg(N));
+            })),
+        ),
+        (
+            "guest -> host, empty System V function",
+            per(best(|| {
+                std::hint::black_box(lh(N));
+            })),
+        ),
+        (
+            "guest -> host -> lx gettid (Windows ABI)",
+            per(best(|| {
+                std::hint::black_box(lt(N));
+            })),
+        ),
+        (
+            "guest -> host -> lx clock_gettime(MONOTONIC)",
+            per(best(|| {
+                std::hint::black_box(lc(N));
+            })),
+        ),
+        (
+            "guest -> guest libc strlen(11 bytes)",
+            per(best(|| {
+                std::hint::black_box(ls(N, c"hello world".as_ptr() as *const u8));
+            })),
+        ),
+        (
+            "guest TLS variable ++ (general dynamic)",
+            per(best(|| {
+                std::hint::black_box(ltls(N));
+            })),
+        ),
+        (
+            "host -> guest, empty function (System V call from Rust)",
+            per(best(|| {
+                for _ in 0..N {
+                    std::hint::black_box(nop());
+                }
+            })),
+        ),
+        (
+            "host -> host, empty function (Windows ABI, no boundary)",
+            per(best(|| {
+                let f: extern "C" fn() -> i32 = std::hint::black_box(host_empty);
+                for _ in 0..N {
+                    std::hint::black_box(f());
+                }
+            })),
+        ),
+        (
+            "host -> lx gettid directly (Windows ABI, as option 1)",
+            per(best(|| {
+                for _ in 0..N {
+                    std::hint::black_box(crate::host::lx::lx_gettid());
+                }
+            })),
+        ),
     ];
     println!("| Call ({N} iterations, best of 5) | ns per call |");
     println!("| --- | ---: |");
@@ -155,8 +215,14 @@ fn bench_inner(path: Vec<PathBuf>) -> Result<i32, String> {
         println!("| {n} | {v:.2} |");
     }
     let g = guard();
-    println!("stack guard read through the thread pointer: {}", if g != 0 { "ok (non-zero)" } else { "ZERO" });
+    println!(
+        "stack guard read through the thread pointer: {}",
+        if g != 0 { "ok (non-zero)" } else { "ZERO" }
+    );
     #[cfg(target_arch = "x86_64")]
-    println!("FS-base lazy restores on the bench thread: {}", crate::tls::restores_here());
+    println!(
+        "FS-base lazy restores on the bench thread: {}",
+        crate::tls::restores_here()
+    );
     Ok(0)
 }

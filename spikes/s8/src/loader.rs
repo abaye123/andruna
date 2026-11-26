@@ -17,7 +17,9 @@ use std::ffi::CStr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use andruna_lx::linux::mman::{MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE};
+use andruna_lx::linux::mman::{
+    MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE,
+};
 
 use crate::elf::*;
 use crate::host;
@@ -139,7 +141,10 @@ impl Linker {
     pub fn load(&mut self, path: &Path) -> Result<usize, String> {
         let t0 = Instant::now();
         let main = self.objects.len();
-        let mut queue = vec![(path.to_path_buf(), path.file_name().unwrap().to_string_lossy().into_owned())];
+        let mut queue = vec![(
+            path.to_path_buf(),
+            path.file_name().unwrap().to_string_lossy().into_owned(),
+        )];
         let mut qi = 0;
         while qi < queue.len() {
             let (p, name) = queue[qi].clone();
@@ -256,7 +261,10 @@ impl Linker {
             relocs.extend(p);
         }
         if o.dyn1(DT_REL).is_some() || o.dyn1(DT_ANDROID_REL).is_some() {
-            return Err(format!("{}: REL relocations are not used on 64-bit Android", o.name));
+            return Err(format!(
+                "{}: REL relocations are not used on 64-bit Android",
+                o.name
+            ));
         }
         let relr = o
             .dyn1(DT_RELR)
@@ -264,7 +272,8 @@ impl Linker {
             .or(o.dyn1(DT_ANDROID_RELR).zip(o.dyn1(DT_ANDROID_RELRSZ)));
         if let Some((a, sz)) = relr {
             // SAFETY: the RELR table lies in a mapped segment.
-            let words = unsafe { core::slice::from_raw_parts((bias + a) as *const u64, (sz / 8) as usize) };
+            let words =
+                unsafe { core::slice::from_raw_parts((bias + a) as *const u64, (sz / 8) as usize) };
             let mut n = 0;
             decode_relr(words, |off| {
                 let p = (bias + off) as *mut u64;
@@ -310,10 +319,16 @@ impl Linker {
             let a = r.r_addend as u64;
             let val: Option<u64> = match (machine, ty) {
                 (EM_X86_64, x86_64::R_NONE) | (EM_AARCH64, aarch64::R_NONE) => None,
-                (EM_X86_64, x86_64::R_RELATIVE) | (EM_AARCH64, aarch64::R_RELATIVE) => Some(bias.wrapping_add(a)),
-                (EM_X86_64, x86_64::R_64) | (EM_AARCH64, aarch64::R_ABS64) => Some(s_addr.wrapping_add(a)),
+                (EM_X86_64, x86_64::R_RELATIVE) | (EM_AARCH64, aarch64::R_RELATIVE) => {
+                    Some(bias.wrapping_add(a))
+                }
+                (EM_X86_64, x86_64::R_64) | (EM_AARCH64, aarch64::R_ABS64) => {
+                    Some(s_addr.wrapping_add(a))
+                }
                 (EM_X86_64, x86_64::R_GLOB_DAT | x86_64::R_JUMP_SLOT)
-                | (EM_AARCH64, aarch64::R_GLOB_DAT | aarch64::R_JUMP_SLOT) => Some(s_addr.wrapping_add(a)),
+                | (EM_AARCH64, aarch64::R_GLOB_DAT | aarch64::R_JUMP_SLOT) => {
+                    Some(s_addr.wrapping_add(a))
+                }
                 (EM_X86_64, x86_64::R_IRELATIVE) | (EM_AARCH64, aarch64::R_IRELATIVE) => {
                     irelative.push((where_, bias.wrapping_add(a)));
                     None
@@ -346,7 +361,11 @@ impl Linker {
                         None => (tls_module, 0),
                     };
                     let off = (tls::tp_offset(m) as u64).wrapping_add(v).wrapping_add(a);
-                    let resolver = if machine == crate::ARCH_ELF { host::tlsdesc_static_resolver() } else { 0 };
+                    let resolver = if machine == crate::ARCH_ELF {
+                        host::tlsdesc_static_resolver()
+                    } else {
+                        0
+                    };
                     // SAFETY: a TLSDESC GOT slot is two words.
                     unsafe { where_.add(1).write_unaligned(off) };
                     self.stats.tlsdesc += 1;
@@ -428,19 +447,32 @@ fn map_object(path: &Path, name: &str) -> Result<Object, String> {
     let n = fh.read(&mut file).map_err(err)?;
     file.truncate(n);
     if file.len() < 64 || &file[..4] != b"\x7fELF" || file[4] != 2 || file[5] != 1 {
-        return Err(format!("{}: not a 64-bit little-endian ELF file", path.display()));
+        return Err(format!(
+            "{}: not a 64-bit little-endian ELF file",
+            path.display()
+        ));
     }
     // SAFETY: the file holds at least an ELF header; unaligned read.
     let eh: Ehdr = unsafe { (file.as_ptr() as *const Ehdr).read_unaligned() };
     if eh.e_type != ET_DYN {
-        return Err(format!("{}: not ET_DYN (Android objects are PIC)", path.display()));
+        return Err(format!(
+            "{}: not ET_DYN (Android objects are PIC)",
+            path.display()
+        ));
     }
     if eh.e_machine != crate::ARCH_ELF && !link_only() {
-        return Err(format!("{}: e_machine {} is not this architecture", path.display(), eh.e_machine));
+        return Err(format!(
+            "{}: e_machine {} is not this architecture",
+            path.display(),
+            eh.e_machine
+        ));
     }
     let ph_end = (eh.e_phoff + eh.e_phnum as u64 * eh.e_phentsize as u64) as usize;
     if ph_end > file.len() {
-        return Err(format!("{}: program headers beyond the first page", path.display()));
+        return Err(format!(
+            "{}: program headers beyond the first page",
+            path.display()
+        ));
     }
     let phdrs: Vec<Phdr> = (0..eh.e_phnum as u64)
         .map(|i| {
@@ -468,8 +500,15 @@ fn map_object(path: &Path, name: &str) -> Result<Object, String> {
     // linker does with a PROT_NONE reservation.
     // UNWIND_SPACE more is reserved after the image for the Windows unwind
     // tables (crate::unwind), which must lie within 4 GiB above the base.
-    let base = andruna_lx::mem::mmap(0, (span + UNWIND_SPACE) as usize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
-        .map_err(|e| lx_err("reserve", e))? as u64;
+    let base = andruna_lx::mem::mmap(
+        0,
+        (span + UNWIND_SPACE) as usize,
+        PROT_NONE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0,
+    )
+    .map_err(|e| lx_err("reserve", e))? as u64;
     let bias = base - lo;
     for p in &loads {
         let start = page_down(bias + p.p_vaddr);
@@ -491,7 +530,11 @@ fn map_object(path: &Path, name: &str) -> Result<Object, String> {
         // SAFETY: the destination was just mapped read-write and is
         // `p_memsz >= p_filesz` bytes long; the source is in the file.
         unsafe {
-            core::ptr::copy_nonoverlapping(file.as_ptr().add(fo), (bias + p.p_vaddr) as *mut u8, fs);
+            core::ptr::copy_nonoverlapping(
+                file.as_ptr().add(fo),
+                (bias + p.p_vaddr) as *mut u8,
+                fs,
+            );
         }
     }
 
@@ -596,11 +639,14 @@ fn read_symtab(fh: &mut std::fs::File, eh: &Ehdr) -> (Vec<(u64, u64, String)>, u
     if eh.e_shoff == 0 || std::env::var_os("S8_NO_SYMTAB").is_some() {
         return (vec![], 0);
     }
-    let Some(sh) = read_at(eh.e_shoff, eh.e_shnum as usize * eh.e_shentsize as usize) else { return (vec![], 0) };
+    let Some(sh) = read_at(eh.e_shoff, eh.e_shnum as usize * eh.e_shentsize as usize) else {
+        return (vec![], 0);
+    };
     let shdr = |i: usize| -> Option<Shdr> {
         let off = i * eh.e_shentsize as usize;
         // SAFETY: bounds checked by `get`.
-        sh.get(off..off + 64).map(|b| unsafe { (b.as_ptr() as *const Shdr).read_unaligned() })
+        sh.get(off..off + 64)
+            .map(|b| unsafe { (b.as_ptr() as *const Shdr).read_unaligned() })
     };
     let mut read = sh.len() as u64;
     let mut out = vec![];
@@ -609,8 +655,13 @@ fn read_symtab(fh: &mut std::fs::File, eh: &Ehdr) -> (Vec<(u64, u64, String)>, u
         if s.sh_type != SHT_SYMTAB {
             continue;
         }
-        let Some(strs) = shdr(s.sh_link as usize) else { continue };
-        let (Some(syms), Some(names)) = (read_at(s.sh_offset, s.sh_size as usize), read_at(strs.sh_offset, strs.sh_size as usize)) else {
+        let Some(strs) = shdr(s.sh_link as usize) else {
+            continue;
+        };
+        let (Some(syms), Some(names)) = (
+            read_at(s.sh_offset, s.sh_size as usize),
+            read_at(strs.sh_offset, strs.sh_size as usize),
+        ) else {
             continue;
         };
         read += syms.len() as u64 + names.len() as u64;
@@ -625,7 +676,11 @@ fn read_symtab(fh: &mut std::fs::File, eh: &Ehdr) -> (Vec<(u64, u64, String)>, u
                 continue;
             }
             let end = names[so..].iter().position(|&b| b == 0).unwrap_or(0);
-            out.push((sym.st_value, sym.st_size, String::from_utf8_lossy(&names[so..so + end]).into_owned()));
+            out.push((
+                sym.st_value,
+                sym.st_size,
+                String::from_utf8_lossy(&names[so..so + end]).into_owned(),
+            ));
         }
     }
     out.sort();

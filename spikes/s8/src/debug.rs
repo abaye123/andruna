@@ -48,7 +48,10 @@ pub fn register_objects(objs: &[Object]) {
         });
         let p = o.path.display().to_string().replace('\\', "/");
         cmds.push_str(&format!("target modules add \"{p}\"\n"));
-        cmds.push_str(&format!("target modules load --file \"{}\" --slide {:#x}\n", o.name, o.bias));
+        cmds.push_str(&format!(
+            "target modules load --file \"{}\" --slide {:#x}\n",
+            o.name, o.bias
+        ));
     }
     if let Ok(dir) = std::env::var("S8_LLDB_FILE") {
         let _ = std::fs::write(dir, cmds);
@@ -58,8 +61,15 @@ pub fn register_objects(objs: &[Object]) {
     if let Ok(f) = std::env::var("S8_WINDBG_FILE") {
         let mut w = String::new();
         for o in objs {
-            let dir = o.path.parent().map(|p| p.display().to_string()).unwrap_or_default();
-            w.push_str(&format!(".sympath+ {dir}\n.reload /f /i {}={:#x},{:#x}\n", o.name, o.base, o.size));
+            let dir = o
+                .path
+                .parent()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            w.push_str(&format!(
+                ".sympath+ {dir}\n.reload /f /i {}={:#x},{:#x}\n",
+                o.name, o.base, o.size
+            ));
         }
         let _ = std::fs::write(f, w);
     }
@@ -122,7 +132,11 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
                 let _ = writeln!(
                     e,
                     "[s8]   {} address {:#x}",
-                    if rec.ExceptionInformation[0] == 1 { "write to" } else { "read from" },
+                    if rec.ExceptionInformation[0] == 1 {
+                        "write to"
+                    } else {
+                        "read from"
+                    },
                     rec.ExceptionInformation[1]
                 );
             }
@@ -134,15 +148,25 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
 }
 
 fn walk(e: &mut impl std::io::Write, pc: u64, mut fp: u64, _sp: u64) {
-    let _ = writeln!(e, "[s8]   #0 {pc:#x} {}", describe(pc).unwrap_or_else(|| "(host)".into()));
+    let _ = writeln!(
+        e,
+        "[s8]   #0 {pc:#x} {}",
+        describe(pc).unwrap_or_else(|| "(host)".into())
+    );
     for i in 1..32 {
         if fp == 0 || fp & 7 != 0 {
             break;
         }
         // Only follow frame pointers that look like stack addresses of this
         // thread: read through a guarded helper.
-        let Some((next, ret)) = read_frame(fp) else { break };
-        let _ = writeln!(e, "[s8]   #{i} {ret:#x} {}", describe(ret).unwrap_or_else(|| "(host)".into()));
+        let Some((next, ret)) = read_frame(fp) else {
+            break;
+        };
+        let _ = writeln!(
+            e,
+            "[s8]   #{i} {ret:#x} {}",
+            describe(ret).unwrap_or_else(|| "(host)".into())
+        );
         if next <= fp {
             break;
         }
@@ -151,11 +175,12 @@ fn walk(e: &mut impl std::io::Write, pc: u64, mut fp: u64, _sp: u64) {
 }
 
 fn read_frame(fp: u64) -> Option<(u64, u64)> {
-    use windows::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, MEM_COMMIT, VirtualQuery};
+    use windows::Win32::System::Memory::{MEM_COMMIT, MEMORY_BASIC_INFORMATION, VirtualQuery};
     let mut mbi = MEMORY_BASIC_INFORMATION::default();
     // SAFETY: queries the address space only.
     let n = unsafe { VirtualQuery(Some(fp as *const _), &mut mbi, core::mem::size_of_val(&mbi)) };
-    if n == 0 || mbi.State != MEM_COMMIT || fp + 16 > mbi.BaseAddress as u64 + mbi.RegionSize as u64 {
+    if n == 0 || mbi.State != MEM_COMMIT || fp + 16 > mbi.BaseAddress as u64 + mbi.RegionSize as u64
+    {
         return None;
     }
     // SAFETY: committed memory, checked above.

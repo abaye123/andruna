@@ -34,7 +34,9 @@ pub use x64::register;
 mod x64 {
     use super::*;
     use crate::elf::PT_GNU_EH_FRAME;
-    use windows::Win32::System::Diagnostics::Debug::{IMAGE_RUNTIME_FUNCTION_ENTRY, RtlAddFunctionTable};
+    use windows::Win32::System::Diagnostics::Debug::{
+        IMAGE_RUNTIME_FUNCTION_ENTRY, RtlAddFunctionTable,
+    };
 
     struct Reader<'a> {
         d: &'a [u8],
@@ -113,7 +115,11 @@ mod x64 {
     }
 
     fn parse_cie(mem: &[u8], base: u64, at: usize) -> Option<Cie> {
-        let mut r = Reader { d: mem, p: at, base };
+        let mut r = Reader {
+            d: mem,
+            p: at,
+            base,
+        };
         let len = r.u32()? as usize;
         let end = r.p + len;
         let _id = r.u32()?;
@@ -148,20 +154,25 @@ mod x64 {
             }
             r.p = aend;
         }
-        Some(Cie { code_align, data_align, fde_enc, insns: mem.get(r.p..end)?.to_vec() })
+        Some(Cie {
+            code_align,
+            data_align,
+            fde_enc,
+            insns: mem.get(r.p..end)?.to_vec(),
+        })
     }
 
     /// DWARF x86_64 register number to Windows register number.
     fn win_reg(dw: u64) -> Option<u8> {
         Some(match dw {
-            0 => 0,  // rax
-            1 => 2,  // rdx
-            2 => 1,  // rcx
-            3 => 3,  // rbx
-            4 => 6,  // rsi
-            5 => 7,  // rdi
-            6 => 5,  // rbp
-            7 => 4,  // rsp
+            0 => 0, // rax
+            1 => 2, // rdx
+            2 => 1, // rcx
+            3 => 3, // rbx
+            4 => 6, // rsi
+            5 => 7, // rdi
+            6 => 5, // rbp
+            7 => 4, // rsp
             8..=15 => dw as u8,
             _ => return None,
         })
@@ -188,11 +199,19 @@ mod x64 {
     /// frame is described the way Windows can unwind it from rbp: a
     /// frame offset below the lowest save, the saves relative to it, and
     /// an allocation that brings rsp back to rbp.
-    fn translate(cie: &Cie, fde_insns: &[u8], func_len: u64) -> Result<(Vec<(u8, Op)>, u8), &'static str> {
+    fn translate(
+        cie: &Cie,
+        fde_insns: &[u8],
+        func_len: u64,
+    ) -> Result<(Vec<(u8, Op)>, u8), &'static str> {
         let mut prog = cie.insns.clone();
         let initial_len = prog.len();
         prog.extend_from_slice(fde_insns);
-        let mut r = Reader { d: &prog, p: 0, base: 0 };
+        let mut r = Reader {
+            d: &prog,
+            p: 0,
+            base: 0,
+        };
         let mut pc: u64 = 0;
         let mut cfa_reg = 7u64;
         let mut cfa_off: i64 = 8;
@@ -300,7 +319,12 @@ mod x64 {
         if fp {
             let fp_saves = saves;
             // Saves at rbp - d (d = cfa offset - 16).
-            let max_d = fp_saves.iter().map(|&(_, k)| k - 16).max().unwrap_or(0).max(0);
+            let max_d = fp_saves
+                .iter()
+                .map(|&(_, k)| k - 16)
+                .max()
+                .unwrap_or(0)
+                .max(0);
             let fo = ((max_d + 15) / 16) as u32;
             if fo > 15 {
                 return Err("saves too far below the frame pointer");
@@ -319,7 +343,11 @@ mod x64 {
         if end > 255 || out.iter().any(|o| o.0 > 255) {
             return Err("prologue longer than 255 bytes");
         }
-        let out: Vec<(u8, Op)> = out.into_iter().filter(|o| !matches!(o.1, Op::Alloc(0))).map(|(p, o)| (p as u8, o)).collect();
+        let out: Vec<(u8, Op)> = out
+            .into_iter()
+            .filter(|o| !matches!(o.1, Op::Alloc(0)))
+            .map(|(p, o)| (p as u8, o))
+            .collect();
         Ok((out, end as u8))
     }
 
@@ -352,7 +380,12 @@ mod x64 {
             }
         }
         let fp = ops.iter().any(|o| matches!(o.1, Op::SetFp(_)));
-        let mut v = vec![1u8, prologue, codes.len() as u8, if fp { 5 | (frame << 4) } else { 0 }];
+        let mut v = vec![
+            1u8,
+            prologue,
+            codes.len() as u8,
+            if fp { 5 | (frame << 4) } else { 0 },
+        ];
         for c in &codes {
             v.extend_from_slice(&c.to_le_bytes());
         }
@@ -375,8 +408,17 @@ mod x64 {
         // readable (code and read-only data).
         let mem = unsafe { core::slice::from_raw_parts(o.base as *const u8, o.size as usize) };
         let off = (h - o.base) as usize;
-        let mut r = Reader { d: mem, p: off, base: o.base };
-        let (_v, ep_enc, cnt_enc, tab_enc) = (r.u8().ok_or("hdr")?, r.u8().ok_or("hdr")?, r.u8().ok_or("hdr")?, r.u8().ok_or("hdr")?);
+        let mut r = Reader {
+            d: mem,
+            p: off,
+            base: o.base,
+        };
+        let (_v, ep_enc, cnt_enc, tab_enc) = (
+            r.u8().ok_or("hdr")?,
+            r.u8().ok_or("hdr")?,
+            r.u8().ok_or("hdr")?,
+            r.u8().ok_or("hdr")?,
+        );
         r.ptr(ep_enc).ok_or("eh_frame_ptr")?;
         let count = r.ptr(cnt_enc).ok_or("fde_count")?;
         if tab_enc != 0x3b {
@@ -388,7 +430,11 @@ mod x64 {
         for _ in 0..count {
             let _loc = (r.u32().ok_or("tab")? as i32 as i64 + h as i64) as u64;
             let fde = (r.u32().ok_or("tab")? as i32 as i64 + h as i64) as u64;
-            let mut f = Reader { d: mem, p: (fde - o.base) as usize, base: o.base };
+            let mut f = Reader {
+                d: mem,
+                p: (fde - o.base) as usize,
+                base: o.base,
+            };
             let len = f.u32().ok_or("fde")? as usize;
             let start = f.p;
             let cie_ptr = f.p as u64 - f.u32().ok_or("fde")? as u64;
@@ -425,7 +471,9 @@ mod x64 {
             (o.base + o.size) as usize,
             total,
             andruna_lx::linux::mman::PROT_READ | andruna_lx::linux::mman::PROT_WRITE,
-            andruna_lx::linux::mman::MAP_PRIVATE | andruna_lx::linux::mman::MAP_ANONYMOUS | andruna_lx::linux::mman::MAP_FIXED,
+            andruna_lx::linux::mman::MAP_PRIVATE
+                | andruna_lx::linux::mman::MAP_ANONYMOUS
+                | andruna_lx::linux::mman::MAP_FIXED,
             -1,
             0,
         )
@@ -445,7 +493,9 @@ mod x64 {
         unsafe { core::ptr::copy_nonoverlapping(entries.as_ptr(), table, entries.len()) };
         // SAFETY: a table of `entries.len()` records that stays mapped for
         // the life of the process.
-        let ok = unsafe { RtlAddFunctionTable(core::slice::from_raw_parts(table, entries.len()), o.base) };
+        let ok = unsafe {
+            RtlAddFunctionTable(core::slice::from_raw_parts(table, entries.len()), o.base)
+        };
         if !ok {
             return Err("RtlAddFunctionTable failed".into());
         }

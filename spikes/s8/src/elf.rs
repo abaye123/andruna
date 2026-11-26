@@ -257,7 +257,10 @@ impl Sleb<'_> {
         let mut v: i64 = 0;
         let mut shift = 0u32;
         loop {
-            let b = *self.data.get(self.pos).ok_or("truncated packed relocations")?;
+            let b = *self
+                .data
+                .get(self.pos)
+                .ok_or("truncated packed relocations")?;
             self.pos += 1;
             v |= ((b & 0x7f) as i64) << shift;
             shift += 7;
