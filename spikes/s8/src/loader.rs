@@ -67,7 +67,9 @@ pub struct Object {
     /// Symbols of `.symtab` (function names for crash reports and the
     /// debugger checks), sorted by address.
     pub local_symbols: Vec<(u64, u64, String)>,
-    pub file: Vec<u8>,
+    /// Bytes read from the file (headers and loadable segments; debug
+    /// sections are not read).
+    pub bytes_read: u64,
 }
 
 impl Object {
@@ -87,18 +89,6 @@ impl Object {
         unsafe { CStr::from_ptr((self.strtab + off as u64) as *const core::ffi::c_char) }
             .to_string_lossy()
             .into_owned()
-    }
-
-    /// The `.symtab` symbol containing `addr`, for reports.
-    pub fn symbolize(&self, addr: u64) -> Option<(String, u64)> {
-        let off = addr.checked_sub(self.bias)?;
-        let i = self.local_symbols.partition_point(|s| s.0 <= off);
-        let (start, size, name) = self.local_symbols.get(i.checked_sub(1)?)?;
-        if off < start + size.max(&1) || *size == 0 {
-            Some((name.clone(), off - start))
-        } else {
-            None
-        }
     }
 }
 
@@ -429,7 +419,14 @@ fn lx_err(what: &str, e: andruna_lx::errno::Errno) -> String {
 
 /// Reads and maps one object; nothing is relocated yet.
 fn map_object(path: &Path, name: &str) -> Result<Object, String> {
-    let file = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    use std::io::{Read, Seek, SeekFrom};
+    let err = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut fh = std::fs::File::open(path).map_err(err)?;
+    // Read the ELF header and program headers first, then only the part of
+    // the file the PT_LOAD segments cover (debug sections stay on disk).
+    let mut file = vec![0u8; 4096];
+    let n = fh.read(&mut file).map_err(err)?;
+    file.truncate(n);
     if file.len() < 64 || &file[..4] != b"\x7fELF" || file[4] != 2 || file[5] != 1 {
         return Err(format!("{}: not a 64-bit little-endian ELF file", path.display()));
     }
@@ -440,6 +437,10 @@ fn map_object(path: &Path, name: &str) -> Result<Object, String> {
     }
     if eh.e_machine != crate::ARCH_ELF && !link_only() {
         return Err(format!("{}: e_machine {} is not this architecture", path.display(), eh.e_machine));
+    }
+    let ph_end = (eh.e_phoff + eh.e_phnum as u64 * eh.e_phentsize as u64) as usize;
+    if ph_end > file.len() {
+        return Err(format!("{}: program headers beyond the first page", path.display()));
     }
     let phdrs: Vec<Phdr> = (0..eh.e_phnum as u64)
         .map(|i| {
@@ -452,6 +453,12 @@ fn map_object(path: &Path, name: &str) -> Result<Object, String> {
     let loads: Vec<&Phdr> = phdrs.iter().filter(|p| p.p_type == PT_LOAD).collect();
     if loads.is_empty() {
         return Err(format!("{}: no PT_LOAD", path.display()));
+    }
+    let load_end = loads.iter().map(|p| p.p_offset + p.p_filesz).max().unwrap() as usize;
+    if load_end > file.len() {
+        let have = file.len();
+        file.resize(load_end, 0);
+        fh.read_exact(&mut file[have..]).map_err(err)?;
     }
     let lo = page_down(loads.iter().map(|p| p.p_vaddr).min().unwrap());
     let hi = page_up(loads.iter().map(|p| p.p_vaddr + p.p_memsz).max().unwrap());
@@ -523,7 +530,7 @@ fn map_object(path: &Path, name: &str) -> Result<Object, String> {
         tls_module: 0,
         machine: eh.e_machine,
         local_symbols: vec![],
-        file: vec![],
+        bytes_read: 0,
     };
     obj.needed = dynamic
         .get(&DT_NEEDED)
@@ -538,8 +545,10 @@ fn map_object(path: &Path, name: &str) -> Result<Object, String> {
         let n = obj.str_at(s.st_name);
         obj.exports.entry(n).or_insert(s);
     }
-    obj.local_symbols = read_symtab(&file);
-    obj.file = file;
+    let symtab_bytes;
+    (obj.local_symbols, symtab_bytes) = read_symtab(&mut fh, &eh);
+    obj.bytes_read = file.len() as u64 + symtab_bytes;
+    let _ = fh.seek(SeekFrom::Start(0));
     Ok(obj)
 }
 
@@ -575,47 +584,52 @@ fn symbol_count(bias: u64, d: &HashMap<i64, Vec<u64>>) -> Result<usize, String> 
 }
 
 /// Function symbols of `.symtab` (not mapped at run time; read from the
-/// file), for symbolization.
-fn read_symtab(file: &[u8]) -> Vec<(u64, u64, String)> {
-    // SAFETY: validated by `map_object`.
-    let eh: Ehdr = unsafe { (file.as_ptr() as *const Ehdr).read_unaligned() };
-    let sh = |i: u64| -> Option<Shdr> {
-        let off = (eh.e_shoff + i * eh.e_shentsize as u64) as usize;
-        if eh.e_shoff == 0 || off + 64 > file.len() {
-            return None;
-        }
-        // SAFETY: bounds checked.
-        Some(unsafe { (file.as_ptr().add(off) as *const Shdr).read_unaligned() })
+/// file), for symbolization. Returns the symbols and the bytes read.
+fn read_symtab(fh: &mut std::fs::File, eh: &Ehdr) -> (Vec<(u64, u64, String)>, u64) {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut read_at = |off: u64, len: usize| -> Option<Vec<u8>> {
+        let mut v = vec![0u8; len];
+        fh.seek(SeekFrom::Start(off)).ok()?;
+        fh.read_exact(&mut v).ok()?;
+        Some(v)
     };
+    if eh.e_shoff == 0 || std::env::var_os("S8_NO_SYMTAB").is_some() {
+        return (vec![], 0);
+    }
+    let Some(sh) = read_at(eh.e_shoff, eh.e_shnum as usize * eh.e_shentsize as usize) else { return (vec![], 0) };
+    let shdr = |i: usize| -> Option<Shdr> {
+        let off = i * eh.e_shentsize as usize;
+        // SAFETY: bounds checked by `get`.
+        sh.get(off..off + 64).map(|b| unsafe { (b.as_ptr() as *const Shdr).read_unaligned() })
+    };
+    let mut read = sh.len() as u64;
     let mut out = vec![];
-    for i in 0..eh.e_shnum as u64 {
-        let Some(s) = sh(i) else { break };
+    for i in 0..eh.e_shnum as usize {
+        let Some(s) = shdr(i) else { break };
         if s.sh_type != SHT_SYMTAB {
             continue;
         }
-        let Some(strs) = sh(s.sh_link as u64) else { continue };
-        let n = s.sh_size / 24;
-        for k in 0..n {
-            let off = (s.sh_offset + k * 24) as usize;
-            if off + 24 > file.len() {
-                break;
-            }
-            // SAFETY: bounds checked.
-            let sym: Sym = unsafe { (file.as_ptr().add(off) as *const Sym).read_unaligned() };
+        let Some(strs) = shdr(s.sh_link as usize) else { continue };
+        let (Some(syms), Some(names)) = (read_at(s.sh_offset, s.sh_size as usize), read_at(strs.sh_offset, strs.sh_size as usize)) else {
+            continue;
+        };
+        read += syms.len() as u64 + names.len() as u64;
+        for k in 0..syms.len() / 24 {
+            // SAFETY: inside `syms`.
+            let sym: Sym = unsafe { (syms.as_ptr().add(k * 24) as *const Sym).read_unaligned() };
             if sym.st_info & 0xf != STT_FUNC || sym.st_value == 0 {
                 continue;
             }
-            let so = (strs.sh_offset + sym.st_name as u64) as usize;
-            if so >= file.len() {
+            let so = sym.st_name as usize;
+            if so >= names.len() {
                 continue;
             }
-            let end = file[so..].iter().position(|&b| b == 0).unwrap_or(0);
-            let name = String::from_utf8_lossy(&file[so..so + end]).into_owned();
-            out.push((sym.st_value, sym.st_size, name));
+            let end = names[so..].iter().position(|&b| b == 0).unwrap_or(0);
+            out.push((sym.st_value, sym.st_size, String::from_utf8_lossy(&names[so..so + end]).into_owned()));
         }
     }
     out.sort();
-    out
+    (out, read)
 }
 
 /// Applies the final protections: each segment's flags, then read-only for
@@ -636,9 +650,4 @@ fn protect(o: &Object) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-/// Finds the object containing `addr`.
-pub fn object_at(objs: &[Object], addr: u64) -> Option<&Object> {
-    objs.iter().find(|o| addr >= o.base && addr < o.base + o.size)
 }

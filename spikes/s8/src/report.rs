@@ -31,9 +31,9 @@ pub fn loaded(l: &Linker, total: Duration) {
         return;
     }
     let s = &l.stats;
-    let bytes: u64 = l.objects.iter().map(|o| o.file.len() as u64).sum();
+    let bytes: u64 = l.objects.iter().map(|o| o.bytes_read).sum();
     eprintln!(
-        "[s8] loaded {} objects ({:.1} MB) in {:.2} ms: map+parse {:.2} ms, relocate+protect {:.2} ms",
+        "[s8] loaded {} objects ({:.1} MB read) in {:.2} ms: map+parse {:.2} ms, relocate+protect {:.2} ms",
         l.objects.len(),
         bytes as f64 / 1e6,
         total.as_secs_f64() * 1e3,

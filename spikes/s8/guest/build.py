@@ -120,7 +120,7 @@ def step_libc(arch, out):
 def step_libcxx(arch, out):
     b = out / "libcxx"
     lib = out / "sysroot" / "usr" / "lib"
-    flags = "-g -funwind-tables"
+    flags = "-g -funwind-tables -fstack-protector-strong"
     libs = f"{lib / 'crtbegin_so.o'} -L{lib} -lc -landruna_host {builtins(arch)}"
     run(["cmake", "-S", LLVM_PROJECT / "runtimes", "-B", b] + cmake_common(arch, out) + [
         "-DLLVM_ENABLE_RUNTIMES=libcxx;libcxxabi",

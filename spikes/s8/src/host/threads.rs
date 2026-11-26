@@ -261,7 +261,7 @@ gfn! {
 
 const TYPE_SHIFT: u32 = 14;
 const NORMAL: u32 = 0;
-const RECURSIVE: u32 = 1;
+// RECURSIVE (1) behaves like ERRORCHECK except for relocking.
 const ERRORCHECK: u32 = 2;
 
 fn mutex_word<'a>(m: *mut u32) -> &'a AtomicU32 {

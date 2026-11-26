@@ -18,6 +18,7 @@ use windows::Win32::System::Diagnostics::Debug::{AddVectoredExceptionHandler, EX
 
 use crate::loader::Object;
 
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 const EXCEPTION_CONTINUE_EXECUTION: i32 = -1;
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 

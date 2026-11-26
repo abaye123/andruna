@@ -106,10 +106,6 @@ pub fn init_std_fds() -> Result<(), String> {
     Ok(())
 }
 
-pub fn is_console(fd: i32) -> bool {
-    console(fd).is_some_and(|s| s != Std::In) || console(fd) == Some(Std::In)
-}
-
 fn console_write(s: Std, b: *const c_void, n: usize) -> isize {
     // SAFETY: a standard handle of this process.
     let Ok(h) = (unsafe { GetStdHandle(handle(s)) }) else {
@@ -331,7 +327,7 @@ forward! {
     h_sched_yield => sched_yield() -> i32;
     h_getpid => getpid() -> i32;
     h_gettid => gettid() -> i32;
-    h___errno => __errno() -> *mut i32;
+    h_errno_location => __errno() -> *mut i32;
 }
 
 pub fn symbols() -> Vec<(&'static str, usize)> {
@@ -376,6 +372,6 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("sched_yield", h_sched_yield as usize),
         ("getpid", h_getpid as usize),
         ("gettid", h_gettid as usize),
-        ("__errno", h___errno as usize),
+        ("__errno", h_errno_location as usize),
     ]
 }

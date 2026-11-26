@@ -22,10 +22,15 @@ endif()
 add_library(aosp_android INTERFACE)
 
 target_compile_options(aosp_android INTERFACE
+  # Andruna's overlay (andruna/libcxx_compat.h: headers the newer libc++
+  # no longer includes transitively). data_model.h is not used here.
+  "SHELL:-isystem ${CMAKE_CURRENT_LIST_DIR}/../overlay/include"
   # libc++ built for the guest, not llvm-mingw's Windows libc++.
   $<$<COMPILE_LANGUAGE:CXX>:-nostdinc++>
   "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-isystem ${ANDRUNA_LIBCXX_DIR}/include/c++/v1>"
-  # Android platform defaults.
+  # Android platform defaults (Soong passes the stack protector
+  # explicitly; it reads the guard through the thread pointer).
+  -fstack-protector-strong
   -fno-exceptions
   -funwind-tables
   -ffunction-sections

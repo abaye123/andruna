@@ -185,6 +185,7 @@ pub fn current_tp() -> u64 {
     TP.with(|c| c.get())
 }
 
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 pub fn restores_here() -> u64 {
     RESTORES.with(|c| c.get())
 }
@@ -211,6 +212,7 @@ fn set_thread_pointer(tp: u64) {
 fn set_thread_pointer(tp: u64) {
     // S4: whether Windows preserves TPIDR_EL0 is not verified; this is the
     // option-1 path (write it and rely on it being kept).
+    crate::debug::install_handler();
     // SAFETY: writes the user-mode thread ID register.
     unsafe { core::arch::asm!("msr tpidr_el0, {}", in(reg) tp, options(nostack)) };
 }

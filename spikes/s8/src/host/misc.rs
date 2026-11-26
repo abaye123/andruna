@@ -4,7 +4,7 @@
 
 use core::ffi::{c_char, c_void};
 use std::collections::HashMap;
-use std::ffi::CStr;
+
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -501,12 +501,6 @@ gfn! {
 // --- quiet no-ops and unsupported calls ------------------------------------------
 
 gfn! {
-    pub unsafe fn h_zero() -> i32 {
-        guard(|| 0)
-    }
-}
-
-gfn! {
     pub unsafe fn h_void() -> () {
         guard(|| ())
     }
@@ -556,7 +550,6 @@ gfn! {
 }
 
 pub fn symbols() -> Vec<(&'static str, usize)> {
-    let _ = CStr::from_bytes_with_nul(b"\0");
     vec![
         ("malloc", h_malloc as usize),
         ("calloc", h_calloc as usize),

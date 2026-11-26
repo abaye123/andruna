@@ -253,6 +253,22 @@ fn cmd_unwind() -> Result<i32, String> {
     Err("unwind check is x64 only".into())
 }
 
+/// For comparison: the time `LoadLibraryW` takes for Windows DLLs.
+fn cmd_winload(args: &[String]) -> Result<i32, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::System::LibraryLoader::LoadLibraryW;
+    for a in args {
+        let w: Vec<u16> = std::ffi::OsStr::new(a).encode_wide().chain([0]).collect();
+        let t = Instant::now();
+        // SAFETY: a NUL-terminated path; the module stays loaded.
+        let h = unsafe { LoadLibraryW(windows::core::PCWSTR(w.as_ptr())) };
+        let d = t.elapsed();
+        let size = std::fs::metadata(a).map(|m| m.len()).unwrap_or(0);
+        println!("LoadLibraryW {a} ({:.1} MB): {:.2} ms {}", size as f64 / 1e6, d.as_secs_f64() * 1e3, if h.is_ok() { "ok" } else { "FAILED" });
+    }
+    Ok(0)
+}
+
 fn cmd_crash() -> Result<i32, String> {
     let mut r = Ok(0);
     host::threads::run_on_guest_stack(|| {
@@ -286,6 +302,7 @@ fn main() {
         Some("crash") => cmd_crash(),
         Some("link") => cmd_link(&args[1..]),
         Some("unwind") => cmd_unwind(),
+        Some("winload") => cmd_winload(&args[1..]),
         Some("check") => {
             let m = host::missing_from_table();
             println!("host_symbols.txt names missing from the host table: {m:?}");
