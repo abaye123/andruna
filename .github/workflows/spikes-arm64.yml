@@ -160,20 +160,31 @@ jobs:
         run: |
           . "$env:RUNNER_TEMP\timed.ps1"
           $exe = "spikes/s1/target/${{ matrix.target }}/release/andruna-spike-s1.exe"
-          foreach ($part in 'faults', 'unwind', 'abi', 'suspend') {
-            Invoke-Timed "s1-$part" 900 $exe "--only=$part"
+          foreach ($part in 'faults', 'unwind', 'abi') {
+            Invoke-Timed "s1-$part" 300 $exe "--only=$part"
           }
+          if ('${{ matrix.arch }}' -eq 'arm64') {
+            # ART's arm64 overflow gap is 8 KiB; measure larger gaps too.
+            foreach ($gap in 12288, 16384) {
+              $env:S1_SO_GAP = "$gap"
+              Invoke-Timed "s1-faults-gap$gap" 300 $exe '--only=faults'
+            }
+            Remove-Item Env:S1_SO_GAP
+          }
+          Invoke-Timed s1-suspend 900 $exe '--only=suspend', '--quick'
 
+      # Hosted runners have 2 vCPUs; S3's spinning modes with a broker and
+      # two clients oversubscribe them, so iterations are reduced and the
+      # step is capped.
       - name: S3 transport
         continue-on-error: true
+        timeout-minutes: 15
         run: |
           . "$env:RUNNER_TEMP\timed.ps1"
           $exe = "spikes/s3/target/${{ matrix.target }}/release/s3.exe"
-          Invoke-Timed s3-probe 300 $exe probe
-          foreach ($i in 1, 2, 3) {
-            Invoke-Timed "s3-run$i" 900 $exe '--iters', '20000'
-          }
-          Invoke-Timed s3-appcontainer 900 $exe '--appcontainer', '--iters', '20000'
+          Invoke-Timed s3-probe 120 $exe probe
+          Invoke-Timed s3-run1 420 $exe '--iters', '5000'
+          Invoke-Timed s3-appcontainer 300 $exe '--appcontainer', '--iters', '2000'
 
       - name: Summary
         if: always()

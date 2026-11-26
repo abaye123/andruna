@@ -246,10 +246,23 @@ pub fn so_art(onstack: bool) -> SoArtResult {
         reserved_kib: (hi - lo) / 1024,
         ..Default::default()
     };
-    let f = jit1(jit::get().l.so_entry);
     let before = SO_COUNT.load(Ordering::Relaxed);
+    #[cfg(target_arch = "x86_64")]
+    let f = jit1(jit::get().l.so_entry);
+    // arm64: the probe gap is a parameter (S1_SO_GAP, default ART's 8 KiB).
+    #[cfg(target_arch = "aarch64")]
+    let f = {
+        let gap: usize = std::env::var("S1_SO_GAP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8192);
+        let g = jit2(jit::get().l.so_entry);
+        // SAFETY: JIT recursion; overflow is caught by the handler.
+        move |d: usize| unsafe { g(d, gap) } as u64
+    };
     for _ in 0..3 {
         // SAFETY: JIT recursion; overflow is caught by the handler.
+        #[allow(unused_unsafe)]
         res.depths.push(unsafe { f(0) });
     }
     res.caught = SO_COUNT.load(Ordering::Relaxed) - before;

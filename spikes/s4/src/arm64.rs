@@ -271,11 +271,13 @@ fn survival() {
     let stop = Arc::new(AtomicBool::new(false));
     let bad = Arc::new(AtomicU64::new(0));
     let checks = Arc::new(AtomicU64::new(0));
-    let (s2, b2, c2) = (stop.clone(), bad.clone(), checks.clone());
+    let started = Arc::new(AtomicBool::new(false));
+    let (s2, b2, c2, st2) = (stop.clone(), bad.clone(), checks.clone(), started.clone());
     let worker = std::thread::spawn(move || {
         let mine = tls_block(9);
         set_tpidr(mine);
         let mut t = Tally::default();
+        st2.store(true, Ordering::Relaxed);
         while !s2.load(Ordering::Relaxed) {
             t.check(mine);
         }
@@ -283,14 +285,21 @@ fn survival() {
         c2.store(t.checks, Ordering::Relaxed);
     });
     let h = HANDLE(worker.as_raw_handle());
+    // With CPU hogs on a small machine the worker may not have run yet.
+    while !started.load(Ordering::Relaxed) {
+        // SAFETY: plain wait.
+        unsafe { Sleep(1) };
+    }
     for _ in 0..2000 {
         let mut ctx = Context::new(CONTEXT_FULL_ARM64.0);
-        // SAFETY: valid handle; context is read and written back while suspended.
+        // SAFETY: valid handle; context is read and written back while
+        // suspended; Sleep(0) lets the worker run between rounds.
         unsafe {
             SuspendThread(h);
             GetThreadContext(h, ctx.as_mut()).unwrap();
             SetThreadContext(h, ctx.as_mut()).unwrap();
             ResumeThread(h);
+            Sleep(0);
         }
     }
     stop.store(true, Ordering::Relaxed);
