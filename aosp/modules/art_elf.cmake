@@ -191,3 +191,6 @@ target_link_libraries(libnativehelper PUBLIC aosp_android libnativehelper_header
 target_link_libraries(libart_runtime PUBLIC
   libcpu_features libelffile libprofile libnativebridge
   libnativeloader libnativehelper_headers libprocinfo liblzma)
+
+# The optimizing compiler, linked into libart.so as on Android.
+include(${CMAKE_CURRENT_LIST_DIR}/libart_compiler.cmake)
