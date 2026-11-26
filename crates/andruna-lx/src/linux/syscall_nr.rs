@@ -33,6 +33,7 @@ pub enum Sysno {
     ClockNanosleep,
     Getcwd,
     Chdir,
+    Mremap,
     // Only on x86_64 (arm64 has no legacy forms).
     Open,
     Stat,
@@ -68,6 +69,7 @@ pub const X86_64: Table = Table(&[
     (17, Sysno::Pread64),
     (18, Sysno::Pwrite64),
     (24, Sysno::SchedYield),
+    (25, Sysno::Mremap),
     (28, Sysno::Madvise),
     (32, Sysno::Dup),
     (33, Sysno::Dup2),
@@ -110,6 +112,7 @@ pub const AARCH64: Table = Table(&[
     (172, Sysno::Getpid),
     (178, Sysno::Gettid),
     (215, Sysno::Munmap),
+    (216, Sysno::Mremap),
     (222, Sysno::Mmap),
     (226, Sysno::Mprotect),
     (233, Sysno::Madvise),

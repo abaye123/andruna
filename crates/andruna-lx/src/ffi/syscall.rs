@@ -70,6 +70,7 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
             Sysno::ClockGetres => sys_clock_getres(int(0), ptr(1) as _),
             Sysno::ClockNanosleep => sys_clock_nanosleep(int(0), int(1), ptr(2) as _).map(|()| 0),
             Sysno::Futex => sys_futex(ptr(0), int(1), uint(2), ptr(3), uint(5)),
+            Sysno::Mremap => mem::mremap(ptr(0), ptr(1), ptr(2), uint(3)).map(|a| a as i64),
             Sysno::Getcwd => sys_getcwd(ptr(0) as *mut u8, ptr(1)),
             Sysno::Chdir => fs::chdir(super::path_arg(ptr(0) as *const c_char)?).map(|()| 0),
         }
@@ -200,6 +201,17 @@ mod tests {
         let p = call(Sysno::Mmap, [0, len, prot, flags, -1, 0]).unwrap();
         assert_eq!(call(Sysno::Mprotect, [p, len, 1, 0, 0, 0]), Ok(0));
         assert_eq!(call(Sysno::Madvise, [p, len, 4, 0, 0, 0]), Ok(0));
+        // Grow in place or move, then shrink.
+        assert_eq!(call(Sysno::Mprotect, [p, len, prot, 0, 0, 0]), Ok(0));
+        let q = call(Sysno::Mremap, [p, len, 2 * len, 1, 0, 0]).unwrap();
+        // SAFETY: the remapped range is readable and writable.
+        unsafe { (q as *mut u8).add(2 * len as usize - 1).write(7) };
+        assert_eq!(call(Sysno::Mremap, [q, 2 * len, len, 0, 0, 0]), Ok(q));
+        assert_eq!(
+            call(Sysno::Mremap, [q, len, len, 4, 0, 0]),
+            Err(Errno::EINVAL)
+        );
+        let p = q;
         // Fork advice: no process is forked, nothing to do.
         assert_eq!(call(Sysno::Madvise, [p, len, 18, 0, 0, 0]), Ok(0));
         assert_eq!(call(Sysno::Madvise, [p, len, 19, 0, 0, 0]), Ok(0));

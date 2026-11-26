@@ -33,7 +33,9 @@ def run(elf, libs, exe, args, timeout):
         p = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout)
         return p.returncode, p.stdout + p.stderr
     except subprocess.TimeoutExpired as e:
-        out = (e.stdout or b"").decode(errors="replace") + (e.stderr or b"").decode(errors="replace")
+        def text(v):
+            return v.decode(errors="replace") if isinstance(v, bytes) else (v or "")
+        out = text(e.stdout) + text(e.stderr)
         return "timeout", out
 
 
