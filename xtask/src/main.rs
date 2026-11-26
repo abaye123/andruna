@@ -1,6 +1,7 @@
 //! Build orchestration for Andruna. Run as `cargo xtask <command>`.
 
 mod aosp;
+mod aosp_build;
 mod build_cmd;
 mod toolchain;
 mod util;
@@ -14,6 +15,11 @@ const USAGE: &str = "\
 Usage: cargo xtask <command> [options]
 
 Commands:
+  aosp-build [--arch x64|arm64] [--runtime] [--keep-going] [--target <name>]...
+        Configure and build the AOSP modules in aosp/ with CMake and Ninja
+        (llvm-mingw) into out/aosp/<arch>, after applying patches/. Needs
+        `fetch` first. --runtime also compiles libart (not expected to
+        build yet). --target builds only the named Ninja targets.
   build [--arch x64|arm64] [--release]
         Build the Rust workspace for <arch>-pc-windows-gnullvm with llvm-mingw.
         The default arch is the host's.
@@ -59,6 +65,20 @@ fn run(args: &[String]) -> Result<()> {
             let release = opts.flag("--release");
             opts.finish()?;
             build_cmd::build(arch, release)
+        }
+        "aosp-build" => {
+            let arch = match opts.value("--arch")? {
+                Some(a) => build_cmd::Arch::parse(&a)?,
+                None => build_cmd::Arch::host(),
+            };
+            let o = aosp_build::Options {
+                arch,
+                runtime: opts.flag("--runtime"),
+                keep_going: opts.flag("--keep-going"),
+                targets: opts.values("--target")?,
+            };
+            opts.finish()?;
+            aosp_build::build(&o)
         }
         "fetch" => {
             let sel = aosp::Selection::from_options(&mut opts)?;

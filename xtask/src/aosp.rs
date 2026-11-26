@@ -90,6 +90,16 @@ pub struct Selection {
 }
 
 impl Selection {
+    /// The default lock and checkout directory, all projects.
+    pub fn defaults() -> Self {
+        let root = util::repo_root();
+        Self {
+            lock_path: root.join("aosp").join("aosp.lock"),
+            aosp_dir: root.join("third_party").join("aosp"),
+            only: Vec::new(),
+        }
+    }
+
     pub fn from_options(opts: &mut Options) -> Result<Self> {
         let root = util::repo_root();
         Ok(Self {
