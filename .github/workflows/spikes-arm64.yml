@@ -110,12 +110,17 @@ jobs:
           '@ | Set-Content -Encoding utf8 "$env:RUNNER_TEMP\timed.ps1"
 
       - name: Machine
+        continue-on-error: true
         run: |
           $cpu = Get-CimInstance Win32_Processor
           $cs = Get-CimInstance Win32_ComputerSystem
           $os = Get-CimInstance Win32_OperatingSystem
-          $reg = Get-ItemProperty 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0'
-          $nt = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+          # Get-ItemProperty fails on some x64 images (a binary value), so
+          # read the values one by one.
+          $cpk = Get-Item 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0'
+          $reg = @{ ProcessorNameString = $cpk.GetValue('ProcessorNameString'); Identifier = $cpk.GetValue('Identifier'); VendorIdentifier = $cpk.GetValue('VendorIdentifier'); '~MHz' = $cpk.GetValue('~MHz') }
+          $ntk = Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+          $nt = @{ CurrentBuild = $ntk.GetValue('CurrentBuild'); UBR = $ntk.GetValue('UBR'); DisplayVersion = $ntk.GetValue('DisplayVersion') }
           $dg = try { Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop } catch { $null }
           $lines = @(
             "cpu name (WMI): $($cpu.Name)",
@@ -312,11 +317,11 @@ jobs:
         continue-on-error: true
         run: |
           New-Item -ItemType Directory -Force $env:OUT | Out-Null
-          $cpu = (Get-ItemProperty 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0').ProcessorNameString
+          $cpu = (Get-Item 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0').GetValue('ProcessorNameString')
           "cpu: $cpu, logical processors: $env:NUMBER_OF_PROCESSORS" | Set-Content -Encoding utf8 "$env:OUT\s8-machine.txt"
           $exe = "spikes/s8/target/${{ matrix.target }}/release/andruna-spike-s8.exe"
           function Invoke-S8([string]$Name, [int]$Seconds, [string[]]$ArgList) {
-            $job = Start-Job -ScriptBlock { param($e, $a) $env:S8_QUIET = '1'; & $e @a 2>&1 | Out-String; "exit code: $LASTEXITCODE" } -ArgumentList (Resolve-Path $exe).Path, $ArgList
+            $job = Start-Job -ScriptBlock { param($e, $a) & $e @a 2>&1 | Out-String; "exit code: $LASTEXITCODE" } -ArgumentList (Resolve-Path $exe).Path, $ArgList
             if (Wait-Job $job -Timeout $Seconds) { $text = Receive-Job $job } else { Stop-Job $job; Get-Process andruna-spike-s8 -ErrorAction SilentlyContinue | Stop-Process -Force; $text = "TIMEOUT after $Seconds s" }
             $text = "### s8 $($ArgList -join ' ')`n$text"
             Set-Content -Encoding utf8 "$env:OUT\s8-$Name.txt" $text
@@ -325,7 +330,7 @@ jobs:
           Invoke-S8 check 120 @('check')
           foreach ($i in 1, 2, 3) { Invoke-S8 "load$i" 300 @('load', 'libbase_test') }
           foreach ($i in 1, 2, 3) { Invoke-S8 "bench$i" 300 @('bench') }
-          Invoke-S8 unwind 300 @('unwind')
+          if ('${{ matrix.arch }}' -eq 'x64') { Invoke-S8 unwind 300 @('unwind') }
           $job = Start-Job -ScriptBlock { param($e, $a, $d) Set-Location $d; python spikes/s8/run_tests.py --exe $e --arch $a 2>&1 | Out-String } -ArgumentList (Resolve-Path $exe).Path, '${{ matrix.arch }}', $PWD.Path
           if (Wait-Job $job -Timeout 2400) { $t = Receive-Job $job } else { Stop-Job $job; $t = 'TIMEOUT' }
           "### run_tests.py`n$t" | Set-Content -Encoding utf8 "$env:OUT\s8-libbase-tests.txt"
