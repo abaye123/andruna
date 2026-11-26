@@ -48,16 +48,20 @@ scheduled wake for push and jobs (user setting, [P-25](01-product.md)).
  Windows: Win32, NT, D3D11, DirectComposition, WASAPI, Media Foundation
 ```
 
-The lx layer is a library, not a system-call emulator: AOSP C/C++ code is
-compiled against Linux headers (bionic's) and links to `andruna-lx` exports.
-Guest ELF code links to the same exports through `andruna-linker`.
+The lx layer is a library, not a system-call emulator. AOSP C/C++ code that
+runs in an app process (ART, libcore natives, framework natives) is built
+as Android ELF for `<arch>-linux-android` with bionic's headers unchanged
+([ADR 0013](../decisions/0013-aosp-binary-format.md)) and is loaded by
+`andruna-linker`, like app native code. Its libc calls reach `andruna-lx`
+through generated entry points with the Android calling convention.
 
 ## Calling conventions
 
 | Boundary | Convention |
 | --- | --- |
 | Windows APIs | Microsoft x64 / Windows ARM64 |
-| AOSP C/C++ code (built by us) | Microsoft x64 / Windows ARM64 (normal Windows code) |
+| AOSP C/C++ code (built by us as Android ELF) | System V on x64, AAPCS64 on ARM64; calls into andruna-lx go through generated entry points |
+| Andruna's own code and andruna-lx | Microsoft x64 / Windows ARM64 (normal Windows code) |
 | ART compiled code and its entrypoints | System V on x64 (as ART generates), AAPCS64 on ARM64 |
 | JNI natives | System V on x64 (`JNICALL` = `sysv_abi`); AAPCS64 on ARM64 |
 | Guest ELF code (x64) | System V; every call into Windows-ABI code goes through a thunk |

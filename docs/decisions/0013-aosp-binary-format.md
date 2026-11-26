@@ -1,6 +1,6 @@
 # 0013 - AOSP code is built as Android ELF
 
-**Status:** proposed, 2026-11-26 (the maintainer decides)
+**Status:** accepted, 2026-11-26
 
 ## Context
 AOSP code (ART, libcore natives, framework natives) was planned as Windows

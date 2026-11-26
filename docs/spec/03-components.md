@@ -6,7 +6,7 @@ crates live in `crates/`, C# projects in `ui/`, AOSP build glue in `aosp/`.
 | Component | Kind | Language | Phase |
 | --- | --- | --- | --- |
 | `andruna-lx` | Library (static) | Rust | 0 |
-| `andruna-linker` | Library | Rust | 5 |
+| `andruna-linker` | Library | Rust | 1 |
 | `andruna-bionic` | Library | AOSP C + Rust glue | 5 |
 | `andruna-binder` | Library + sysd module | Rust | 2 |
 | `andruna-sysd` | Executable | Rust + Java services | 2 |
