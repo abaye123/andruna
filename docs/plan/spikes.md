@@ -88,3 +88,25 @@ AppContainer, and which warm-process strategy keeps start time on target?
 
 **Success.** First frame drawn inside a container; start times for both
 strategies in [security](../spec/04-security.md#warm-processes-and-appcontainer).
+
+## S8: AOSP built as Android ELF
+
+**Question.** Should AOSP code (ART, libcore natives, framework natives) be
+built for `<arch>-linux-android` as ELF and loaded by `andruna-linker`,
+instead of being compiled for `<arch>-w64-windows-gnu`? The Windows target
+is LLP64 (32-bit `long`), so bionic and Linux layouts differ (see
+[S1 results](spike-results/S1.md), "Data model").
+
+**Do.** Build libbase and liblog for `x86_64-linux-android` and
+`aarch64-linux-android` with the same CMake glue; load them with a minimal
+ELF loader prototype (relocations, symbol binding, init arrays, TLS as S4
+recommends) into a Windows process; route their libc calls to `andruna-lx`
+exports entered with the System V convention on x64. Run libbase's tests
+that apply.
+
+**Decide.** ELF for AOSP code, or Windows target with widened headers.
+Measure call overhead at the boundary, load time, and the debugging story
+(symbols and stacks in WinDbg and Visual Studio).
+
+**Success.** libbase tests run from an ELF build on x64; arm64 built and
+loaded if a machine is available; an ADR with the decision.
