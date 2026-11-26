@@ -1,0 +1,13 @@
+[package]
+name = "andruna-lx"
+description = "The Linux layer: Linux system call and process semantics on Windows."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[lints]
+workspace = true

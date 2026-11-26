@@ -1,0 +1,19 @@
+[alias]
+xtask = "run --quiet --package xtask --"
+
+# Linking for the gnullvm targets
+# -------------------------------
+# Rust's `*-pc-windows-gnullvm` targets link with `<arch>-w64-mingw32-clang`
+# by default, looked up on PATH. Those drivers come with llvm-mingw.
+#
+# Cargo configuration cannot expand environment variables in `linker`, so the
+# llvm-mingw location is not written here. Instead:
+#
+# - `cargo xtask build` reads ANDRUNA_LLVM_MINGW (default `C:\tools\llvm-mingw`),
+#   sets CARGO_TARGET_<TRIPLE>_LINKER to the clang driver in its `bin`
+#   directory and puts that directory first on PATH for the child cargo.
+# - For plain `cargo build/test/clippy --target <arch>-pc-windows-gnullvm`,
+#   put `%ANDRUNA_LLVM_MINGW%\bin` on PATH. `cargo xtask toolchain` does this
+#   automatically in GitHub Actions (through GITHUB_PATH).
+#
+# See xtask/README.md.

@@ -1,0 +1,15 @@
+THIRD-PARTY NOTICES
+===================
+
+Andruna includes or links the third-party components listed below. Each
+entry names the component, its version, its source and its license, followed
+by the license text or notice the license requires.
+
+Only permissively licensed components are allowed (ADR 0006): Apache-2.0,
+MIT, BSD-2-Clause, BSD-3-Clause, 0BSD, Zlib, ISC and Unicode-3.0. Rust crate
+dependencies are checked by `cargo deny check licenses` (deny.toml).
+
+Components
+----------
+
+(none yet)

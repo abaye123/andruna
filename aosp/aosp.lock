@@ -1,0 +1,134 @@
+# AOSP projects fetched by `cargo xtask fetch`.
+#
+# Every project is cloned shallowly at `tag` from `remote`/`name` into
+# third_party/aosp/`path`. `commit` is the commit the tag resolves to (the
+# peeled tag, `git ls-remote <url> refs/tags/<tag>^{}`); a fetch whose commit
+# differs fails. Changing `tag` means refreshing every `commit` and checking
+# every patch in patches/. The tag choice is recorded in
+# docs/decisions/0011-initial-aosp-tag.md.
+#
+# The initial set covers spike S1 (ART with libcore on andruna-lx). Add
+# projects as later work needs them, in path order.
+
+remote = "https://android.googlesource.com"
+tag = "android-17.0.0_r1"
+
+[[project]]
+name = "platform/art"
+path = "art"
+commit = "b753cf97923c3695338d21466fa14c57b480a59a"
+purpose = "ART runtime, libartbase, libdexfile, compilers, dex2oat"
+
+[[project]]
+name = "platform/bionic"
+path = "bionic"
+commit = "06356e41c5ed7b12220b24c05ba4fdb873b126a7"
+purpose = "libc headers and the bionic sources (spike S4)"
+
+[[project]]
+name = "platform/external/dlmalloc"
+path = "external/dlmalloc"
+commit = "01a95ac67e502c00c9d546c3ccee2a00313f90ee"
+purpose = "allocator used by ART's dlmalloc space"
+
+[[project]]
+name = "platform/external/fdlibm"
+path = "external/fdlibm"
+commit = "34840811850a2924f1fcc7eee23dde1193e39eb6"
+purpose = "StrictMath natives for libcore"
+
+[[project]]
+name = "platform/external/fmtlib"
+path = "external/fmtlib"
+commit = "e3bef0ad2e9d4ea38ba3b4b2b59e0514f7025fed"
+purpose = "formatting library used by libbase"
+
+[[project]]
+name = "platform/external/googletest"
+path = "external/googletest"
+commit = "9bcfc87429e9a9e02ccf2b8424b748f05c4842a5"
+purpose = "gtest for ART and libbase unit tests"
+
+[[project]]
+name = "platform/external/icu"
+path = "external/icu"
+commit = "00c713278f65a4db343c388f0c4f8501f70387b9"
+purpose = "ICU for libcore (text, locale, time zones)"
+
+[[project]]
+name = "platform/external/lz4"
+path = "external/lz4"
+commit = "734e07032602e9a72fcc9701028b0aee45147fcd"
+purpose = "boot and app image compression in ART"
+
+[[project]]
+name = "platform/external/lzma"
+path = "external/lzma"
+commit = "ff4977aa409384e7622a53230323981a785e621d"
+purpose = "LZMA decoder for mini debug info (libunwindstack)"
+
+[[project]]
+name = "platform/external/vixl"
+path = "external/vixl"
+commit = "ce11d32c9cc395fd0fd961e30b1ab56e06fd30dc"
+purpose = "arm64 assembler and disassembler for ART's compiler"
+
+[[project]]
+name = "platform/external/xz-embedded"
+path = "external/xz-embedded"
+commit = "d2c16535d139cb185e89120452531bba6b36d3c6"
+purpose = "xz decoder used by ART"
+
+[[project]]
+name = "platform/external/zlib"
+path = "external/zlib"
+commit = "8731e6760935ad5289fd64c37d28155a0fa289e3"
+purpose = "zlib for libziparchive and libcore"
+
+[[project]]
+name = "platform/libcore"
+path = "libcore"
+commit = "4ebfb391ee0109d16abe6e2bc965724b940928c5"
+purpose = "Java core libraries and their natives"
+
+[[project]]
+name = "platform/libnativehelper"
+path = "libnativehelper"
+commit = "5b63a7e308ca88c5c4a2a74dfda9c73ed17cfebb"
+purpose = "JNI helpers and JNI invocation"
+
+[[project]]
+name = "platform/system/core"
+path = "system/core"
+commit = "545d2487e38192a2ce25040897ced877cf6b4f53"
+purpose = "libcutils and libutils"
+
+[[project]]
+name = "platform/system/libbase"
+path = "system/libbase"
+commit = "fef4173e19d97cd4b4fc09a06bccbf800d0d3937"
+purpose = "android-base utility library"
+
+[[project]]
+name = "platform/system/libprocinfo"
+path = "system/libprocinfo"
+commit = "b58259e79c58deb1132e11d74ea90a2dc441d84f"
+purpose = "process information helpers used by ART"
+
+[[project]]
+name = "platform/system/libziparchive"
+path = "system/libziparchive"
+commit = "bdd41f9c99400f241363b035eb64ad3d5f063c82"
+purpose = "zip access for dex files in APKs and jars"
+
+[[project]]
+name = "platform/system/logging"
+path = "system/logging"
+commit = "d35ba620451b28512f46ebb5421f783fd77968d5"
+purpose = "liblog"
+
+[[project]]
+name = "platform/system/unwinding"
+path = "system/unwinding"
+commit = "31327c70da147fdc069598c4a5fd075aea8d3312"
+purpose = "libunwindstack for ART stack dumps"
