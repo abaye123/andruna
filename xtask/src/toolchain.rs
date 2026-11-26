@@ -98,26 +98,39 @@ pub fn install(dir: Option<PathBuf>, force: bool) -> Result<()> {
     fs::create_dir_all(parent).context(|| format!("cannot create {}", parent.display()))?;
 
     // Download next to the target so the final rename stays on one volume.
+    // A partial download from an interrupted run is resumed; the checksum
+    // below decides whether the result is usable.
     let staging = sibling(&dir, ".partial");
-    util::remove_dir_all_if_exists(&staging)?;
-    fs::create_dir_all(&staging).context(|| format!("cannot create {}", staging.display()))?;
     let zip = staging.join(archive.name);
-    let url = format!("{BASE_URL}/{VERSION}/{}", archive.name);
-    println!("downloading {url}");
-    util::run(
-        Command::new("curl")
-            .args([
-                "--fail",
-                "--location",
-                "--retry",
-                "3",
-                "--silent",
-                "--show-error",
-            ])
-            .arg("--output")
-            .arg(&zip)
-            .arg(&url),
-    )?;
+    util::remove_dir_all_if_exists(&staging.join("x"))?;
+    fs::create_dir_all(&staging).context(|| format!("cannot create {}", staging.display()))?;
+    let complete = zip.is_file() && util::sha256_file(&zip)? == archive.sha256;
+    if !complete {
+        let url = format!("{BASE_URL}/{VERSION}/{}", archive.name);
+        println!("downloading {url}");
+        util::run(
+            Command::new("curl")
+                .args([
+                    "--fail",
+                    "--location",
+                    "--retry",
+                    "3",
+                    "--continue-at",
+                    "-",
+                    "--silent",
+                    "--show-error",
+                ])
+                .arg("--output")
+                .arg(&zip)
+                .arg(&url),
+        )
+        .map_err(|e| {
+            Error::msg(format!(
+                "{e}; run again to resume, or delete {} to restart the download",
+                staging.display()
+            ))
+        })?;
+    }
 
     let actual = util::sha256_file(&zip)?;
     if actual != archive.sha256 {
