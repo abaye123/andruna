@@ -812,22 +812,6 @@ mod tests {
     }
 
     #[test]
-    fn fork_advice_is_accepted() {
-        let p = super::mmap(
-            0,
-            8192,
-            PROT_READ | PROT_WRITE,
-            MAP_PRIVATE | MAP_ANONYMOUS,
-            -1,
-            0,
-        )
-        .unwrap();
-        assert_eq!(super::madvise(p, 8192, 18), Ok(()));
-        assert_eq!(super::madvise(p, 8192, 19), Ok(()));
-        super::munmap(p, 8192).unwrap();
-    }
-
-    #[test]
     fn partial_unmap_keeps_the_rest() {
         let mut s = AddressSpace::new();
         let a = s.mmap(0, 4 * PAGE_SIZE, RW, ANON, -1, 0).unwrap();

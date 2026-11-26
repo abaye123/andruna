@@ -31,6 +31,8 @@ pub enum Sysno {
     ClockGettime,
     ClockGetres,
     ClockNanosleep,
+    Getcwd,
+    Chdir,
     // Only on x86_64 (arm64 has no legacy forms).
     Open,
     Stat,
@@ -72,6 +74,8 @@ pub const X86_64: Table = Table(&[
     (35, Sysno::Nanosleep),
     (39, Sysno::Getpid),
     (72, Sysno::Fcntl),
+    (79, Sysno::Getcwd),
+    (80, Sysno::Chdir),
     (186, Sysno::Gettid),
     (202, Sysno::Futex),
     (228, Sysno::ClockGettime),
@@ -83,9 +87,11 @@ pub const X86_64: Table = Table(&[
 ]);
 
 pub const AARCH64: Table = Table(&[
+    (17, Sysno::Getcwd),
     (23, Sysno::Dup),
     (24, Sysno::Dup3),
     (25, Sysno::Fcntl),
+    (49, Sysno::Chdir),
     (56, Sysno::Openat),
     (57, Sysno::Close),
     (62, Sysno::Lseek),
