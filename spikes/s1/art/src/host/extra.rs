@@ -252,9 +252,34 @@ gfn! {
     }
 }
 
+gfn! {
+    /// `getpwuid_r`: no user database (result NULL, return 0, as for an
+    /// unknown uid).
+    pub unsafe fn h_getpwuid_r(_uid: u32, _pw: usize, _buf: usize, _len: usize, res: *mut usize) -> i32 {
+        if !res.is_null() {
+            // SAFETY: the guest's result pointer.
+            unsafe { *res = 0 };
+        }
+        0
+    }
+}
+
+gfn! {
+    /// `android_get_LD_LIBRARY_PATH`: empty.
+    pub unsafe fn h_get_ld_library_path(buf: *mut c_char, len: usize) -> () {
+        if len > 0 {
+            // SAFETY: the guest's buffer.
+            unsafe { *buf = 0 };
+        }
+    }
+}
+
 pub fn symbols() -> Vec<(&'static str, usize)> {
     vec![
         ("uname", h_uname as usize),
+        ("getpwuid_r", h_getpwuid_r as usize),
+        ("getpwnam_r", h_getpwuid_r as usize),
+        ("android_get_LD_LIBRARY_PATH", h_get_ld_library_path as usize),
         ("pthread_getattr_np", h_pthread_getattr_np as usize),
         ("pthread_attr_getstack", h_pthread_attr_getstack as usize),
         ("pthread_attr_getguardsize", h_pthread_attr_getguardsize as usize),
@@ -267,7 +292,6 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("msync", h_ok as usize),
         ("fsync", h_ok as usize),
         ("fdatasync", h_ok as usize),
-        ("pthread_kill", h_ok as usize),
         ("setpgid", h_ok as usize),
         ("getpriority", h_getpriority as usize),
         ("mincore", h_mincore as usize),

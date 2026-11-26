@@ -56,6 +56,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", default="int", choices=["int", "jit", "aot"])
     ap.add_argument("--extra", action="append", default=[])
+    ap.add_argument("--timeout", type=float, default=300)
     ap.add_argument("cls")
     ap.add_argument("args", nargs="*")
     a = ap.parse_args()
@@ -75,7 +76,15 @@ def main():
     env.setdefault("S8_LIB_PATH", ";".join(str(GUEST / d) for d in ("aosp", "natives-build", "natives-build/manual", "sysroot/usr/lib", "libcxx-install/lib")))
     cmd = [str(RUNNER), "run", str(GUEST / "aosp" / "dalvikvm")] + opts + ["-cp", dex, a.cls] + a.args
     print("+", " ".join(cmd), flush=True)
-    return subprocess.run(cmd, env=env).returncode
+    import time
+    t = time.perf_counter()
+    try:
+        rc = subprocess.run(cmd, env=env, timeout=a.timeout).returncode
+    except subprocess.TimeoutExpired:
+        print(f"[run_art] timed out after {a.timeout} s", flush=True)
+        rc = 124
+    print(f"[run_art] exit {rc}, wall time {time.perf_counter() - t:.2f} s", flush=True)
+    return rc
 
 
 if __name__ == "__main__":

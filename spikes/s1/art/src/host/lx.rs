@@ -346,6 +346,41 @@ gfn! {
     }
 }
 
+gfn! {
+    /// `syscall`, forwarded to lx, except `FUTEX_REQUEUE` and
+    /// `FUTEX_CMP_REQUEUE`, which lx does not have yet: they wake the
+    /// waiters that would have been requeued instead of moving them (a
+    /// spurious wake-up, which every futex user must tolerate).
+    pub unsafe fn h_syscall(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64 {
+        const NR_FUTEX: i64 = 202;
+        const FUTEX_WAKE: i64 = 1;
+        const FUTEX_REQUEUE: i64 = 3;
+        const FUTEX_CMP_REQUEUE: i64 = 4;
+        const FUTEX_PRIVATE: i64 = 128;
+        guard(|| {
+            if n == NR_FUTEX {
+                let op = a2 & 127;
+                if op == FUTEX_REQUEUE || op == FUTEX_CMP_REQUEUE {
+                    if op == FUTEX_CMP_REQUEUE {
+                        // SAFETY: the futex word the guest passed.
+                        let cur = unsafe { core::ptr::read_volatile(a1 as *const i32) };
+                        if cur != a6 as i32 {
+                            return fail_with(EAGAIN) as i64;
+                        }
+                    }
+                    let n_wake = (a3 as i32).max(0) as i64 + (a4 as i32).max(0) as i64;
+                    // SAFETY: a FUTEX_WAKE on the same word.
+                    return unsafe {
+                        sys::syscall(NR_FUTEX, a1, FUTEX_WAKE | (a2 & FUTEX_PRIVATE), n_wake.min(i32::MAX as i64), 0, 0, 0)
+                    };
+                }
+            }
+            // SAFETY: forwarded unchanged.
+            unsafe { sys::syscall(n, a1, a2, a3, a4, a5, a6) }
+        })
+    }
+}
+
 /// Defines plain forwards: same arguments, same result.
 macro_rules! forward {
     ($($name:ident => $target:ident ( $($a:ident : $t:ty),* ) -> $r:ty;)*) => {$(
@@ -370,7 +405,6 @@ forward! {
     h_munmap => munmap(a: *mut c_void, len: usize) -> i32;
     h_mprotect => mprotect(a: *mut c_void, len: usize, prot: i32) -> i32;
     h_madvise => madvise(a: *mut c_void, len: usize, advice: i32) -> i32;
-    h_syscall => syscall(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64;
     h_clock_gettime => clock_gettime(clk: i32, ts: *mut c_void) -> i32;
     h_clock_getres => clock_getres(clk: i32, ts: *mut c_void) -> i32;
     h_nanosleep => nanosleep(req: *const c_void, rem: *mut c_void) -> i32;

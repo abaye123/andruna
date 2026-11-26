@@ -94,8 +94,68 @@ gfn! {
     }
 }
 
+// Process-directed asynchronous signals, only as far as ART's signal
+// catcher needs them: `pthread_kill`/`kill`/`raise` of a signal that has
+// no handler run queue it here, and `sigwait*` takes it (any thread, any
+// set: the spike does not track masks).
+static PENDING: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+static PENDING_CV: std::sync::Condvar = std::sync::Condvar::new();
+
+fn take_pending() -> i32 {
+    let mut p = PENDING.lock().unwrap();
+    loop {
+        if !p.is_empty() {
+            return p.remove(0);
+        }
+        p = PENDING_CV.wait(p).unwrap();
+    }
+}
+
+gfn! {
+    pub unsafe fn h_pthread_kill(_t: usize, sig: i32) -> i32 {
+        guard(|| {
+            if sig > 0 {
+                PENDING.lock().unwrap().push(sig);
+                PENDING_CV.notify_all();
+            }
+            0
+        })
+    }
+}
+
+gfn! {
+    pub unsafe fn h_sigwait(_set: *const u64, sig: *mut i32) -> i32 {
+        let s = take_pending();
+        // SAFETY: the guest's out-parameter.
+        unsafe { *sig = s };
+        0
+    }
+}
+
+gfn! {
+    pub unsafe fn h_sigwaitinfo(_set: *const u64, info: *mut u8, _t: *const c_void) -> i32 {
+        let s = take_pending();
+        if !info.is_null() {
+            // SAFETY: the guest's 128-byte siginfo_t.
+            unsafe {
+                core::ptr::write_bytes(info, 0, 128);
+                *(info as *mut i32) = s;
+                *(info.add(8) as *mut i32) = -6; // SI_TKILL
+            }
+        }
+        s
+    }
+}
+
 pub fn symbols() -> Vec<(&'static str, usize)> {
     vec![
+        ("pthread_kill", h_pthread_kill as usize),
+        ("sigwait", h_sigwait as usize),
+        ("sigwait64", h_sigwait as usize),
+        ("sigwaitinfo", h_sigwaitinfo as usize),
+        ("sigwaitinfo64", h_sigwaitinfo as usize),
+        ("sigtimedwait", h_sigwaitinfo as usize),
+        ("sigtimedwait64", h_sigwaitinfo as usize),
         ("sigaction", h_sigaction as usize),
         ("sigaction64", h_sigaction as usize),
         ("sigprocmask", h_sigprocmask as usize),
