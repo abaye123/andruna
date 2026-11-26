@@ -24,6 +24,10 @@ maintainer closes it.
   owner module and its own tests.
 - The manager app (C#) can start in phase 2 against a mocked sysd interface,
   as long as the mock lives only in its tests.
+- Maintainer decision, 2026-11-27: the product skeleton (sysd, launcher,
+  manager, installer, signing) starts now, in parallel with the remaining
+  phase 0 and 1 work. It shows honest "not available yet" states until the
+  runtime parts land.
 
 ## Working with agents
 
