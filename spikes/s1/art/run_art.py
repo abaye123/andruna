@@ -45,7 +45,7 @@ def setup_root(root: Path):
         shutil.copy2(dat, icu / dat.name)
     tmp = root / "data" / "local" / "tmp"
     tmp.mkdir(parents=True, exist_ok=True)
-    for d in ("hello.dex", "bench.dex"):
+    for d in ("hello.dex", "bench.dex", "faults.dex"):
         if (JAVA / d).exists():
             shutil.copy2(JAVA / d, tmp / d)
     for d in ("data/dalvik-cache/x86_64", "system/framework", "system/bin"):
@@ -63,7 +63,7 @@ def main():
     root = Path(os.environ.get("S8_ROOT", Path(tempfile.gettempdir()) / "andruna-s1-root"))
     setup_root(root)
     bcp = ":".join(f"{JAVALIB}/{j}" for j in BOOT_JARS)
-    dex = "/data/local/tmp/" + ("hello.dex" if a.cls == "Hello" else "bench.dex")
+    dex = "/data/local/tmp/" + a.cls.lower() + ".dex"
     opts = [f"-Xbootclasspath:{bcp}", f"-Xbootclasspath-locations:{bcp}",
             "-Ximage:/system/framework/none.art", "-Xnoimage-dex2oat"]
     if a.mode == "int":

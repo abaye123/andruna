@@ -409,7 +409,7 @@ def build_tests(jars):
         shutil.rmtree(classes)
     os.makedirs(classes)
     boot_classes = os.path.join(OUT, "classes", "boot")
-    for name in ("Hello", "Bench"):
+    for name in ("Hello", "Bench", "Faults"):
         javac([
             "-encoding", "UTF-8",
             "-source", JAVA_VERSION, "-target", JAVA_VERSION,
@@ -443,7 +443,12 @@ def build_tests(jars):
 def main(argv):
     ensure_build_tools()
     os.makedirs(OUT, exist_ok=True)
-    jars = build_boot()
+    if "--tests-only" in argv:
+        # Reuse the boot jars already built.
+        jars = {j: os.path.join(OUT, "classes", j + "-classes.jar")
+                for j in ("core-oj", "core-libart", "core-icu4j")}
+    else:
+        jars = build_boot()
     build_tests(jars)
     if "--skip-verify" not in argv:
         run([sys.executable, "-I", os.path.join(HERE, "verify_boot.py")])
