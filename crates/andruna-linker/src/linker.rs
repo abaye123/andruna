@@ -121,6 +121,8 @@ pub struct Linker {
     static_tls_done: bool,
     /// TLSDESC arguments for dynamic TLS (`TlsDynamicResolverArg`), owned
     /// per object.
+    // Boxed: the descriptors point at the arguments, which must not move.
+    #[allow(clippy::vec_box)]
     tlsdesc_args: HashMap<ObjectId, Vec<Box<[u64; 3]>>>,
     pub stats: Stats,
     pub stack_guard: u64,
@@ -534,16 +536,17 @@ impl Linker {
         {
             s.set_executable(self.obj(root));
         }
-        if self.bridge.is_none() && self.runs_code() {
-            if let Some(b) = new
+        if self.bridge.is_none()
+            && self.runs_code()
+            && self.startup.is_some()
+            && let Some(b) = new
                 .iter()
                 .copied()
                 .find(|&i| crate::bridge::is_bridge(self.obj(i)))
-            {
-                self.relocate(b)?;
-                self.protect_and_register(b)?;
-                self.bridge = Some(Bridge::new(self, b)?);
-            }
+        {
+            self.relocate(b)?;
+            self.protect_and_register(b)?;
+            self.bridge = Some(Bridge::new(self, b)?);
         }
         for &id in new {
             self.register_tls(id)?;
@@ -1180,7 +1183,7 @@ impl RelKind {
 
 fn read_table<T: Copy>(o: &Object, a: u64, sz: u64) -> Result<Vec<T>> {
     let n = core::mem::size_of::<T>() as u64;
-    if sz % n != 0 {
+    if !sz.is_multiple_of(n) {
         return Err(Error::invalid(
             &o.name,
             "relocation table size is not a multiple of its entry",

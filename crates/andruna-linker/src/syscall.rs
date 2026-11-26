@@ -202,6 +202,11 @@ gfn! {
 
 /// `__andruna_syscall` (x64): number in `rax`, arguments in the System V
 /// argument registers.
+///
+/// # Safety
+///
+/// Called only by guest code with that convention and the kernel's
+/// contract for the call.
 #[cfg(target_arch = "x86_64")]
 #[unsafe(naked)]
 pub unsafe extern "sysv64" fn andruna_syscall() {
@@ -217,6 +222,10 @@ pub unsafe extern "sysv64" fn andruna_syscall() {
 }
 
 /// `__andruna_syscall` (arm64): number in `x8`, arguments in `x0`-`x5`.
+///
+/// # Safety
+///
+/// As for x64.
 #[cfg(target_arch = "aarch64")]
 #[unsafe(naked)]
 pub unsafe extern "C" fn andruna_syscall() {

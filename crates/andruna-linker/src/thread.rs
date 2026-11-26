@@ -255,7 +255,9 @@ unsafe extern "system" fn thread_start(p: *mut c_void) -> u32 {
     enter_stack(stack, entry, func, arg)
 }
 
-/// `__andruna_clone_thread`: the thread part of `clone`.
+/// `__andruna_clone_thread`: the thread part of `clone` (the kernel's
+/// argument list).
+#[allow(clippy::too_many_arguments)]
 fn clone_thread(
     flags: i32,
     stack: u64,
@@ -322,6 +324,7 @@ fn clone_thread(
 }
 
 gfn! {
+    #[allow(clippy::too_many_arguments)]
     unsafe fn h_clone_thread(
         flags: i32,
         stack: u64,
