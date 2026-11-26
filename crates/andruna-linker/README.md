@@ -21,7 +21,7 @@ calling convention (see `src/lib.rs` and `aosp/bionic/host_symbols.txt`).
   initializers dependencies first (`DT_PREINIT_ARRAY` of the executable
   first), finalizers on `dlclose`.
 - ELF TLS on the guest thread pointer (S4: x64 FS base with lazy restore;
-  arm64 `TPIDR_EL0`). With bionic, the layout and module table are bionic's,
+  arm64 `TPIDR_EL0`, which Windows preserves per thread, written once). With bionic, the layout and module table are bionic's,
   through the bridge `ld-android.so` (`aosp/bionic/ld_android_bridge.cpp`);
   without bionic a built-in static layout is used.
 - `dlopen`, `dlsym`, `dlvsym`, `dlclose`, `dladdr`, `dl_iterate_phdr`,
@@ -72,7 +72,7 @@ cargo test -p andruna-linker --target aarch64-pc-windows-gnullvm --test guest
 ```
 
 The second command fails if the arm64 test objects are missing, and runs
-`linker_test` and `cxx_test` natively. This is the first time guest arm64
-code executes: `TPIDR_EL0` survival (S4, section 2) is what it exercises
-first; a failure in thread-pointer reads after a context switch points
-there.
+`linker_test` and `cxx_test` natively on real bionic. `TPIDR_EL0` holds the
+thread pointer (preserved per thread, measured in S4's ARM64 runs); x18 must
+stay the TEB, so bionic is built with the shadow call stack set-up disabled
+(patch in `patches/bionic/`).

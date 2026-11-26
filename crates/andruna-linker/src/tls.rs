@@ -6,8 +6,13 @@
 //!   a thread is switched out; the next FS-relative access then faults and
 //!   the first vectored exception handler ([`lazy_restore`]) writes the
 //!   thread's registered value again and retries the instruction.
-//! - arm64: `TPIDR_EL0`, written with `msr`. Whether Windows preserves it
-//!   per thread is not verified (S4 section 2); this is S4's option 1.
+//! - arm64: `TPIDR_EL0`, written once with `msr` (bionic's `__set_tls`).
+//!   The ARM64 runs of S4 measured that Windows preserves it per thread
+//!   (no change in 1.8 billion checks across context switches, exceptions,
+//!   APCs and suspend/context calls; new threads start at 0), so there is no
+//!   lazy restore and no code rewriting. x18 must stay the TEB at all times
+//!   (a fault with another x18 kills the process), which is why bionic's
+//!   shadow call stack set-up is disabled on arm64.
 //!
 //! The registered value lives in the host's own TLS, so it is right even
 //! while the FS base is stale.
@@ -97,7 +102,7 @@ pub fn read_fs_base() -> u64 {
 #[cfg(target_arch = "aarch64")]
 fn write_tp(tp: u64) {
     // SAFETY: writes the user read-write thread ID register, which Windows
-    // documents as reserved and Windows code does not read (S4).
+    // preserves per thread and does not use itself (S4, ARM64 runs).
     unsafe { core::arch::asm!("msr tpidr_el0, {}", in(reg) tp, options(nostack, preserves_flags)) };
 }
 

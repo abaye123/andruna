@@ -56,7 +56,9 @@ pub mod nr {
     pub const CLONE3: i64 = 435;
 }
 
+#[cfg(target_arch = "x86_64")]
 const ARCH_SET_FS: i64 = 0x1002;
+#[cfg(target_arch = "x86_64")]
 const ARCH_GET_FS: i64 = 0x1003;
 const GRND_NONBLOCK: i64 = 1;
 const GRND_RANDOM: i64 = 2;
