@@ -92,6 +92,12 @@ bp_read(bionic ARCH ${BP_ARCH} MODULES ${_mods}
 set(ANDRUNA_BP_BASE_OPTIONS
   -nostdlibinc
   -DANDRUNA
+  # Soong's device default; bionic declares the fortified entry points
+  # (__open_2, ...) only under it.
+  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2
+  # Soong's platform_sdk_version product variable (crtbrand.S): the SDK
+  # level of android-17.0.0_r1 (aosp.lock).
+  $<$<COMPILE_LANGUAGE:ASM>:-DPLATFORM_SDK_VERSION=37>
   -fPIC -O2 -g
   -funwind-tables -ffunction-sections -fdata-sections
   -fstack-protector-strong
@@ -100,8 +106,13 @@ set(ANDRUNA_BP_BASE_OPTIONS
   $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
   $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
   $<$<COMPILE_LANGUAGE:CXX>:-nostdinc++>
-  "SHELL:-isystem ${ANDRUNA_BIONIC_DIR}/include"
-  "-I${BIONIC_GEN}")
+  "-I${BIONIC_GEN}"
+  # bionic's own headers (libc_headers), for the modules whose header_libs
+  # do not name them.
+  "SHELL:-isystem ${BIONIC}/libc/include"
+  "SHELL:-isystem ${BIONIC}/libc/kernel/uapi"
+  "SHELL:-isystem ${BIONIC}/libc/kernel/android/uapi"
+  "SHELL:-isystem ${BIONIC}/libc/kernel/uapi/asm-${BIONIC_ASM_ARCH}")
 set(ANDRUNA_BP_LATE_OPTIONS -w -Wno-error)
 
 # ---------------------------------------------------------------------------

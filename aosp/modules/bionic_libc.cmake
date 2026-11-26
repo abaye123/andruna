@@ -82,8 +82,16 @@ list(APPEND _nomalloc_objs $<TARGET_OBJECTS:bp_libc_dynamic_dispatch>)
 list(REMOVE_DUPLICATES _nomalloc_objs)
 add_library(bionic_libc_nomalloc STATIC ${_nomalloc_objs})
 
-# ld-android.so: Andruna's bridge between andruna-linker and libc.
-add_library(ld_android_so SHARED "${ANDRUNA_BIONIC_DIR}/ld_android_bridge.cpp")
+# ld-android.so: Andruna's bridge between andruna-linker and libc. Its
+# __libc_shared_globals() is libc_init_static's (as in bionic's linker),
+# the main-thread set-up libc_bootstrap's; on arm64 it also carries
+# bionic's dynamic TLSDESC resolver.
+set(_bridge_srcs "${ANDRUNA_BIONIC_DIR}/ld_android_bridge.cpp"
+  "${ANDRUNA_BIONIC_DIR}/bridge_malloc.cpp")
+if(BP_ARCH STREQUAL "arm64")
+  list(APPEND _bridge_srcs "${BIONIC}/linker/arch/arm64/tlsdesc_resolver.S")
+endif()
+add_library(ld_android_so SHARED ${_bridge_srcs})
 target_include_directories(ld_android_so PRIVATE
   ${BP_libc_bionic_INCLUDES} ${BP_libc_bionic_HEADER_INCLUDES} "${BIONIC}/libc")
 target_compile_options(ld_android_so PRIVATE
