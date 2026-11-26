@@ -68,6 +68,12 @@ commit = "ff4977aa409384e7622a53230323981a785e621d"
 purpose = "LZMA decoder for mini debug info (libunwindstack)"
 
 [[project]]
+name = "platform/external/tinyxml2"
+path = "external/tinyxml2"
+commit = "33ba115074c80a720826efffab1937d5b355c3b8"
+purpose = "XML writer for ART's runtime metrics (libartbase)"
+
+[[project]]
 name = "platform/external/vixl"
 path = "external/vixl"
 commit = "ce11d32c9cc395fd0fd961e30b1ab56e06fd30dc"
@@ -84,6 +90,12 @@ name = "platform/external/zlib"
 path = "external/zlib"
 commit = "8731e6760935ad5289fd64c37d28155a0fa289e3"
 purpose = "zlib for libziparchive and libcore"
+
+[[project]]
+name = "platform/frameworks/libs/modules-utils"
+path = "frameworks/libs/modules-utils"
+commit = "a11fa5c814cc3239217ce4d093bfc5c808f73785"
+purpose = "SDK level helpers used by libartbase (android-modules-utils/sdk_level.h)"
 
 [[project]]
 name = "platform/libcore"

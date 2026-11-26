@@ -190,6 +190,12 @@ pub fn fetch(sel: &Selection) -> Result<()> {
                     "core.autocrlf=false",
                     "--config",
                     "core.longpaths=true",
+                    // AOSP uses symbolic links for shared headers (for
+                    // example system/core/libutils/include). On Windows this
+                    // needs Developer Mode or an elevated shell; otherwise
+                    // git writes the link target as a text file.
+                    "--config",
+                    "core.symlinks=true",
                     &url,
                 ])
                 .arg(&partial),
@@ -203,7 +209,8 @@ pub fn fetch(sel: &Selection) -> Result<()> {
                 p.path, lock.tag, p.commit
             )));
         }
-        fs::rename(&partial, &dest).context(|| format!("cannot move into {}", dest.display()))?;
+        util::rename_with_retry(&partial, &dest)
+            .context(|| format!("cannot move into {}", dest.display()))?;
         println!("{}: fetched {}", p.path, short(&got));
     }
     Ok(())

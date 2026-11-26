@@ -158,3 +158,20 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+/// Renames a directory, retrying for a few seconds when Windows denies
+/// access. A freshly written tree is often still open in a file scanner (for
+/// example the antivirus), which makes the rename fail with
+/// `ERROR_ACCESS_DENIED` for a short time.
+pub fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut attempt = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && attempt < 40 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            r => return r,
+        }
+    }
+}

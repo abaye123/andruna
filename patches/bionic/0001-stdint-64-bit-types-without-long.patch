@@ -1,0 +1,33 @@
+Make the 64-bit integer typedefs independent of `long` in the ANDRUNA build.
+
+Andruna compiles AOSP code for a Windows target, where `long` is 32 bits
+(LLP64), while __LP64__ is defined to select the 64-bit Android ABI. With
+the upstream typedefs, int64_t and intptr_t would be 32 bits. Under ANDRUNA
+they use `long long`, which is 64 bits on every target.
+
+diff --git a/libc/include/stdint.h b/libc/include/stdint.h
+index 1e228fa..9602fb8 100644
+--- a/libc/include/stdint.h
++++ b/libc/include/stdint.h
+@@ -42,7 +42,7 @@ typedef short __int16_t;
+ typedef unsigned short __uint16_t;
+ typedef int __int32_t;
+ typedef unsigned int __uint32_t;
+-#if defined(__LP64__)
++#if defined(__LP64__) && !defined(ANDRUNA)
+ typedef long __int64_t;
+ typedef unsigned long __uint64_t;
+ #else
+@@ -50,7 +50,11 @@ typedef long long __int64_t;
+ typedef unsigned long long __uint64_t;
+ #endif
+ 
+-#if defined(__LP64__)
++#if defined(ANDRUNA)
++/* LLP64: `long` is 32 bits, pointers are 64 bits. */
++typedef long long __intptr_t;
++typedef unsigned long long __uintptr_t;
++#elif defined(__LP64__)
+ typedef long __intptr_t;
+ typedef unsigned long __uintptr_t;
+ #else
