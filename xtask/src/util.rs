@@ -73,6 +73,11 @@ pub fn succeeds(cmd: &mut Command) -> Result<bool> {
 
 /// Runs a command and returns its trimmed standard output.
 pub fn output(cmd: &mut Command) -> Result<String> {
+    output_raw(cmd).map(|s| s.trim().to_string())
+}
+
+/// Runs a command and returns its standard output unchanged.
+pub fn output_raw(cmd: &mut Command) -> Result<String> {
     let out = cmd
         .output()
         .context(|| format!("failed to start {}", describe(cmd)))?;
@@ -84,7 +89,7 @@ pub fn output(cmd: &mut Command) -> Result<String> {
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn describe(cmd: &Command) -> String {

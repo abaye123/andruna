@@ -19,10 +19,36 @@ projects share headers through symbolic links (for example
 Developer Mode or an elevated shell; without it git writes each link as a
 text file holding the target path, and the build fails on those headers.
 
-`platform/libcore` cannot be checked out on Windows at this tag: one test
-resource (`luni/src/test/resources/org/apache/harmony/tests/java/lang/test?.properties`)
-has a name Windows cannot store, and git refuses the checkout. libcore is not
-needed for the modules built so far; how to fetch it is open (S1).
+### Excluded directories
+
+`fetch` clones with `--no-checkout` and checks every name in the tree before
+writing anything: characters Windows does not allow (`<>:"|?*`, `\`,
+control characters), a trailing dot or space, reserved device names (`CON`,
+`NUL`, `COM1` and so on, also with an extension). A project whose tree has
+such a name fails unless the name is below a directory listed in its
+`exclude` key in the lock. Paths that differ only in case are printed as
+warnings: git checks them out (one spelling overwrites the other), so the
+build must not need both. At this tag that is bionic's
+`libc/kernel/uapi/linux/netfilter*` headers (for example `xt_CONNMARK.h`
+and `xt_connmark.h`), which nothing built so far includes. Excluded directories
+are never written: they are left out with a cone-mode sparse checkout and a
+sparse index (`core.sparseCheckoutCone`, `index.sparse`), and `fetch` checks
+that the index holds every other path of the tree and each excluded
+directory as one sparse entry. `core.protectNTFS` stays on. Single files
+cannot be excluded: with NTFS protection on, git refuses such a path in the
+index even when it is not checked out, so only a sparse index (which stores
+the excluded directory as one tree entry) avoids it, and that requires cone
+mode, which works on directories.
+
+Excluded at this tag:
+
+| Project | Directory | Why |
+| --- | --- | --- |
+| libcore | `luni/src/test/resources/org/apache/harmony/tests/java/lang` | Holds `test?.properties`; the directory has three test resources and nothing else |
+
+A checkout with excluded directories reports them in
+`git ls-files --sparse`; commands that expand the index to every file (plain
+`git ls-files`, for example) fail on Windows there, which is expected.
 
 To change the tag: update `tag` and every `commit` together (`git ls-remote
 <remote>/<name> 'refs/tags/<tag>^{}'`), delete `third_party/aosp`, fetch, and

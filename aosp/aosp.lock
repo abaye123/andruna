@@ -4,7 +4,9 @@
 # third_party/aosp/`path`. `commit` is the commit the tag resolves to (the
 # peeled tag, `git ls-remote <url> refs/tags/<tag>^{}`); a fetch whose commit
 # differs fails. Changing `tag` means refreshing every `commit` and checking
-# every patch in patches/. The tag choice is recorded in
+# every patch in patches/. `exclude` lists paths of a project that are not
+# checked out (directories holding names Windows cannot store); see
+# aosp/README.md. The tag choice is recorded in
 # docs/decisions/0011-initial-aosp-tag.md.
 #
 # The initial set covers spike S1 (ART with libcore on andruna-lx). Add
@@ -101,7 +103,10 @@ purpose = "SDK level helpers used by libartbase (android-modules-utils/sdk_level
 name = "platform/libcore"
 path = "libcore"
 commit = "4ebfb391ee0109d16abe6e2bc965724b940928c5"
-purpose = "Java core libraries and their natives"
+purpose = "Java core libraries and their natives (GPL-2.0 with the Classpath exception, ADR 0012)"
+# Three test resources (.properties files); one is named `test?.properties`,
+# which Windows cannot store. Only directories can be excluded.
+exclude = ["luni/src/test/resources/org/apache/harmony/tests/java/lang"]
 
 [[project]]
 name = "platform/libnativehelper"

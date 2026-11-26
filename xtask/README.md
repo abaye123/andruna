@@ -6,7 +6,7 @@ Build orchestration in Rust, run as `cargo xtask <command>` (the alias is in
 | Command | What it does |
 | --- | --- |
 | `toolchain [--dir <dir>] [--force]` | Installs the pinned llvm-mingw release, verified by SHA-256 |
-| `fetch [--project <path>]...` | Shallow-clones the AOSP projects in `aosp/aosp.lock` at the pinned tag and verifies each commit |
+| `fetch [--project <path>]...` | Shallow-clones the AOSP projects in `aosp/aosp.lock` at the pinned tag and verifies each commit; leaves out the directories a project lists in `exclude` (see aosp/README.md) |
 | `patch [--project <path>]...` | Applies `patches/<path>/*.patch` in order; already applied patches are skipped |
 | `build [--arch x64\|arm64] [--release]` | Builds the Rust workspace for the gnullvm target (more parts are added as they appear) |
 

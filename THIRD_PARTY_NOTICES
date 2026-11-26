@@ -66,3 +66,14 @@ in the fetched project (third_party/aosp/<path>).
 - tinyxml2 - platform/external/tinyxml2 - Zlib - LICENSE.txt
 - dlmalloc header (read by the libart attempt) - platform/external/dlmalloc
   - public domain (explicit dedication) - NOTICE
+
+The AOSP component below is fetched at the same tag but not built yet. It
+is not permissively licensed; it is allowed as a named exception to ADR
+0006 (ADR 0012), fetched from AOSP and never copied into the repository.
+Its license text, including the exception, is added here when it is built.
+
+- libcore - platform/libcore - GPL-2.0 with the Classpath exception (the
+  OpenJDK-derived files, mainly ojluni/); the rest under Apache-2.0 and
+  the ICU, KXML, W3C and fdlibm notices in NOTICE - LICENSE (GPL-2.0 text
+  followed by the "CLASSPATH" EXCEPTION TO THE GPL), NOTICE, file
+  headers. Not built yet.
