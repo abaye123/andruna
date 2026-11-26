@@ -159,6 +159,44 @@ pub fn missing_from_table() -> Vec<&'static str> {
 }
 
 static STUBS: Mutex<Vec<(CString, usize)>> = Mutex::new(Vec::new());
+static TLSDESC: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// The TLSDESC function for static TLS: returns the descriptor's second
+/// word (x64: `mov rax, [rax+8]; ret`; arm64: `ldr x0, [x0, #8]; ret`).
+pub fn tlsdesc_static_resolver() -> usize {
+    *TLSDESC.get_or_init(|| {
+        #[cfg(target_arch = "x86_64")]
+        let code: &[u8] = &[0x48, 0x8b, 0x40, 0x08, 0xc3];
+        #[cfg(target_arch = "aarch64")]
+        let code: &[u8] = &[0x00, 0x04, 0x40, 0xf9, 0xc0, 0x03, 0x5f, 0xd6];
+        code_stub(code)
+    })
+}
+
+/// Copies `code` into the executable stub page.
+fn code_stub(code: &[u8]) -> usize {
+    let _g = STUBS.lock().unwrap();
+    // SAFETY: the stub page is only touched under the STUBS lock.
+    let (page, used) = unsafe { STUB_PAGE };
+    let (page, used) = if page == 0 || used + 32 > 65536 { (new_stub_page(), 0) } else { (page, used) };
+    // SAFETY: inside the RWX stub page, unused so far.
+    unsafe { core::ptr::copy_nonoverlapping(code.as_ptr(), (page + used) as *mut u8, code.len()) };
+    // SAFETY: as above.
+    unsafe { STUB_PAGE = (page, used + 32) };
+    page + used
+}
+
+fn new_stub_page() -> usize {
+    andruna_lx::mem::mmap(
+        0,
+        65536,
+        andruna_lx::linux::mman::PROT_READ | andruna_lx::linux::mman::PROT_WRITE | andruna_lx::linux::mman::PROT_EXEC,
+        andruna_lx::linux::mman::MAP_PRIVATE | andruna_lx::linux::mman::MAP_ANONYMOUS,
+        -1,
+        0,
+    )
+    .expect("stub page")
+}
 static mut STUB_PAGE: (usize, usize) = (0, 0);
 
 /// An executable stub for a symbol nothing defines: it reports the call

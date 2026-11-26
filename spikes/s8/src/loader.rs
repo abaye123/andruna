@@ -24,6 +24,17 @@ use crate::host;
 use crate::tls;
 
 const PAGE: u64 = 4096;
+/// Reserved after each image for its translated unwind tables.
+pub const UNWIND_SPACE: u64 = 1 << 20;
+
+#[cfg(target_arch = "x86_64")]
+type GuestInit = extern "sysv64" fn(i32, *const *const u8, *const *const u8);
+#[cfg(not(target_arch = "x86_64"))]
+type GuestInit = extern "C" fn(i32, *const *const u8, *const *const u8);
+#[cfg(target_arch = "x86_64")]
+type GuestResolver = extern "sysv64" fn() -> u64;
+#[cfg(not(target_arch = "x86_64"))]
+type GuestResolver = extern "C" fn() -> u64;
 
 fn page_down(v: u64) -> u64 {
     v & !(PAGE - 1)
@@ -50,6 +61,9 @@ pub struct Object {
     exports: HashMap<String, Sym>,
     /// Module id for TLS (1-based), 0 if the object has no `PT_TLS`.
     pub tls_module: usize,
+    /// `e_machine`; another architecture than the host's only in
+    /// link-only mode (`S8_LINK_ONLY`).
+    pub machine: u16,
     /// Symbols of `.symtab` (function names for crash reports and the
     /// debugger checks), sorted by address.
     pub local_symbols: Vec<(u64, u64, String)>,
@@ -100,6 +114,7 @@ pub struct LoadStats {
     pub unresolved: Vec<String>,
     pub packed_relocations: usize,
     pub relr_relocations: usize,
+    pub tlsdesc: usize,
 }
 
 pub struct Linker {
@@ -173,7 +188,7 @@ impl Linker {
         // The guest libc is initialized before anything else.
         if let Some(init) = self.lookup_global("__andruna_libc_init") {
             // SAFETY: the guest libc's init function, System V convention.
-            let f: extern "sysv64" fn(i32, *const *const u8, *const *const u8) = unsafe { core::mem::transmute(init) };
+            let f: GuestInit = unsafe { core::mem::transmute(init) };
             f(argc, argv, envp);
         }
         for i in (0..self.objects.len()).rev() {
@@ -194,7 +209,7 @@ impl Linker {
                 }
                 // SAFETY: an initializer of the object; bionic calls them
                 // with (argc, argv, envp).
-                let f: extern "sysv64" fn(i32, *const *const u8, *const *const u8) = unsafe { core::mem::transmute(f) };
+                let f: GuestInit = unsafe { core::mem::transmute(f) };
                 f(argc, argv, envp);
             }
         }
@@ -217,7 +232,7 @@ impl Linker {
             if let Some(s) = o.exports.get(name) {
                 let addr = if s.st_info & 0xf == STT_GNU_IFUNC {
                     // SAFETY: an IFUNC resolver of the object.
-                    let r: extern "sysv64" fn() -> u64 = unsafe { core::mem::transmute(o.bias + s.st_value) };
+                    let r: GuestResolver = unsafe { core::mem::transmute(o.bias + s.st_value) };
                     r()
                 } else {
                     o.bias + s.st_value
@@ -275,6 +290,7 @@ impl Linker {
             relocs.extend(read_relas(bias + a, sz));
         }
         let tls_module = o.tls_module;
+        let machine = o.machine;
         // Symbol cache per object: index -> resolved value.
         let mut cache: HashMap<u32, (u64, Option<(usize, Sym)>)> = HashMap::new();
         let mut irelative = vec![];
@@ -302,7 +318,7 @@ impl Linker {
                 (0, None)
             };
             let a = r.r_addend as u64;
-            let val: Option<u64> = match (crate::ARCH_ELF, ty) {
+            let val: Option<u64> = match (machine, ty) {
                 (EM_X86_64, x86_64::R_NONE) | (EM_AARCH64, aarch64::R_NONE) => None,
                 (EM_X86_64, x86_64::R_RELATIVE) | (EM_AARCH64, aarch64::R_RELATIVE) => Some(bias.wrapping_add(a)),
                 (EM_X86_64, x86_64::R_64) | (EM_AARCH64, aarch64::R_ABS64) => Some(s_addr.wrapping_add(a)),
@@ -331,6 +347,21 @@ impl Linker {
                     };
                     Some((tls::tp_offset(m) as u64).wrapping_add(v).wrapping_add(a))
                 }
+                (EM_X86_64, x86_64::R_TLSDESC) | (EM_AARCH64, aarch64::R_TLSDESC) => {
+                    // Static TLS: the descriptor's function returns its
+                    // argument, the offset of the variable from the thread
+                    // pointer (bionic's tlsdesc_resolver_static).
+                    let (m, v) = match def {
+                        Some((i, s)) => (self.objects[i].tls_module, s.st_value),
+                        None => (tls_module, 0),
+                    };
+                    let off = (tls::tp_offset(m) as u64).wrapping_add(v).wrapping_add(a);
+                    let resolver = if machine == crate::ARCH_ELF { host::tlsdesc_static_resolver() } else { 0 };
+                    // SAFETY: a TLSDESC GOT slot is two words.
+                    unsafe { where_.add(1).write_unaligned(off) };
+                    self.stats.tlsdesc += 1;
+                    Some(resolver as u64)
+                }
                 _ => {
                     return Err(format!(
                         "{}: unsupported relocation type {ty} at {:#x}",
@@ -345,14 +376,23 @@ impl Linker {
             }
             self.stats.relocations += 1;
         }
+        if link_only() && machine != crate::ARCH_ELF {
+            irelative.clear();
+        }
         for (w, resolver) in irelative {
             // SAFETY: IRELATIVE resolvers are functions of the object.
-            let f: extern "sysv64" fn() -> u64 = unsafe { core::mem::transmute(resolver) };
+            let f: GuestResolver = unsafe { core::mem::transmute(resolver) };
             // SAFETY: as above.
             unsafe { w.write_unaligned(f()) };
         }
         Ok(())
     }
+}
+
+/// Link-only mode: objects of another architecture are mapped and
+/// relocated but never run (checks the arm64 objects on an x64 machine).
+pub fn link_only() -> bool {
+    std::env::var_os("S8_LINK_ONLY").is_some()
 }
 
 fn read_array(addr: u64, size: u64) -> Vec<u64> {
@@ -398,7 +438,7 @@ fn map_object(path: &Path, name: &str) -> Result<Object, String> {
     if eh.e_type != ET_DYN {
         return Err(format!("{}: not ET_DYN (Android objects are PIC)", path.display()));
     }
-    if eh.e_machine != crate::ARCH_ELF {
+    if eh.e_machine != crate::ARCH_ELF && !link_only() {
         return Err(format!("{}: e_machine {} is not this architecture", path.display(), eh.e_machine));
     }
     let phdrs: Vec<Phdr> = (0..eh.e_phnum as u64)
@@ -419,7 +459,9 @@ fn map_object(path: &Path, name: &str) -> Result<Object, String> {
 
     // Reserve the whole span, then map each segment inside it, as bionic's
     // linker does with a PROT_NONE reservation.
-    let base = andruna_lx::mem::mmap(0, span as usize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
+    // UNWIND_SPACE more is reserved after the image for the Windows unwind
+    // tables (crate::unwind), which must lie within 4 GiB above the base.
+    let base = andruna_lx::mem::mmap(0, (span + UNWIND_SPACE) as usize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
         .map_err(|e| lx_err("reserve", e))? as u64;
     let bias = base - lo;
     for p in &loads {
@@ -479,6 +521,7 @@ fn map_object(path: &Path, name: &str) -> Result<Object, String> {
         nsyms,
         exports: HashMap::new(),
         tls_module: 0,
+        machine: eh.e_machine,
         local_symbols: vec![],
         file: vec![],
     };

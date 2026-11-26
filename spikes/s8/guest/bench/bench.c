@@ -85,3 +85,17 @@ uint64_t s8_read_stack_guard(void) {
 __attribute__((noinline)) int s8_crash_leaf(volatile int* p) { return *p + 1; }
 __attribute__((noinline)) int s8_crash_middle(volatile int* p) { return s8_crash_leaf(p) * 2; }
 int s8_crash(void) { return s8_crash_middle((volatile int*)0x10); }
+
+// Calls back into the host from a guest frame that saves callee-saved
+// registers, for the Windows unwinding check (S8.md, "Debugging").
+__attribute__((noinline)) uint64_t s8_call_host(uint64_t (*f)(uint64_t), uint64_t x) {
+  uint64_t a = x * 3, b = x ^ 0x55, c = x + 7;
+  __asm__ volatile("" : "+r"(a), "+r"(b), "+r"(c));
+  uint64_t r = f(x);
+  __asm__ volatile("" : "+r"(a), "+r"(b), "+r"(c));
+  return r + a + b + c;
+}
+
+__attribute__((noinline)) uint64_t s8_call_host_outer(uint64_t (*f)(uint64_t), uint64_t x) {
+  return s8_call_host(f, x + 1) * 2;
+}

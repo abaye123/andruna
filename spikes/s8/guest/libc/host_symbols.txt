@@ -177,3 +177,4 @@ pthread_attr_setdetachstate
 pthread_attr_setstacksize
 pthread_attr_getstacksize
 pthread_setname_np
+getauxval

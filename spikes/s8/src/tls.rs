@@ -72,7 +72,9 @@ pub fn layout(objs: &mut [Object]) -> Result<(), String> {
         let Some(p) = o.phdrs.iter().find(|p| p.p_type == crate::elf::PT_TLS) else {
             continue;
         };
-        let a = p.p_align.max(1);
+        // arm64: bionic's slots occupy tp..tp+64, so blocks are aligned to
+        // at least 64 (lld does the same for Android executables).
+        let a = if cfg!(target_arch = "aarch64") { p.p_align.max(64) } else { p.p_align.max(1) };
         l.align = l.align.max(a);
         #[cfg(target_arch = "x86_64")]
         let offset = {
@@ -127,7 +129,9 @@ impl ThreadArea {
             (below + slots, below)
         };
         #[cfg(target_arch = "aarch64")]
-        let (total, tp_off) = (8 + align_up(l.size, l.align), 8u64);
+        // Slot -1 below tp, slots 0..7 above it, then the module blocks
+        // (the first one at tp + 64 or more).
+        let (total, tp_off) = (l.align + align_up(l.size.max(slots), l.align), l.align);
         let layout = std::alloc::Layout::from_size_align(total as usize, l.align as usize).expect("layout");
         // SAFETY: non-zero size.
         let alloc = unsafe { std::alloc::alloc_zeroed(layout) };

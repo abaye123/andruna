@@ -60,7 +60,8 @@ def run(cmd, **kw):
     cmd = [str(c) for c in cmd]
     if cmd[0] == "cmake":
         cmd[0] = CMAKE
-    print("+", " ".join(cmd), flush=True)
+    line = " ".join(cmd)
+    print("+", line if len(line) < 400 else line[:400] + " ...", flush=True)
     subprocess.run(cmd, check=True, **kw)
 
 
@@ -173,7 +174,51 @@ def step_aosp(arch, out):
     run(["cmake", "--build", b] + (["--", "-k", "0"] if os.environ.get("KEEP_GOING") else []))
 
 
-STEPS = {"sysroot": step_sysroot, "libc": step_libc, "libcxx": step_libcxx, "aosp": step_aosp}
+def step_builtins(arch, out):
+    """compiler-rt builtins for arm64 Android (llvm-mingw ships them for
+    x86_64 Linux only): every generic and aarch64 source that compiles, and
+    the outline atomics (`__aarch64_*`) Android code calls by default."""
+    if arch == "x64":
+        return
+    import concurrent.futures as cf
+    src = LLVM_PROJECT / "compiler-rt" / "lib" / "builtins"
+    obj = out / "builtins" / "obj"
+    obj.mkdir(parents=True, exist_ok=True)
+    clang = LLVM_MINGW / "bin" / "clang.exe"
+    base = [str(clang), f"--target={ARCH[arch]['triple']}10000", f"--sysroot={out / 'sysroot'}",
+            "-O2", "-fPIC", "-fno-builtin", "-w", f"-I{src}", "-c"]
+    jobs = []
+    # cpu_model/aarch64.c defines __aarch64_have_lse_atomics (from
+    # getauxval(AT_HWCAP), which the host provides).
+    extra = [src / "cpu_model" / "aarch64.c"]
+    for f in sorted(src.glob("*.c")) + sorted((src / "aarch64").glob("*.[cS]")) + extra:
+        if f.name == "lse.S":
+            continue
+        jobs.append((base + [str(f), "-o", str(obj / (f.parent.name + "_" + f.stem + ".o"))], f.name))
+    lse = src / "aarch64" / "lse.S"
+    for op, sizes in (("cas", (1, 2, 4, 8, 16)), ("swp", (1, 2, 4, 8)), ("ldadd", (1, 2, 4, 8)),
+                      ("ldclr", (1, 2, 4, 8)), ("ldeor", (1, 2, 4, 8)), ("ldset", (1, 2, 4, 8))):
+        for size in sizes:
+            for model in (1, 2, 3, 4):
+                o = obj / f"lse_{op}{size}_{model}.o"
+                jobs.append((base + [f"-DL_{op}", f"-DSIZE={size}", f"-DMODEL={model}", str(lse), "-o", str(o)], o.name))
+
+    def build(j):
+        return j[1], subprocess.run(j[0], capture_output=True).returncode == 0
+
+    with cf.ThreadPoolExecutor(8) as ex:
+        results = list(ex.map(build, jobs))
+    failed = [n for n, ok in results if not ok]
+    print(f"builtins: {len(results) - len(failed)} objects, {len(failed)} sources skipped: {' '.join(failed)}")
+    lib = builtins(arch)
+    if lib.exists():
+        lib.unlink()
+    objs = [str(p) for p in obj.glob("*.o")]
+    run([LLVM_MINGW / "bin" / "llvm-ar.exe", "rcs", lib] + objs)
+
+
+STEPS = {"sysroot": step_sysroot, "builtins": step_builtins, "libc": step_libc,
+         "libcxx": step_libcxx, "aosp": step_aosp}
 
 
 def main():

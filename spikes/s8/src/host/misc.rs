@@ -246,6 +246,35 @@ gfn! {
     }
 }
 
+gfn! {
+    /// `getauxval`: the page size, and on arm64 the `AT_HWCAP` bits that
+    /// compiler-rt's outline atomics test (`HWCAP_ATOMICS`).
+    pub unsafe fn h_getauxval(ty: u64) -> u64 {
+        guard(|| match ty {
+            6 => 4096, // AT_PAGESZ
+            16 => hwcap(), // AT_HWCAP
+            _ => {
+                set_errno(ENOENT);
+                0
+            }
+        })
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn hwcap() -> u64 {
+    use windows::Win32::System::Threading::{IsProcessorFeaturePresent, PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE};
+    // SAFETY: a plain query.
+    let lse = unsafe { IsProcessorFeaturePresent(PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE) }.as_bool();
+    // HWCAP_FP | HWCAP_ASIMD, plus HWCAP_ATOMICS when present.
+    0b11 | if lse { 1 << 8 } else { 0 }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn hwcap() -> u64 {
+    0
+}
+
 // --- system properties: an in-process store ------------------------------------
 
 struct Prop {
@@ -550,6 +579,7 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("kill", h_kill as usize),
         ("sysconf", h_sysconf as usize),
         ("getpagesize", h_getpagesize as usize),
+        ("getauxval", h_getauxval as usize),
         ("__system_property_find", h_prop_find as usize),
         ("__system_property_get", h_prop_get as usize),
         ("__system_property_set", h_prop_set as usize),

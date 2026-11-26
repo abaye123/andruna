@@ -49,7 +49,8 @@ fn lib_path() -> Vec<PathBuf> {
     if let Ok(p) = std::env::var("S8_LIB_PATH") {
         return p.split(';').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
     }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out/s8").join(arch_dir());
+    let arch = std::env::var("S8_ARCH").unwrap_or_else(|_| arch_dir().to_string());
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out/s8").join(arch);
     vec![root.join("aosp"), root.join("sysroot/usr/lib"), root.join("libcxx-install/lib")]
 }
 
@@ -158,6 +159,100 @@ fn cmd_load(args: &[String]) -> Result<i32, String> {
     r
 }
 
+/// Maps and links an object and its dependencies without running any
+/// guest code; with S8_LINK_ONLY=1 the objects may be of another
+/// architecture (the arm64 build checked on x64).
+fn cmd_link(args: &[String]) -> Result<i32, String> {
+    let so = args.first().ok_or("link: missing object")?.clone();
+    let mut linker = loader::Linker::new(lib_path());
+    load(&mut linker, &so)?;
+    Ok(0)
+}
+
+#[cfg(target_arch = "x86_64")]
+type CallHost = extern "sysv64" fn(extern "sysv64" fn(u64) -> u64, u64) -> u64;
+
+/// Host callback reached through two guest frames: walks the stack with
+/// the Windows unwinder (`RtlCaptureStackBackTrace`).
+#[cfg(target_arch = "x86_64")]
+extern "sysv64" fn capture(x: u64) -> u64 {
+    host::guard(|| {
+        let mut frames = [core::ptr::null_mut(); 24];
+        // SAFETY: a buffer of 24 entries.
+        let n = unsafe { windows::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace(0, &mut frames, None) };
+        println!("RtlCaptureStackBackTrace from a host callback: {n} frames");
+        for (i, f) in frames[..n as usize].iter().enumerate() {
+            let a = *f as u64;
+            println!("  #{i:<2} {a:#x} {}", debug::describe(a).unwrap_or_else(|| "(host or system)".into()));
+        }
+        println!("RtlLookupFunctionEntry + RtlVirtualUnwind from the same callback:");
+        virtual_unwind_walk();
+        x
+    })
+}
+
+/// Walks the current stack with RtlLookupFunctionEntry and
+/// RtlVirtualUnwind, as exception dispatch and debuggers do.
+#[cfg(target_arch = "x86_64")]
+fn virtual_unwind_walk() {
+    use windows::Win32::System::Diagnostics::Debug::{
+        CONTEXT, RtlCaptureContext, RtlLookupFunctionEntry, RtlVirtualUnwind, UNW_FLAG_NHANDLER,
+    };
+    // CONTEXT must be 16-byte aligned (RtlCaptureContext uses fxsave).
+    #[repr(C, align(16))]
+    struct Aligned(CONTEXT);
+    let mut a = Aligned(CONTEXT::default());
+    let ctx = &mut a.0;
+    // SAFETY: captures this thread's registers into an aligned record.
+    unsafe { RtlCaptureContext(ctx) };
+    for i in 0..32 {
+        let mut base = 0u64;
+        // SAFETY: looks up the function table for ctx.Rip.
+        let f = unsafe { RtlLookupFunctionEntry(ctx.Rip, &mut base, None) };
+        let what = debug::describe(ctx.Rip).unwrap_or_else(|| "(host or system)".into());
+        println!("  #{i:<2} {:#x} {what}{}", ctx.Rip, if f.is_null() { "  [no unwind entry: leaf]" } else { "" });
+        if f.is_null() {
+            // A leaf function: the return address is at [rsp].
+            // SAFETY: rsp points into this thread's stack.
+            ctx.Rip = unsafe { *(ctx.Rsp as *const u64) };
+            ctx.Rsp += 8;
+        } else {
+            let mut data = core::ptr::null_mut();
+            let mut frame = 0u64;
+            // SAFETY: a function entry for ctx.Rip and a valid context.
+            unsafe { RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, ctx.Rip, f, ctx, &mut data, &mut frame, None) };
+        }
+        if ctx.Rip == 0 {
+            break;
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn cmd_unwind() -> Result<i32, String> {
+    let mut r = Ok(0);
+    host::threads::run_on_guest_stack(|| {
+        r = (|| {
+            let mut linker = loader::Linker::new(lib_path());
+            load(&mut linker, "libs8bench.so")?;
+            let t = host::threads::new_record();
+            let _area = host::threads::enter_guest_thread(t);
+            let f = linker.lookup_global("s8_call_host_outer").ok_or("no s8_call_host_outer")?;
+            // SAFETY: the guest function, System V convention.
+            let f: CallHost = unsafe { core::mem::transmute(f) };
+            let v = f(capture, 5);
+            println!("guest returned {v} (expected {})", ((6 + 6 * 3 + (6 ^ 0x55) + 6 + 7) * 2));
+            Ok(0)
+        })();
+    });
+    r
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn cmd_unwind() -> Result<i32, String> {
+    Err("unwind check is x64 only".into())
+}
+
 fn cmd_crash() -> Result<i32, String> {
     let mut r = Ok(0);
     host::threads::run_on_guest_stack(|| {
@@ -189,6 +284,8 @@ fn main() {
         Some("load") => cmd_load(&args[1..]),
         Some("bench") => report::bench(lib_path()),
         Some("crash") => cmd_crash(),
+        Some("link") => cmd_link(&args[1..]),
+        Some("unwind") => cmd_unwind(),
         Some("check") => {
             let m = host::missing_from_table();
             println!("host_symbols.txt names missing from the host table: {m:?}");
