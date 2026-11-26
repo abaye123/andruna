@@ -57,7 +57,7 @@ target_link_libraries(sigchain_so PRIVATE base_so log_so ${GUEST_LINK})
 # libart.so: the runtime with libartbase, libdexfile, libprofile and the
 # smaller libraries folded in.
 guest_so(art_so libart.so
-  libart_runtime libartbase libdexfile libprofile libelffile libartpalette
+  libart_runtime libart_compiler libartbase libdexfile libprofile libelffile libartpalette
   libnativebridge libnativeloader libcpu_features libprocinfo liblzma)
 target_link_libraries(art_so PRIVATE
   libziparchive libtinyxml2 liblz4 libz libcutils libutils
@@ -73,3 +73,5 @@ target_link_libraries(dalvikvm PRIVATE aosp_android art_defaults libnativehelper
 # dl* and the namespace calls are bound by the loader at run time.
 target_link_options(dalvikvm PRIVATE -Wl,--export-dynamic-symbol=main
   -Wl,--unresolved-symbols=ignore-all)
+
+include(natives.cmake)

@@ -40,6 +40,12 @@ commit = "01a95ac67e502c00c9d546c3ccee2a00313f90ee"
 purpose = "allocator used by ART's dlmalloc space"
 
 [[project]]
+name = "platform/external/expat"
+path = "external/expat"
+commit = "9cc7a1ca765061a58e196f101fc601d23845c89a"
+purpose = "XML parser for libjavacore's ExpatParser natives (MIT)"
+
+[[project]]
 name = "platform/external/fdlibm"
 path = "external/fdlibm"
 commit = "34840811850a2924f1fcc7eee23dde1193e39eb6"

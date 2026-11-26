@@ -1,0 +1,24 @@
+Leave the NativeBN natives out of libjavacore's JNI_OnLoad in the ANDRUNA build.
+
+libcore_math_NativeBN.cpp needs BoringSSL's libcrypto, which the Andruna
+build does not compile yet. Under ANDRUNA the source is not built and its
+registration is skipped; java.math.BigInteger calls NativeBN only for
+large multiplications and divisions, which then throw
+UnsatisfiedLinkError.
+
+diff --git a/luni/src/main/native/Register.cpp b/luni/src/main/native/Register.cpp
+index 0950a45..86f50f0 100644
+--- a/luni/src/main/native/Register.cpp
++++ b/luni/src/main/native/Register.cpp
+@@ -42,7 +42,11 @@ jint JNI_OnLoad(JavaVM* vm, void*) {
+     REGISTER(register_libcore_io_AsynchronousCloseMonitor);
+     REGISTER(register_libcore_io_Linux);
+     REGISTER(register_libcore_io_Memory);
++#if !defined(ANDRUNA)
++    // Not built in the ANDRUNA build (needs BoringSSL's libcrypto). Without
++    // it, the NativeBN natives throw UnsatisfiedLinkError when called.
+     REGISTER(register_libcore_math_NativeBN);
++#endif
+     REGISTER(register_libcore_util_NativeAllocationRegistry);
+     REGISTER(register_org_apache_harmony_xml_ExpatParser);
+ #undef REGISTER
