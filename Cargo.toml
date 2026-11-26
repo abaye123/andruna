@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+# Spikes are throwaway, standalone projects with their own manifests and
+# build setup. They are not part of the workspace.
+exclude = ["spikes/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.92"
+# The project license is not chosen yet (ADR 0006), so nothing is published.
+publish = false
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
+[profile.release]
+debug = "line-tables-only"
