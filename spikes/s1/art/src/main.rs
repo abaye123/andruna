@@ -187,6 +187,16 @@ fn cmd_run(args: &[String]) -> Result<i32, String> {
             let a = make_args(&args);
             linker.run_initializers((a.argv.len() - 1) as i32, a.argv.as_ptr(), a.envp.as_ptr());
             report::initialized(&linker);
+            // There is no logd: liblog's messages go to stderr (its own
+            // stderr logger), as on a host build.
+            if let (Some(set), Some(stderr_logger)) = (
+                linker.lookup_global("__android_log_set_logger"),
+                linker.lookup_global("__android_log_stderr_logger"),
+            ) {
+                // SAFETY: liblog's function, System V convention.
+                let set: extern "sysv64" fn(u64) = unsafe { core::mem::transmute(set) };
+                set(stderr_logger);
+            }
             let main = linker.lookup_global("main").ok_or("no exported main")?;
             let exit = linker
                 .lookup_global("exit")
@@ -456,6 +466,8 @@ fn cmd_tlscost() -> Result<i32, String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(target_arch = "x86_64")]
+    debug::start_watchdog();
     if let Err(e) = init_lx() {
         eprintln!("[s8] lx set-up failed: {e}");
         std::process::exit(2);

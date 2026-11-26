@@ -8,7 +8,7 @@ runs
 
   andruna-spike-s1-art run dalvikvm <ART options> -cp <dex> <class> [args]
 
-Usage: python spikes/s1/art/run_art.py [--mode int|jit|aot] [--extra opt]...
+Usage: python spikes/s1/art/run_art.py [--mode int|jit|jit0] [--extra opt]...
                                        Hello|Bench [args...]
 
 Inputs: out/s1/java (spikes/s1/java/build_boot.py), out/s1art/x64 (guest
@@ -54,7 +54,7 @@ def setup_root(root: Path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", default="int", choices=["int", "jit", "aot"])
+    ap.add_argument("--mode", default="int", choices=["int", "jit", "jit0", "aot"])
     ap.add_argument("--extra", action="append", default=[])
     ap.add_argument("--timeout", type=float, default=300)
     ap.add_argument("cls")
@@ -69,6 +69,9 @@ def main():
     if a.mode == "int":
         opts += ["-Xint"]
     elif a.mode == "jit":
+        opts += ["-Xusejit:true"]
+    elif a.mode == "jit0":
+        # Compile every method at its first call.
         opts += ["-Xusejit:true", "-Xjitthreshold:0"]
     opts += a.extra
     env = dict(os.environ)

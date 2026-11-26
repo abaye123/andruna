@@ -256,6 +256,13 @@ impl Linker {
 
     fn resolve(&mut self, name: &str, weak: bool) -> Result<(u64, Option<(usize, Sym)>), String> {
         self.stats.symbol_lookups += 1;
+        // There is no logd: libbase's LogdLogger writes through liblog's
+        // stderr logger instead.
+        let name = if name == "__android_log_logd_logger" {
+            "__android_log_stderr_logger"
+        } else {
+            name
+        };
         for (i, o) in self.objects.iter().enumerate() {
             if let Some(s) = o.exports.get(name) {
                 let addr = if s.st_info & 0xf == STT_GNU_IFUNC {
