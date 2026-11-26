@@ -8,3 +8,5 @@
 .vs/
 bin/
 obj/
+/.claude/worktrees/
+/.claude/settings.local.json
