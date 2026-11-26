@@ -93,11 +93,13 @@ set(ANDRUNA_BP_BASE_OPTIONS
   -nostdlibinc
   -DANDRUNA
   # Soong's device default; bionic declares the fortified entry points
-  # (__open_2, ...) only under it.
-  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2
-  # Soong's platform_sdk_version product variable (crtbrand.S): the SDK
-  # level of android-17.0.0_r1 (aosp.lock).
-  $<$<COMPILE_LANGUAGE:ASM>:-DPLATFORM_SDK_VERSION=37>
+  # (__open_2, ...) only under it. One SHELL: group, so CMake does not
+  # drop a module's own later -U_FORTIFY_SOURCE as a duplicate (libc_fortify
+  # must build without FORTIFY, or __strlen_chk calls itself).
+  "SHELL:-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2"
+  # Soong's platform_sdk_version product variable (crtbrand.S, the ABI tag
+  # of crtbegin.c): the SDK level of android-17.0.0_r1 (aosp.lock).
+  -DPLATFORM_SDK_VERSION=37
   -fPIC -O2 -g
   -funwind-tables -ffunction-sections -fdata-sections
   -fstack-protector-strong

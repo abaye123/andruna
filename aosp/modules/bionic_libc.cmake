@@ -125,7 +125,7 @@ foreach(o crtbegin_so crtbegin_dynamic crtend_so crtend_android)
     OUTPUT "${_out}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_BINARY_DIR}/crt"
     COMMAND "${ANDRUNA_LLD}" -r -o "${_out}" ${_in}
-    DEPENDS bp_${o} bp_crtbrand
+    DEPENDS bp_${o} bp_crtbrand ${_in}
     COMMAND_EXPAND_LISTS
     VERBATIM)
   list(APPEND BIONIC_CRT_OBJECTS "${_out}")
