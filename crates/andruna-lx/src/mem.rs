@@ -78,6 +78,9 @@ const MADV_HINTS: &[i32] = &[
     15, // MADV_NOHUGEPAGE
     16, // MADV_DONTDUMP
     17, // MADV_DODUMP
+    // No process is ever forked, so there is no child copy to wipe or keep.
+    18, // MADV_WIPEONFORK
+    19, // MADV_KEEPONFORK
 ];
 
 /// Translates Linux `PROT_*` bits to a Windows page protection.
@@ -806,6 +809,22 @@ mod tests {
             Err(Errno::EINVAL)
         );
         assert_eq!(s.mmap(0, 1 << 60, RW, ANON, -1, 0), Err(Errno::ENOMEM));
+    }
+
+    #[test]
+    fn fork_advice_is_accepted() {
+        let p = super::mmap(
+            0,
+            8192,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+        .unwrap();
+        assert_eq!(super::madvise(p, 8192, 18), Ok(()));
+        assert_eq!(super::madvise(p, 8192, 19), Ok(()));
+        super::munmap(p, 8192).unwrap();
     }
 
     #[test]
