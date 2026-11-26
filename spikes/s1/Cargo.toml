@@ -1,0 +1,27 @@
+[package]
+name = "andruna-spike-s1"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "Spike S1 round 1: Windows mechanisms ART depends on (fault delivery, suspension, calling convention)"
+
+# Standalone: not a member of the root workspace.
+[workspace]
+
+[dependencies.windows]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+]
+
+[profile.release]
+debug = 1
+panic = "unwind"
