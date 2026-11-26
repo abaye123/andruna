@@ -1,0 +1,717 @@
+Reach the x86_64 Thread* through bionic's TLS slot in the ANDRUNA build.
+
+ART on x86_64 sets the GS base to the current Thread* with
+arch_prctl(ARCH_SET_GS) and its assembly reads Thread fields as
+%gs:offset. On Windows x64 GS is the TEB and user mode cannot change it.
+Under ANDRUNA the Thread* stays only in TLS_SLOT_ART_THREAD_SELF, which
+bionic keeps at %fs:0x38 (ART already stores it there for
+Thread::Current()). Thread::Current() loads become one FS-relative load
+(GS_SELF); other fields load the Thread* into a dead scratch register
+first (LOAD_THREAD_FIELD_BASE + THREAD_FIELD). Without ANDRUNA the macros
+expand to the original %gs: forms. The compiler's generated code is
+patched separately.
+
+diff --git a/runtime/arch/x86_64/asm_support_x86_64.S b/runtime/arch/x86_64/asm_support_x86_64.S
+index bf0b958..11dd0a7 100644
+--- a/runtime/arch/x86_64/asm_support_x86_64.S
++++ b/runtime/arch/x86_64/asm_support_x86_64.S
+@@ -60,6 +60,27 @@
+     #define MACRO_LITERAL(value) $value
+ #endif
+ 
++// Access to the current Thread. Android sets the GS base to the Thread*
++// (arch_prctl(ARCH_SET_GS)) and reads its fields as %gs:offset. Under
++// ANDRUNA (Windows x64, where GS is the TEB and cannot be changed) the
++// Thread* is read from bionic's TLS slot TLS_SLOT_ART_THREAD_SELF at
++// %fs:(8 * 7), and other fields go through a scratch register:
++//     LOAD_THREAD_FIELD_BASE r10
++//     movq %rsp, THREAD_FIELD(THREAD_TOP_QUICK_FRAME_OFFSET, r10)
++#if defined(ANDRUNA)
++#define ANDRUNA_TLS_ART_THREAD_SELF_OFFSET 0x38
++#define GS_SELF %fs:ANDRUNA_TLS_ART_THREAD_SELF_OFFSET
++#define THREAD_FIELD(offset, scratch) offset(%scratch)
++MACRO1(LOAD_THREAD_FIELD_BASE, scratch)
++    movq %fs:ANDRUNA_TLS_ART_THREAD_SELF_OFFSET, REG_VAR(scratch)
++END_MACRO
++#else
++#define GS_SELF %gs:THREAD_SELF_OFFSET
++#define THREAD_FIELD(offset, scratch) %gs:offset
++MACRO1(LOAD_THREAD_FIELD_BASE, scratch)
++END_MACRO
++#endif
++
+ #if defined(__APPLE__)
+     #define FUNCTION_TYPE(name)
+     #define SIZE(name)
+@@ -309,7 +330,8 @@ MACRO0(SETUP_SAVE_REFS_ONLY_FRAME)
+     // Store ArtMethod* to bottom of stack.
+     movq %r10, 0(%rsp)
+     // Store rsp as the stop quick frame.
+-    movq %rsp, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    LOAD_THREAD_FIELD_BASE r10
++    movq %rsp, THREAD_FIELD(THREAD_TOP_QUICK_FRAME_OFFSET, r10)
+ 
+     // Ugly compile-time check, but we only have the preprocessor.
+     // Last +8: implicit return address pushed on stack when caller made call.
+@@ -433,7 +455,8 @@ MACRO0(SETUP_SAVE_ALL_CALLEE_SAVES_FRAME)
+     // Store ArtMethod* to bottom of stack.
+     movq %r10, 0(%rsp)
+     // Store rsp as the top quick frame.
+-    movq %rsp, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    LOAD_THREAD_FIELD_BASE r10
++    movq %rsp, THREAD_FIELD(THREAD_TOP_QUICK_FRAME_OFFSET, r10)
+ 
+     // Ugly compile-time check, but we only have the preprocessor.
+     // Last +8: implicit return address pushed on stack when caller made call.
+@@ -467,7 +490,7 @@ END_MACRO
+      */
+ MACRO0(DELIVER_PENDING_EXCEPTION_FRAME_READY)
+     // (Thread*) setup
+-    movq %gs:THREAD_SELF_OFFSET, %rdi
++    movq GS_SELF, %rdi
+     call SYMBOL(artDeliverPendingExceptionFromCode)  // artDeliverPendingExceptionFromCode(Thread*)
+     movq %rax, %rdi                                  // pass Context*
+     call SYMBOL(art_quick_do_long_jump)
+@@ -483,7 +506,8 @@ MACRO0(DELIVER_PENDING_EXCEPTION)
+ END_MACRO
+ 
+ MACRO0(RETURN_OR_DELIVER_PENDING_EXCEPTION)
+-    cmpq MACRO_LITERAL(0), %gs:THREAD_EXCEPTION_OFFSET  // compare exception field with 0
++    LOAD_THREAD_FIELD_BASE rcx
++    cmpq MACRO_LITERAL(0), THREAD_FIELD(THREAD_EXCEPTION_OFFSET, rcx)  // compare exception field with 0
+     jne 1f                                              // if exception != 0 goto 1
+     ret                                                 // return
+ 1:                                                      // deliver exception on current thread
+@@ -493,8 +517,14 @@ END_MACRO
+ // Locking is needed for both managed code and JNI stubs.
+ MACRO3(LOCK_OBJECT_FAST_PATH, obj, tmp, slow_lock)
+ 1:
++#if defined(ANDRUNA)
++    LOAD_THREAD_FIELD_BASE rax            // RAX is overwritten with the lock word below.
++    movl THREAD_FIELD(THREAD_ID_OFFSET, rax), REG_VAR(tmp)  // tmp: thread id.
++    movl MIRROR_OBJECT_LOCK_WORD_OFFSET(REG_VAR(obj)), %eax  // EAX := lock word
++#else
+     movl MIRROR_OBJECT_LOCK_WORD_OFFSET(REG_VAR(obj)), %eax  // EAX := lock word
+     movl %gs:THREAD_ID_OFFSET, REG_VAR(tmp)  // tmp: thread id.
++#endif
+     xorl %eax, REG_VAR(tmp)               // tmp: thread id with count 0 + read barrier bits.
+     testl LITERAL(LOCK_WORD_GC_STATE_MASK_SHIFTED_TOGGLED), %eax  // Test the non-gc bits.
+     jnz  2f                               // Check if unlocked.
+@@ -521,8 +551,14 @@ END_MACRO
+ // Unlocking is needed for both managed code and JNI stubs.
+ MACRO4(UNLOCK_OBJECT_FAST_PATH, obj, tmp, saved_rax, slow_unlock)
+ 1:
++#if defined(ANDRUNA)
++    LOAD_THREAD_FIELD_BASE rax            // RAX is overwritten with the lock word below.
++    movl THREAD_FIELD(THREAD_ID_OFFSET, rax), REG_VAR(tmp)  // tmp := thread id
++    movl MIRROR_OBJECT_LOCK_WORD_OFFSET(REG_VAR(obj)), %eax  // EAX := lock word
++#else
+     movl MIRROR_OBJECT_LOCK_WORD_OFFSET(REG_VAR(obj)), %eax  // EAX := lock word
+     movl %gs:THREAD_ID_OFFSET, REG_VAR(tmp)  // tmp := thread id
++#endif
+     xorl %eax, REG_VAR(tmp)               // tmp := thread id ^ lock word
+     test LITERAL(LOCK_WORD_GC_STATE_MASK_SHIFTED_TOGGLED), REG_VAR(tmp)
+     jnz  2f                               // Check if simply locked.
+diff --git a/runtime/arch/x86_64/jni_entrypoints_x86_64.S b/runtime/arch/x86_64/jni_entrypoints_x86_64.S
+index 49b59bf..f2abe5d 100644
+--- a/runtime/arch/x86_64/jni_entrypoints_x86_64.S
++++ b/runtime/arch/x86_64/jni_entrypoints_x86_64.S
+@@ -234,7 +234,8 @@ DEFINE_FUNCTION art_jni_dlsym_lookup_critical_stub
+     movq %r10, (%rbp)
+ 
+     // Place (maybe tagged) managed SP in Thread::Current()->top_quick_frame.
+-    movq %rax, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    LOAD_THREAD_FIELD_BASE r10
++    movq %rax, THREAD_FIELD(THREAD_TOP_QUICK_FRAME_OFFSET, r10)
+ 
+     // Save our return PC in the padding.
+     movq %r11, __SIZEOF_POINTER__(%rbp)
+@@ -244,7 +245,7 @@ DEFINE_FUNCTION art_jni_dlsym_lookup_critical_stub
+     movq %rdi, %rbx
+ 
+     // Call artFindNativeMethodRunnable()
+-    movq %gs:THREAD_SELF_OFFSET, %rdi  // pass Thread::Current()
++    movq GS_SELF, %rdi  // pass Thread::Current()
+     call SYMBOL(artFindNativeMethodRunnable)  // (Thread*)
+ 
+     // Check for exception.
+@@ -388,7 +389,7 @@ DEFINE_FUNCTION art_jni_lock_object_no_inline
+     SAVE_MANAGED_ARGS_INCREASE_FRAME
+     // Call `artLockObjectFromCode()`
+     movq %rbx, %rdi                       // Pass the object to lock.
+-    movq %gs:THREAD_SELF_OFFSET, %rsi     // Pass Thread::Current().
++    movq GS_SELF, %rsi     // Pass Thread::Current().
+     call SYMBOL(artLockObjectFromCode)    // (object, Thread*)
+     // Check result.
+     testl %eax, %eax
+@@ -402,7 +403,7 @@ DEFINE_FUNCTION art_jni_lock_object_no_inline
+     // padding to align stack.
+     DECREASE_FRAME MANAGED_ARGS_SAVE_SIZE - /*new padding*/ 8
+     // Rely on the JNI transition frame constructed in the JNI stub.
+-    movq %gs:THREAD_SELF_OFFSET, %rdi     // Pass Thread::Current().
++    movq GS_SELF, %rdi     // Pass Thread::Current().
+     call  SYMBOL(artDeliverPendingExceptionFromCode)  // (Thread*)
+     movq %rax, %rdi                       // pass Context*
+     call  SYMBOL(art_quick_do_long_jump)
+diff --git a/runtime/arch/x86_64/native_entrypoints_x86_64.S b/runtime/arch/x86_64/native_entrypoints_x86_64.S
+index 26de78b..0f4929f 100644
+--- a/runtime/arch/x86_64/native_entrypoints_x86_64.S
++++ b/runtime/arch/x86_64/native_entrypoints_x86_64.S
+@@ -67,7 +67,7 @@ DEFINE_FUNCTION art_jni_dlsym_lookup_stub
+     movq %xmm6, 48(%rsp)
+     movq %xmm7, 56(%rsp)
+     // prepare call
+-    movq %gs:THREAD_SELF_OFFSET, %rdi      // RDI := Thread::Current()
++    movq GS_SELF, %rdi      // RDI := Thread::Current()
+     // Call artFindNativeMethod() for normal native and artFindNativeMethodRunnable()
+     // for @FastNative or @CriticalNative.
+     movq THREAD_TOP_QUICK_FRAME_OFFSET(%rdi), %rax   // uintptr_t tagged_quick_frame
+diff --git a/runtime/arch/x86_64/quick_entrypoints_x86_64.S b/runtime/arch/x86_64/quick_entrypoints_x86_64.S
+index f34d8f5..9ef0e2d 100644
+--- a/runtime/arch/x86_64/quick_entrypoints_x86_64.S
++++ b/runtime/arch/x86_64/quick_entrypoints_x86_64.S
+@@ -47,7 +47,8 @@ MACRO0(SETUP_SAVE_REFS_AND_ARGS_FRAME)
+     // Store ArtMethod* to bottom of stack.
+     movq %r10, 0(%rsp)
+     // Store rsp as the top quick frame.
+-    movq %rsp, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    LOAD_THREAD_FIELD_BASE r10
++    movq %rsp, THREAD_FIELD(THREAD_TOP_QUICK_FRAME_OFFSET, r10)
+ #endif  // __APPLE__
+ END_MACRO
+ 
+@@ -56,7 +57,8 @@ MACRO0(SETUP_SAVE_REFS_AND_ARGS_FRAME_WITH_METHOD_IN_RDI)
+     // Store ArtMethod to bottom of stack.
+     movq %rdi, 0(%rsp)
+     // Store rsp as the stop quick frame.
+-    movq %rsp, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    LOAD_THREAD_FIELD_BASE r10
++    movq %rsp, THREAD_FIELD(THREAD_TOP_QUICK_FRAME_OFFSET, r10)
+ END_MACRO
+ 
+     /*
+@@ -109,7 +111,8 @@ MACRO1(SETUP_SAVE_EVERYTHING_FRAME_R14_R15_SAVED, runtime_method_offset = RUNTIM
+     pushq \runtime_method_offset(%r10)
+     CFI_ADJUST_CFA_OFFSET(8)
+     // Store rsp as the top quick frame.
+-    movq %rsp, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    LOAD_THREAD_FIELD_BASE r10
++    movq %rsp, THREAD_FIELD(THREAD_TOP_QUICK_FRAME_OFFSET, r10)
+ 
+     // Ugly compile-time check, but we only have the preprocessor.
+     // Last +8: implicit return address pushed on stack when caller made call.
+@@ -199,7 +202,7 @@ MACRO2(NO_ARG_RUNTIME_EXCEPTION, c_name, cxx_name)
+     DEFINE_FUNCTION VAR(c_name)
+     SETUP_SAVE_ALL_CALLEE_SAVES_FRAME  // save all registers as basis for long jump context
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %rdi  // pass Thread::Current()
++    movq GS_SELF, %rdi  // pass Thread::Current()
+     call CALLVAR(cxx_name)             // cxx_name(Thread*)
+     movq %rax, %rdi                    // pass Context*
+     call SYMBOL(art_quick_do_long_jump)
+@@ -211,7 +214,7 @@ MACRO2(NO_ARG_RUNTIME_EXCEPTION_SAVE_EVERYTHING, c_name, cxx_name)
+     DEFINE_FUNCTION VAR(c_name)
+     SETUP_SAVE_EVERYTHING_FRAME        // save all registers as basis for long jump context
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %rdi  // pass Thread::Current()
++    movq GS_SELF, %rdi  // pass Thread::Current()
+     call CALLVAR(cxx_name)             // cxx_name(Thread*)
+     movq %rax, %rdi                    // pass Context*
+     call SYMBOL(art_quick_do_long_jump)
+@@ -223,7 +226,7 @@ MACRO2(ONE_ARG_RUNTIME_EXCEPTION, c_name, cxx_name)
+     DEFINE_FUNCTION VAR(c_name)
+     SETUP_SAVE_ALL_CALLEE_SAVES_FRAME  // save all registers as basis for long jump context
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %rsi  // pass Thread::Current()
++    movq GS_SELF, %rsi  // pass Thread::Current()
+     call CALLVAR(cxx_name)             // cxx_name(arg1, Thread*)
+     movq %rax, %rdi                    // pass Context*
+     call SYMBOL(art_quick_do_long_jump)
+@@ -235,7 +238,7 @@ MACRO2(TWO_ARG_RUNTIME_EXCEPTION_SAVE_EVERYTHING, c_name, cxx_name)
+     DEFINE_FUNCTION VAR(c_name)
+     SETUP_SAVE_EVERYTHING_FRAME        // save all registers as basis for long jump context
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %rdx  // pass Thread::Current()
++    movq GS_SELF, %rdx  // pass Thread::Current()
+     call CALLVAR(cxx_name)             // cxx_name(Thread*)
+     movq %rax, %rdi                    // pass Context*
+     call SYMBOL(art_quick_do_long_jump)
+@@ -260,7 +263,7 @@ DEFINE_FUNCTION_CUSTOM_CFA art_quick_throw_null_pointer_exception_from_signal, 2
+     movq %r15, (FRAME_SIZE_SAVE_EVERYTHING - 2 * __SIZEOF_POINTER__)(%rsp)
+     CFI_REL_OFFSET(%r15, (FRAME_SIZE_SAVE_EVERYTHING - 2 * __SIZEOF_POINTER__))
+     // Outgoing argument set up; RDI already contains the fault address.
+-    movq %gs:THREAD_SELF_OFFSET, %rsi  // pass Thread::Current()
++    movq GS_SELF, %rsi  // pass Thread::Current()
+     call SYMBOL(artThrowNullPointerExceptionFromSignal)  // (addr, self)
+     movq %rax, %rdi                    // pass Context*
+     call SYMBOL(art_quick_do_long_jump)
+@@ -317,7 +320,7 @@ MACRO1(INVOKE_TRAMPOLINE_BODY, cxx_name)
+     // Helper signature is always
+     // (method_idx, *this_object, *caller_method, *self, sp)
+ 
+-    movq %gs:THREAD_SELF_OFFSET, %rdx                      // pass Thread
++    movq GS_SELF, %rdx                      // pass Thread
+     movq %rsp, %rcx                                        // pass SP
+ 
+     call CALLVAR(cxx_name)                                 // cxx_name(arg1, arg2, Thread*, SP)
+@@ -664,7 +667,7 @@ MACRO3(ONE_ARG_DOWNCALL, c_name, cxx_name, return_macro)
+     DEFINE_FUNCTION VAR(c_name)
+     SETUP_SAVE_REFS_ONLY_FRAME           // save ref containing registers for GC
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %rsi    // pass Thread::Current()
++    movq GS_SELF, %rsi    // pass Thread::Current()
+     call CALLVAR(cxx_name)               // cxx_name(arg0, Thread*)
+     RESTORE_SAVE_REFS_ONLY_FRAME         // restore frame up to return address
+     CALL_MACRO(return_macro)             // return or deliver exception
+@@ -675,7 +678,7 @@ MACRO3(TWO_ARG_DOWNCALL, c_name, cxx_name, return_macro)
+     DEFINE_FUNCTION VAR(c_name)
+     SETUP_SAVE_REFS_ONLY_FRAME           // save ref containing registers for GC
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %rdx    // pass Thread::Current()
++    movq GS_SELF, %rdx    // pass Thread::Current()
+     call CALLVAR(cxx_name)               // cxx_name(arg0, arg1, Thread*)
+     RESTORE_SAVE_REFS_ONLY_FRAME         // restore frame up to return address
+     CALL_MACRO(return_macro)             // return or deliver exception
+@@ -686,7 +689,7 @@ MACRO3(THREE_ARG_DOWNCALL, c_name, cxx_name, return_macro)
+     DEFINE_FUNCTION VAR(c_name)
+     SETUP_SAVE_REFS_ONLY_FRAME          // save ref containing registers for GC
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %rcx   // pass Thread::Current()
++    movq GS_SELF, %rcx   // pass Thread::Current()
+     call CALLVAR(cxx_name)              // cxx_name(arg0, arg1, arg2, Thread*)
+     RESTORE_SAVE_REFS_ONLY_FRAME        // restore frame up to return address
+     CALL_MACRO(return_macro)            // return or deliver exception
+@@ -697,7 +700,7 @@ MACRO3(FOUR_ARG_DOWNCALL, c_name, cxx_name, return_macro)
+     DEFINE_FUNCTION VAR(c_name)
+     SETUP_SAVE_REFS_ONLY_FRAME          // save ref containing registers for GC
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %r8    // pass Thread::Current()
++    movq GS_SELF, %r8    // pass Thread::Current()
+     call CALLVAR(cxx_name)              // cxx_name(arg1, arg2, arg3, arg4, Thread*)
+     RESTORE_SAVE_REFS_ONLY_FRAME        // restore frame up to return address
+     CALL_MACRO(return_macro)            // return or deliver exception
+@@ -713,7 +716,7 @@ MACRO3(ONE_ARG_SAVE_EVERYTHING_DOWNCALL, c_name, cxx_name, runtime_method_offset
+     SETUP_SAVE_EVERYTHING_FRAME \runtime_method_offset  // save everything for GC
+     // Outgoing argument set up
+     movl %eax, %edi                               // pass the index of the constant as arg0
+-    movq %gs:THREAD_SELF_OFFSET, %rsi             // pass Thread::Current()
++    movq GS_SELF, %rsi             // pass Thread::Current()
+     call CALLVAR(cxx_name)                        // cxx_name(arg0, Thread*)
+     testl %eax, %eax                              // If result is null, deliver pending exception.
+     jz 1f
+@@ -739,7 +742,8 @@ END_MACRO
+ 
+ 
+ MACRO1(RETURN_OR_DEOPT_OR_DELIVER_PENDING_EXCEPTION, is_ref = 0)
+-    movq %gs:THREAD_EXCEPTION_OFFSET, %rcx // get exception field
++    LOAD_THREAD_FIELD_BASE rcx
++    movq THREAD_FIELD(THREAD_EXCEPTION_OFFSET, rcx), %rcx // get exception field
+     CFI_REMEMBER_STATE
+     testq %rcx, %rcx               // rcx == 0 ?
+     jnz 1f                         // if rcx != 0 goto 1
+@@ -754,14 +758,15 @@ MACRO0(RETURN_REF_OR_DEOPT_OR_DELIVER_PENDING_EXCEPTION)
+ END_MACRO
+ 
+ MACRO1(DEOPT_OR_RETURN, is_ref = 0)
+-  cmpl LITERAL(0), %gs:THREAD_DEOPT_CHECK_REQUIRED_OFFSET
++  LOAD_THREAD_FIELD_BASE rcx
++  cmpl LITERAL(0), THREAD_FIELD(THREAD_DEOPT_CHECK_REQUIRED_OFFSET, rcx)
+   jne 2f
+   ret
+ 2:
+   SETUP_SAVE_EVERYTHING_FRAME
+   movq LITERAL(\is_ref), %rdx          // pass if result is a reference
+   movq %rax, %rsi                      // pass the result
+-  movq %gs:THREAD_SELF_OFFSET, %rdi    // pass Thread::Current
++  movq GS_SELF, %rdi    // pass Thread::Current
+   call SYMBOL(artDeoptimizeIfNeeded)
+ 
+   CFI_REMEMBER_STATE
+@@ -780,7 +785,8 @@ MACRO1(DEOPT_OR_RETURN, is_ref = 0)
+ END_MACRO
+ 
+ MACRO1(DEOPT_OR_RESTORE_SAVE_EVERYTHING_FRAME_AND_RETURN_RAX, is_ref = 0)
+-  cmpl LITERAL(0), %gs:THREAD_DEOPT_CHECK_REQUIRED_OFFSET
++  LOAD_THREAD_FIELD_BASE rcx
++  cmpl LITERAL(0), THREAD_FIELD(THREAD_DEOPT_CHECK_REQUIRED_OFFSET, rcx)
+   CFI_REMEMBER_STATE
+   jne 2f
+   RESTORE_SAVE_EVERYTHING_FRAME_KEEP_RAX
+@@ -790,7 +796,7 @@ MACRO1(DEOPT_OR_RESTORE_SAVE_EVERYTHING_FRAME_AND_RETURN_RAX, is_ref = 0)
+   movq %rax, SAVE_EVERYTHING_FRAME_RAX_OFFSET(%rsp) // update result in the frame
+   movq LITERAL(\is_ref), %rdx                       // pass if result is a reference
+   movq %rax, %rsi                                   // pass the result
+-  movq %gs:THREAD_SELF_OFFSET, %rdi                 // pass Thread::Current
++  movq GS_SELF, %rdi                 // pass Thread::Current
+   call SYMBOL(artDeoptimizeIfNeeded)
+ 
+   CFI_REMEMBER_STATE
+@@ -860,7 +866,7 @@ MACRO2(ART_QUICK_ALLOC_OBJECT_ROSALLOC, c_name, cxx_name)
+     // RSI, RDX, RCX, R8, R9: free.
+                                                            // Check if the thread local
+                                                            // allocation stack has room.
+-    movq   %gs:THREAD_SELF_OFFSET, %r8                     // r8 = thread
++    movq   GS_SELF, %r8                     // r8 = thread
+     movq   THREAD_LOCAL_ALLOC_STACK_TOP_OFFSET(%r8), %rcx  // rcx = alloc stack top.
+     cmpq   THREAD_LOCAL_ALLOC_STACK_END_OFFSET(%r8), %rcx
+     jae    .Lslow_path\c_name
+@@ -914,7 +920,7 @@ MACRO2(ART_QUICK_ALLOC_OBJECT_ROSALLOC, c_name, cxx_name)
+ .Lslow_path\c_name:
+     SETUP_SAVE_REFS_ONLY_FRAME                             // save ref containing registers for GC
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %rsi                      // pass Thread::Current()
++    movq GS_SELF, %rsi                      // pass Thread::Current()
+     call CALLVAR(cxx_name)                                 // cxx_name(arg0, Thread*)
+     RESTORE_SAVE_REFS_ONLY_FRAME                           // restore frame up to return address
+     RETURN_OR_DEOPT_IF_RESULT_IS_NON_NULL_OR_DELIVER       // return or deliver exception
+@@ -939,7 +945,7 @@ END_MACRO
+ // RDI: the class, RSI: ArtMethod*, RAX: return value.
+ // RCX, RSI, RDX: scratch, r8: Thread::Current().
+ MACRO1(ALLOC_OBJECT_INITIALIZED_TLAB_FAST_PATH, slowPathLabel)
+-    movq %gs:THREAD_SELF_OFFSET, %r8                           // r8 = thread
++    movq GS_SELF, %r8                           // r8 = thread
+     movl MIRROR_CLASS_OBJECT_SIZE_ALLOC_FAST_PATH_OFFSET(%rdi), %ecx // Load the object size.
+     movq THREAD_LOCAL_POS_OFFSET(%r8), %rax
+     addq %rax, %rcx                                            // Add size to pos, note that these
+@@ -962,7 +968,7 @@ END_MACRO
+ // Free temps: RCX, RDX, R8
+ // Output: RAX: return value.
+ MACRO1(ALLOC_ARRAY_TLAB_FAST_PATH_RESOLVED_WITH_SIZE, slowPathLabel)
+-    movq %gs:THREAD_SELF_OFFSET, %rcx                          // rcx = thread
++    movq GS_SELF, %rcx                          // rcx = thread
+     // Mask out the unaligned part to make sure we are 8 byte aligned.
+     andq LITERAL(OBJECT_ALIGNMENT_MASK_TOGGLED64), %r9
+     cmpq LITERAL(MIN_LARGE_OBJECT_THRESHOLD), %r9              // Possibly a large object.
+@@ -986,7 +992,7 @@ END_MACRO
+ MACRO1(ALLOC_OBJECT_TLAB_SLOW_PATH, cxx_name)
+     SETUP_SAVE_REFS_ONLY_FRAME                             // save ref containing registers for GC
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %rsi                      // pass Thread::Current()
++    movq GS_SELF, %rsi                      // pass Thread::Current()
+     call CALLVAR(cxx_name)                                 // cxx_name(arg0, Thread*)
+     RESTORE_SAVE_REFS_ONLY_FRAME                           // restore frame up to return address
+     RETURN_OR_DEOPT_IF_RESULT_IS_NON_NULL_OR_DELIVER       // return or deliver exception
+@@ -1074,7 +1080,7 @@ MACRO3(GENERATE_ALLOC_ARRAY_TLAB, c_entrypoint, cxx_name, size_setup)
+ .Lslow_path\c_entrypoint:
+     SETUP_SAVE_REFS_ONLY_FRAME                                 // save ref containing registers for GC
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %rdx                          // pass Thread::Current()
++    movq GS_SELF, %rdx                          // pass Thread::Current()
+     call CALLVAR(cxx_name)                                     // cxx_name(arg0, arg1, Thread*)
+     RESTORE_SAVE_REFS_ONLY_FRAME                               // restore frame up to return address
+     RETURN_OR_DEOPT_IF_RESULT_IS_NON_NULL_OR_DELIVER           // return or deliver exception
+@@ -1146,7 +1152,7 @@ END_FUNCTION art_quick_lock_object
+ DEFINE_FUNCTION art_quick_lock_object_no_inline
+     // This is also the slow path for art_quick_lock_object.
+     SETUP_SAVE_REFS_ONLY_FRAME
+-    movq %gs:THREAD_SELF_OFFSET, %rsi     // pass Thread::Current()
++    movq GS_SELF, %rsi     // pass Thread::Current()
+     call SYMBOL(artLockObjectFromCode)    // artLockObjectFromCode(object, Thread*)
+     RESTORE_SAVE_REFS_ONLY_FRAME          // restore frame up to return address
+     RETURN_OR_DEOPT_IF_INT_RESULT_IS_ZERO_OR_DELIVER
+@@ -1171,7 +1177,7 @@ END_FUNCTION art_quick_unlock_object
+ DEFINE_FUNCTION art_quick_unlock_object_no_inline
+     // This is also the slow path for art_quick_unlock_object.
+     SETUP_SAVE_REFS_ONLY_FRAME
+-    movq %gs:THREAD_SELF_OFFSET, %rsi     // pass Thread::Current()
++    movq GS_SELF, %rsi     // pass Thread::Current()
+     call SYMBOL(artUnlockObjectFromCode)  // artUnlockObjectFromCode(object, Thread*)
+     RESTORE_SAVE_REFS_ONLY_FRAME          // restore frame up to return address
+     RETURN_OR_DEOPT_IF_INT_RESULT_IS_ZERO_OR_DELIVER
+@@ -1207,7 +1213,7 @@ DEFINE_FUNCTION art_quick_check_instance_of
+ 
+ .Lthrow_class_cast_exception_for_bitstring_check:
+     SETUP_SAVE_ALL_CALLEE_SAVES_FRAME // save all registers as basis for long jump context
+-    mov %gs:THREAD_SELF_OFFSET, %rdx  // pass Thread::Current()
++    mov GS_SELF, %rdx  // pass Thread::Current()
+     call SYMBOL(artThrowClassCastExceptionForObject)  // (Object* src, Class* dest, Thread*)
+     movq %rax, %rdi                   // pass Context*
+     call SYMBOL(art_quick_do_long_jump)
+@@ -1230,7 +1236,8 @@ DEFINE_FUNCTION art_quick_aput_obj
+     movl MIRROR_OBJECT_CLASS_OFFSET(%rdi), %ecx
+     UNPOISON_HEAP_REF ecx
+ #ifdef USE_READ_BARRIER
+-    cmpl LITERAL(0), %gs:THREAD_IS_GC_MARKING_OFFSET
++    LOAD_THREAD_FIELD_BASE r10
++    cmpl LITERAL(0), THREAD_FIELD(THREAD_IS_GC_MARKING_OFFSET, r10)
+     CFI_REMEMBER_STATE
+     jnz .Laput_obj_gc_marking
+ #endif  // USE_READ_BARRIER
+@@ -1240,7 +1247,8 @@ DEFINE_FUNCTION art_quick_aput_obj
+ .Laput_obj_store:
+     POISON_HEAP_REF edx
+     movl %edx, MIRROR_OBJECT_ARRAY_DATA_OFFSET(%rdi, %rsi, 4)
+-    movq %gs:THREAD_CARD_TABLE_OFFSET, %rdx
++    LOAD_THREAD_FIELD_BASE rdx
++    movq THREAD_FIELD(THREAD_CARD_TABLE_OFFSET, rdx), %rdx
+     shrl LITERAL(CARD_TABLE_CARD_SHIFT), %edi
+     movb %dl, (%rdx, %rdi)
+     ret
+@@ -1268,7 +1276,8 @@ DEFINE_FUNCTION art_quick_aput_obj
+     jz   .Laput_obj_throw_array_store_exception
+     POISON_HEAP_REF edx
+     movl %edx, MIRROR_OBJECT_ARRAY_DATA_OFFSET(%rdi, %rsi, 4)
+-    movq %gs:THREAD_CARD_TABLE_OFFSET, %rdx
++    LOAD_THREAD_FIELD_BASE rdx
++    movq THREAD_FIELD(THREAD_CARD_TABLE_OFFSET, rdx), %rdx
+     shrl LITERAL(CARD_TABLE_CARD_SHIFT), %edi
+     movb %dl, (%rdx, %rdi)
+     ret
+@@ -1277,7 +1286,7 @@ DEFINE_FUNCTION art_quick_aput_obj
+     SETUP_SAVE_ALL_CALLEE_SAVES_FRAME  // Save all registers as basis for long jump context.
+     // Outgoing argument set up.
+     movq %rdx, %rsi                          // Pass arg 2 = value.
+-    movq %gs:THREAD_SELF_OFFSET, %rdx        // Pass arg 3 = Thread::Current().
++    movq GS_SELF, %rdx        // Pass arg 3 = Thread::Current().
+                                              // Pass arg 1 = array.
+     call SYMBOL(artThrowArrayStoreException) // (array, value, Thread*)
+     movq %rax, %rdi                          // pass Context*
+@@ -1318,7 +1327,7 @@ END_FUNCTION art_quick_memcpy
+ DEFINE_FUNCTION art_quick_test_suspend
+     SETUP_SAVE_EVERYTHING_FRAME RUNTIME_SAVE_EVERYTHING_FOR_SUSPEND_CHECK_METHOD_OFFSET  // save everything for GC
+     // Outgoing argument set up
+-    movq %gs:THREAD_SELF_OFFSET, %rdi           // pass Thread::Current()
++    movq GS_SELF, %rdi           // pass Thread::Current()
+     call SYMBOL(artTestSuspendFromCode)         // (Thread*)
+ 
+     CFI_REMEMBER_STATE
+@@ -1349,7 +1358,7 @@ GENERATE_FIELD_ENTRYPOINTS
+ DEFINE_FUNCTION art_quick_proxy_invoke_handler
+     SETUP_SAVE_REFS_AND_ARGS_FRAME_WITH_METHOD_IN_RDI
+ 
+-    movq %gs:THREAD_SELF_OFFSET, %rdx       // Pass Thread::Current().
++    movq GS_SELF, %rdx       // Pass Thread::Current().
+     movq %rsp, %rcx                         // Pass SP.
+     call SYMBOL(artQuickProxyInvokeHandler) // (proxy method, receiver, Thread*, SP)
+     RESTORE_SAVE_REFS_AND_ARGS_FRAME
+@@ -1394,7 +1403,7 @@ END_FUNCTION art_quick_imt_conflict_trampoline
+ 
+ DEFINE_FUNCTION art_quick_resolution_trampoline
+     SETUP_SAVE_REFS_AND_ARGS_FRAME
+-    movq %gs:THREAD_SELF_OFFSET, %rdx
++    movq GS_SELF, %rdx
+     movq %rsp, %rcx
+     call SYMBOL(artQuickResolutionTrampoline) // (called, receiver, Thread*, SP)
+     movq %rax, %r10               // Remember returned code pointer in R10.
+@@ -1493,7 +1502,7 @@ DEFINE_FUNCTION art_quick_generic_jni_trampoline
+     // (Thread*, managed_sp, reserved_area)
+     //    rdi       rsi           rdx   <= C calling convention
+     //  gs:...      rbp           rsp   <= where they are
+-    movq %gs:THREAD_SELF_OFFSET, %rdi  // Pass Thread::Current().
++    movq GS_SELF, %rdi  // Pass Thread::Current().
+     movq %rbp, %rsi                    // Pass managed frame SP.
+     movq %rsp, %rdx                    // Pass reserved area.
+     call SYMBOL(artQuickGenericJniTrampoline)  // (Thread*, sp)
+@@ -1542,14 +1551,15 @@ DEFINE_FUNCTION art_quick_generic_jni_trampoline
+     // (Thread*,  result, result_f)
+     //   rdi      rsi   rdx       <= C calling convention
+     //  gs:...    rax   xmm0      <= where they are
+-    movq %gs:THREAD_SELF_OFFSET, %rdi
++    movq GS_SELF, %rdi
+     movq %rax, %rsi
+     movq %xmm0, %rdx
+     call SYMBOL(artQuickGenericJniEndTrampoline)
+ 
+     // Pending exceptions possible.
+     // TODO: use cmpq, needs direct encoding because of gas bug
+-    movq %gs:THREAD_EXCEPTION_OFFSET, %rcx
++    LOAD_THREAD_FIELD_BASE rcx
++    movq THREAD_FIELD(THREAD_EXCEPTION_OFFSET, rcx), %rcx
+     test %rcx, %rcx
+     jnz .Lexception_in_native
+ 
+@@ -1592,7 +1602,8 @@ DEFINE_FUNCTION art_quick_generic_jni_trampoline
+     jmp .Lcall_method_exit_hook_done
+ 
+ .Lexception_in_native:
+-    pushq %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    LOAD_THREAD_FIELD_BASE rcx
++    pushq THREAD_FIELD(THREAD_TOP_QUICK_FRAME_OFFSET, rcx)
+     addq LITERAL(-1), (%rsp)  // Remove the GenericJNI tag.
+     movq (%rsp), %rsp
+     call art_deliver_pending_exception
+@@ -1611,7 +1622,7 @@ END_FUNCTION art_deliver_pending_exception
+      */
+ DEFINE_FUNCTION art_quick_to_interpreter_bridge
+     SETUP_SAVE_REFS_AND_ARGS_FRAME     // Set up frame and save arguments.
+-    movq %gs:THREAD_SELF_OFFSET, %rsi  // RSI := Thread::Current()
++    movq GS_SELF, %rsi  // RSI := Thread::Current()
+     movq %rsp, %rdx                    // RDX := sp
+     call SYMBOL(artQuickToInterpreterBridge)  // (method, Thread*, SP)
+     RESTORE_SAVE_REFS_AND_ARGS_FRAME   // TODO: no need to restore arguments in this case.
+@@ -1632,7 +1643,7 @@ ONE_ARG_RUNTIME_EXCEPTION art_invoke_obsolete_method_stub, artInvokeObsoleteMeth
+ DEFINE_FUNCTION art_quick_deoptimize_from_compiled_code
+     SETUP_SAVE_EVERYTHING_FRAME
+                                                 // Stack should be aligned now.
+-    movq %gs:THREAD_SELF_OFFSET, %rsi           // Pass Thread.
++    movq GS_SELF, %rsi           // Pass Thread.
+     call SYMBOL(artDeoptimizeFromCompiledCode)  // (DeoptimizationKind, Thread*)
+     movq %rax, %rdi                             // pass Context*
+     call SYMBOL(art_quick_do_long_jump)
+@@ -1750,7 +1761,7 @@ DEFINE_FUNCTION art_quick_string_builder_append
+     SETUP_SAVE_REFS_ONLY_FRAME                // save ref containing registers for GC
+     // Outgoing argument set up
+     leaq FRAME_SIZE_SAVE_REFS_ONLY + __SIZEOF_POINTER__(%rsp), %rsi  // pass args
+-    movq %gs:THREAD_SELF_OFFSET, %rdx         // pass Thread::Current()
++    movq GS_SELF, %rdx         // pass Thread::Current()
+     call artStringBuilderAppend               // (uint32_t, const unit32_t*, Thread*)
+     RESTORE_SAVE_REFS_ONLY_FRAME              // restore frame up to return address
+     RETURN_OR_DEOPT_IF_RESULT_IS_NON_NULL_OR_DELIVER  // return or deopt or deliver exception
+@@ -1962,7 +1973,7 @@ DEFINE_FUNCTION art_quick_invoke_polymorphic
+                                                    // On entry: RDI := unused, RSI := receiver
+     SETUP_SAVE_REFS_AND_ARGS_FRAME                 // save callee saves
+     movq %rsi, %rdi                                // RDI := receiver
+-    movq %gs:THREAD_SELF_OFFSET, %rsi              // RSI := Thread (self)
++    movq GS_SELF, %rsi              // RSI := Thread (self)
+     movq %rsp, %rdx                                // RDX := pass SP
+     call SYMBOL(artInvokePolymorphic)              // invoke with (receiver, self, SP)
+                                                    // save the code pointer
+@@ -1981,7 +1992,7 @@ END_FUNCTION art_quick_invoke_polymorphic
+ DEFINE_FUNCTION art_quick_invoke_polymorphic_with_hidden_receiver
+                                                         // On entry: RDI := receiver
+     SETUP_SAVE_REFS_AND_ARGS_FRAME                      // save callee saves
+-    movq %gs:THREAD_SELF_OFFSET, %rsi                   // RSI := Thread (self)
++    movq GS_SELF, %rsi                   // RSI := Thread (self)
+     movq %rsp, %rdx                                     // RDX := pass SP
+     call SYMBOL(artInvokePolymorphicWithHiddenReceiver) // invoke with (receiver, self, SP)
+                                                         // save the code pointer
+@@ -1993,7 +2004,7 @@ END_FUNCTION art_quick_invoke_polymorphic_with_hidden_receiver
+ DEFINE_FUNCTION art_quick_invoke_custom
+     SETUP_SAVE_REFS_AND_ARGS_FRAME                 // save callee saves
+                                                    // RDI := call_site_index
+-    movq %gs:THREAD_SELF_OFFSET, %rsi              // RSI := Thread::Current()
++    movq GS_SELF, %rsi              // RSI := Thread::Current()
+     movq %rsp, %rdx                                // RDX := SP
+     call SYMBOL(artInvokeCustom)                   // artInvokeCustom(Thread*, SP)
+     RESTORE_SAVE_REFS_AND_ARGS_FRAME
+@@ -2007,7 +2018,8 @@ DEFINE_FUNCTION art_quick_update_inline_cache
+ #error "INLINE_CACHE_SIZE not as expected."
+ #endif
+     // Don't update the cache if we are marking.
+-    cmpl LITERAL(0), %gs:THREAD_IS_GC_MARKING_OFFSET
++    LOAD_THREAD_FIELD_BASE r10
++    cmpl LITERAL(0), THREAD_FIELD(THREAD_IS_GC_MARKING_OFFSET, r10)
+     jnz .Ldone
+ .Lentry1:
+     movl INLINE_CACHE_CLASSES_OFFSET(%r11), %eax
+@@ -2056,7 +2068,7 @@ END_FUNCTION art_quick_update_inline_cache
+ DEFINE_FUNCTION art_quick_compile_optimized
+     SETUP_SAVE_EVERYTHING_FRAME
+     movq FRAME_SIZE_SAVE_EVERYTHING(%rsp), %rdi // pass ArtMethod
+-    movq %gs:THREAD_SELF_OFFSET, %rsi           // pass Thread::Current()
++    movq GS_SELF, %rsi           // pass Thread::Current()
+     call SYMBOL(artCompileOptimized)            // (ArtMethod*, Thread*)
+     RESTORE_SAVE_EVERYTHING_FRAME               // restore frame up to return address
+     ret
+@@ -2066,7 +2078,7 @@ END_FUNCTION art_quick_compile_optimized
+ DEFINE_FUNCTION art_quick_compile_baseline
+     SETUP_SAVE_EVERYTHING_FRAME
+     movq FRAME_SIZE_SAVE_EVERYTHING(%rsp), %rdi // pass ArtMethod
+-    movq %gs:THREAD_SELF_OFFSET, %rsi           // pass Thread::Current()
++    movq GS_SELF, %rsi           // pass Thread::Current()
+     call SYMBOL(artCompileBaseline)             // (ArtMethod*, Thread*)
+     RESTORE_SAVE_EVERYTHING_FRAME               // restore frame up to return address
+     ret
+@@ -2077,7 +2089,7 @@ DEFINE_FUNCTION art_quick_method_entry_hook
+     SETUP_SAVE_EVERYTHING_FRAME
+ 
+     movq FRAME_SIZE_SAVE_EVERYTHING(%rsp), %rdi // pass ArtMethod
+-    movq %gs:THREAD_SELF_OFFSET, %rsi           // pass Thread::Current()
++    movq GS_SELF, %rsi           // pass Thread::Current()
+     movq %rsp, %rdx                             // SP
+     call SYMBOL(artMethodEntryHook)             // (ArtMethod*, Thread*, sp)
+ 
+@@ -2106,7 +2118,7 @@ DEFINE_FUNCTION art_quick_method_exit_hook
+                                                 // frame
+     leaq 144(%rsp), %rdx                        // integer result pointer in kSaveEverything frame
+     leaq FRAME_SIZE_SAVE_EVERYTHING(%rsp), %rsi // ArtMethod**
+-    movq %gs:THREAD_SELF_OFFSET, %rdi           // Thread::Current
++    movq GS_SELF, %rdi           // Thread::Current
+     call SYMBOL(artMethodExitHook)              // (Thread*, ArtMethod**, gpr_res*, fpr_res*,
+                                                 //  frame_size)
+ 
+diff --git a/runtime/arch/x86_64/thread_x86_64.cc b/runtime/arch/x86_64/thread_x86_64.cc
+index d157bc6..4c162a2 100644
+--- a/runtime/arch/x86_64/thread_x86_64.cc
++++ b/runtime/arch/x86_64/thread_x86_64.cc
+@@ -21,6 +21,11 @@
+ #include "thread-current-inl.h"
+ #include "thread_list.h"
+ 
++#if defined(ANDRUNA)
++#include <bionic/tls.h>
++#include <bionic/tls_defines.h>
++#endif
++
+ #if defined(__linux__)
+ #include <asm/prctl.h>
+ #include <sys/prctl.h>
+@@ -33,16 +38,41 @@
+ 
+ namespace art HIDDEN {
+ 
+-#if defined(__linux__)
++#if defined(__linux__) && !defined(ANDRUNA)
+ static void arch_prctl(int code, void* val) {
+   syscall(__NR_arch_prctl, code, val);
+ }
+ #endif
+ 
++#if defined(ANDRUNA)
++// Andruna (Windows x64): GS is the TEB and cannot be set, so the Thread* is
++// kept only in bionic's TLS slot, which the assembly stubs and compiled code
++// read as %fs:ANDRUNA_TLS_ART_THREAD_SELF_OFFSET (asm_support_x86_64.S).
++static_assert(TLS_SLOT_ART_THREAD_SELF * sizeof(void*) == 0x38,
++              "ANDRUNA_TLS_ART_THREAD_SELF_OFFSET in asm_support_x86_64.S");
++
++static Thread* ReadThreadSelfRegister() {
++  Thread* self_check;
++  __asm__ __volatile__("movq %%fs:0x38, %0" : "=r"(self_check));
++  return self_check;
++}
++#else
++static Thread* ReadThreadSelfRegister() {
++  Thread* self_check;
++  __asm__ __volatile__("movq %%gs:(%1), %0"
++      : "=r"(self_check)  // output
++      : "r"(THREAD_SELF_OFFSET)  // input
++      :);  // clobber
++  return self_check;
++}
++#endif
++
+ void Thread::InitCpu() {
+   MutexLock mu(nullptr, *Locks::modify_ldt_lock_);
+ 
+-#if defined(__linux__)
++#if defined(ANDRUNA)
++  __get_tls()[TLS_SLOT_ART_THREAD_SELF] = this;
++#elif defined(__linux__)
+   arch_prctl(ARCH_SET_GS, this);
+ #elif defined(__Fuchsia__)
+   Thread* thread_ptr = this;
+@@ -59,22 +89,12 @@ void Thread::InitCpu() {
+   tlsPtr_.self = this;
+ 
+   // Check that the reads from %gs point to this Thread*.
+-  Thread* self_check;
+-  __asm__ __volatile__("movq %%gs:(%1), %0"
+-      : "=r"(self_check)  // output
+-      : "r"(THREAD_SELF_OFFSET)  // input
+-      :);  // clobber
+-  CHECK_EQ(self_check, this);
++  CHECK_EQ(ReadThreadSelfRegister(), this);
+ }
+ 
+ void Thread::CleanupCpu() {
+   // Check that the reads from %gs point to this Thread*.
+-  Thread* self_check;
+-  __asm__ __volatile__("movq %%gs:(%1), %0"
+-      : "=r"(self_check)  // output
+-      : "r"(THREAD_SELF_OFFSET)  // input
+-      :);  // clobber
+-  CHECK_EQ(self_check, this);
++  CHECK_EQ(ReadThreadSelfRegister(), this);
+ 
+   // Do nothing.
+ }

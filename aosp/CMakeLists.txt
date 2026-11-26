@@ -59,4 +59,9 @@ include(modules/libdexfile.cmake)
 
 if(ANDRUNA_AOSP_RUNTIME)
   include(modules/libart.cmake)
+  if(ANDRUNA_AOSP_ELF)
+    # Generated headers, assembly, nterp and the libraries libart links
+    # (spike S1 round 3, Android ELF build only).
+    include(modules/art_elf.cmake)
+  endif()
 endif()
