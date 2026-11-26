@@ -48,10 +48,13 @@ global_asm!(
     "    ldr x9, s1_jit_slot_npe",
     "    str x30, [x9]",
     "    b .Ls1_null_catch",
-    // u64 so_entry(depth: x0): recursion with ART's arm64 implicit stack
-    // overflow probe (`sub x16, sp, #reserved; ldr wzr, [x16]`).
+    // u64 so_entry(depth: x0, gap: x1): recursion with ART's arm64 implicit
+    // stack overflow probe (`sub x16, sp, #reserved; ldr wzr, [x16]`). The
+    // reserved gap comes in x1 (ART uses 8 KiB) so that other gaps can be
+    // measured; x15 holds it through the recursion.
     ".globl s1_jit_so_entry",
     "s1_jit_so_entry:",
+    "    mov x15, x1",
     "    stp x29, x30, [sp, #-16]!",
     "    mov x29, sp",
     "    ldr x9, s1_jit_slot_sp",
@@ -61,7 +64,7 @@ global_asm!(
     "    ldp x29, x30, [sp], #16",
     "    ret",
     ".Ls1_so_rec:",
-    "    sub x16, sp, #0x2000",
+    "    sub x16, sp, x15",
     "    ldr wzr, [x16]",
     "    stp x29, x30, [sp, #-128]!",
     "    add x0, x0, #1",

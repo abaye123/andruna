@@ -34,7 +34,8 @@ def main():
     a = ap.parse_args()
     env = dict(os.environ)
     mingw = os.environ.get("ANDRUNA_LLVM_MINGW", "C:/tools/llvm-mingw")
-    env["PATH"] = f"{mingw}/x86_64-w64-mingw32/bin;{mingw}/bin;" + env["PATH"]
+    triple = "aarch64-w64-mingw32" if a.arch == "arm64" else "x86_64-w64-mingw32"
+    env["PATH"] = f"{mingw}/{triple}/bin;{mingw}/bin;" + env["PATH"]
     env["S8_QUIET"] = "1"
 
     rc, out = run(a.exe, env, ["--gtest_list_tests"])
