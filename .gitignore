@@ -1,0 +1,10 @@
+/target/
+/out/
+/third_party/aosp/
+/.cache/
+*.pdb
+*.ilk
+*.user
+.vs/
+bin/
+obj/
