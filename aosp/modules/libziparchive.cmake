@@ -8,7 +8,7 @@ aosp_sources(libziparchive "${_d}"
   zip_cd_entry_map.cc
   zip_error.cpp
   zip_writer.cc)
-target_compile_definitions(libziparchive PRIVATE ZLIB_CONST)
+target_compile_definitions(libziparchive PRIVATE ZLIB_CONST INCFS_SUPPORT_DISABLED=1)
 set_target_properties(libziparchive PROPERTIES OUTPUT_NAME ziparchive)
 target_include_directories(libziparchive PUBLIC
   "${_d}/include"
