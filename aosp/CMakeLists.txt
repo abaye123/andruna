@@ -35,7 +35,12 @@ set(CMAKE_CXX_EXTENSIONS ON)
 # No C++20 modules in AOSP; skip the dependency scan.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
-include(cmake/android.cmake)
+if(ANDRUNA_AOSP_ELF)
+  # Android ELF objects (spike S8), set by cmake/toolchain-android-elf.cmake.
+  include(cmake/android-elf.cmake)
+else()
+  include(cmake/android.cmake)
+endif()
 
 # Layer 1: logging, base utilities.
 include(modules/fmtlib.cmake)
