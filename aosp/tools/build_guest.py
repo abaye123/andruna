@@ -180,9 +180,13 @@ def step_libcxx(arch, out):
     ])
     run(["cmake", "--build", b])
     run(["cmake", "--install", b])
-    for so in (out / "libcxx-install" / "lib").glob("libc++.so*"):
-        if so.is_file() and not so.is_symlink():
-            shutil.copy2(so, lib / so.name)
+    # The real file under every name objects use: its soname libc++.so.1
+    # (DT_NEEDED of everything linked with -lc++) and libc++.so (the link
+    # name), as plain copies since symbolic links are not portable here.
+    real = next(p for p in (out / "libcxx-install" / "lib").glob("libc++.so*")
+                if p.is_file() and not p.is_symlink())
+    for name in ("libc++.so", "libc++.so.1"):
+        shutil.copy2(real, lib / name)
 
 
 def step_aosp(arch, out):

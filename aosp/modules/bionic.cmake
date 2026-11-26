@@ -185,6 +185,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/bionic_libm.cmake")
 # ---------------------------------------------------------------------------
 # Installation into the sysroot (usr/lib), as the NDK lays it out.
 
-install(TARGETS c_so m_so dl_so ld_android_so andruna_host
+install(TARGETS c_so m_so dl_so dl_android_so ld_android_so andruna_host
   LIBRARY DESTINATION lib)
 install(FILES ${BIONIC_CRT_OBJECTS} DESTINATION lib)

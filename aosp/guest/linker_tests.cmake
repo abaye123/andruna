@@ -42,8 +42,11 @@ foreach(s ${_libs_first} ${_others})
   target_link_options(${n} PRIVATE "-L${CMAKE_CURRENT_BINARY_DIR}")
   # Test libraries named in LINK are built first.
   foreach(e ${_extra})
-    if(e MATCHES "^-l(.*)$" AND TARGET lib${CMAKE_MATCH_1})
-      add_dependencies(${n} lib${CMAKE_MATCH_1})
+    if(e MATCHES "^-l(.*)$")
+      set(_dep "lib${CMAKE_MATCH_1}")
+      if(TARGET ${_dep})
+        add_dependencies(${n} ${_dep})
+      endif()
     endif()
   endforeach()
   # lld resolves shared libraries in any order.

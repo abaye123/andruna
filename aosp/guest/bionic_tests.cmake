@@ -43,7 +43,11 @@ add_executable(bionic_tests)
 foreach(f ${ANDRUNA_BIONIC_TEST_FILES})
   target_sources(bionic_tests PRIVATE "${_t}/${f}")
 endforeach()
+# Helpers the test files call (buffer checks, Errno printing, GWP-ASan and
+# unwinding helpers).
 target_sources(bionic_tests PRIVATE "${_t}/gtest_globals.cpp"
+  "${_t}/buffer_tests.cpp" "${_t}/utils.cpp" "${_t}/gwp_asan_test.cpp"
+  "${_t}/stack_unwinding_test.cpp"
   "${AOSP}/external/googletest/googletest/src/gtest_main.cc")
 set_target_properties(bionic_tests PROPERTIES CXX_STANDARD 20)
 target_include_directories(bionic_tests PRIVATE
@@ -54,9 +58,12 @@ target_include_directories(bionic_tests PRIVATE
   "${AOSP}/system/core/libcutils/include"
   "${AOSP}/system/libbase/include"
   "${AOSP}/system/logging/liblog/include"
-  "${AOSP}/external/gwp_asan")
+  "${AOSP}/external/gwp_asan"
+  "${AOSP}/external/tinyxml2")
 target_compile_options(bionic_tests PRIVATE
   -fstack-protector-all -fno-builtin -fexceptions
   -Wno-deprecated-declarations -Wno-invalid-offsetof)
-target_link_libraries(bionic_tests PRIVATE gtest_guest base_so log_so)
+# libtinyxml2 (aosp/modules/libartbase.cmake): malloc_test parses
+# malloc_info's XML.
+target_link_libraries(bionic_tests PRIVATE gtest_guest base_so log_so libtinyxml2 -ldl_android)
 guest_executable(bionic_tests)
