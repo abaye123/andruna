@@ -1,0 +1,29 @@
+[package]
+name = "andruna-spike-s4"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "Spike S4: thread pointer and TLS options for guest code on Windows"
+
+# Standalone project: not a member of the root workspace.
+[workspace]
+
+[dependencies]
+windows-link = "0.2"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_System_SystemInformation",
+    "Win32_System_Performance",
+    "Wdk_System_Threading",
+]
+
+[profile.release]
+debug = true
