@@ -23,7 +23,8 @@ work in parallel without breaking each other or the product.
   lines for AI, no "Generated with" footers, no mention of AI.
 - **Licenses.** Do not copy code from GPL, LGPL or AGPL projects, or from any
   project whose license is unclear. Third-party code must be permissively
-  licensed (Apache-2.0, MIT, BSD, 0BSD, zlib, ISC) and recorded in
+  licensed (Apache-2.0, MIT, BSD, 0BSD, zlib, ISC, or public domain with an
+  explicit dedication) and recorded in
   `THIRD_PARTY_NOTICES` with its source.
 - **No references to other projects.** Specs, plans, docs, comments and
   commit messages in this repository do not mention or link to other
