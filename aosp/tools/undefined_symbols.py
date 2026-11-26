@@ -8,6 +8,7 @@ what is left, grouped by who has to provide it:
   libc      C library and Linux interfaces (bionic names): andruna-lx/bionic
   libc++    C++ standard library and C++ ABI runtime (std::, __cxa_*, ...)
   compiler  compiler runtime and Windows CRT start-up helpers
+  art-asm   ART's hand-written assembly (entry points, nterp), not built yet
   aosp      AOSP libraries that are not built yet
 
 Usage: undefined_symbols.py <llvm-nm> <build dir> [--objects <dir>]... [--json]
@@ -35,6 +36,10 @@ COMPILER = re.compile(r"^(__chkstk|___chkstk_ms|__security_|__guard_|_tls_|__emu
                       r"__mingw|__acrt|__stack_chk_guard$|__stack_chk_fail$)")
 
 
+ART_ASM = re.compile(r"^(art_|art[A-Z]|ExecuteNterp|EndExecuteNterp|ExecuteSwitchImplAsm$|"
+                     r"AsmGetRegs$|ExecuteMterp|MterpHandler|nterp\d*_op_|__memcmp16$)")
+
+
 def classify(sym):
     if sym.startswith(CXX_PREFIXES) or sym.startswith(CXX_NAMES) or sym in ("_ZdlPv", "_Znwy"):
         return "libc++"
@@ -43,6 +48,12 @@ def classify(sym):
         return "aosp"
     if COMPILER.match(sym):
         return "compiler"
+    if ART_ASM.match(sym):
+        return "art-asm"
+    if re.search(r"[A-Z]", sym):
+        # C names with capitals are AOSP APIs (libnativeloader, libnativebridge,
+        # libsigchain); bionic's C names are lower case.
+        return "aosp"
     return "libc"
 
 
@@ -97,7 +108,7 @@ def main():
         json.dump({k: [{"symbol": s, "users": u} for s, u in v] for k, v in result.items()},
                   sys.stdout, indent=1)
         return
-    for group in ("libc", "libc++", "compiler", "aosp"):
+    for group in ("libc", "libc++", "compiler", "art-asm", "aosp"):
         items = result.get(group, [])
         print(f"## {group} ({len(items)})")
         for s, u in items:

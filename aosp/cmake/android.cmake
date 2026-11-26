@@ -64,10 +64,20 @@ target_compile_options(aosp_android INTERFACE
   -gline-tables-only
   -gcodeview
   -O2
-  # Upstream builds with its own warning set and -Werror on a different
-  # toolchain; here warnings are informational only.
-  -w
 )
+
+# Upstream builds with its own warning set and -Werror on an older
+# toolchain, so warnings are off by default. ANDRUNA_AOSP_WARNINGS turns on
+# the ones that point at data-model and ABI problems (see
+# aosp/README.md, "Data model").
+option(ANDRUNA_AOSP_WARNINGS "Report format, narrowing and pointer-size warnings" OFF)
+if(ANDRUNA_AOSP_WARNINGS)
+  target_compile_options(aosp_android INTERFACE
+    -Wno-everything -Wformat -Wshorten-64-to-32 -Wpointer-to-int-cast
+    -Wint-to-pointer-cast -Wvoid-pointer-to-int-cast)
+else()
+  target_compile_options(aosp_android INTERFACE -w)
+endif()
 
 target_compile_definitions(aosp_android INTERFACE
   ANDRUNA=1

@@ -135,9 +135,18 @@ or the UAPI headers spell `long` directly. Examples: `struct timespec`
 attribute types, `jmp_buf`, `ucontext_t`, `blkcnt_t`, `blksize_t`,
 `fsblkcnt_t`, and functions that return or take `long` (`strtol`,
 `sysconf`, `ftell`, `syscall`, `random`, `telldir`). There are about 190
-such lines in `libc/include` alone. The options and a recommendation are in
+such lines in `libc/include` alone. Two tools measure what is left:
+
+- `python aosp/tools/data_model/compare.py` compiles bionic's headers both
+  ways (this build, and a real Android LP64 build) and prints every size
+  and offset that differs.
+- Configuring with `-DANDRUNA_AOSP_WARNINGS=ON` replaces `-w` with
+  `-Wformat`, `-Wshorten-64-to-32` and the pointer-cast warnings, which
+  show AOSP code that stores 64-bit values in `long`.
+
+The measurements, the options and a recommendation are in
 [S1.md](../docs/plan/spike-results/S1.md#data-model); this needs a decision
-before andruna-lx freezes its ABI.
+before andruna-lx's export ABI grows.
 
 ## Licenses
 
