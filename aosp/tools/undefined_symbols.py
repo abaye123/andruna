@@ -10,7 +10,11 @@ what is left, grouped by who has to provide it:
   compiler  compiler runtime and Windows CRT start-up helpers
   aosp      AOSP libraries that are not built yet
 
-Usage: undefined_symbols.py <llvm-nm> <build dir> [--json]
+Usage: undefined_symbols.py <llvm-nm> <build dir> [--objects <dir>]... [--json]
+
+--objects adds the object files below <dir> (for a library that does not
+build completely, such as the libart attempt), reported under the
+directory's name.
 """
 
 import json
@@ -64,14 +68,26 @@ def main():
     if len(sys.argv) < 3:
         raise SystemExit(__doc__)
     llvm_nm, build = sys.argv[1], sys.argv[2]
-    libs = sorted(f for f in os.listdir(build) if f.endswith(".a"))
+    inputs = []
+    for f in sorted(os.listdir(build)):
+        if f.endswith(".a"):
+            inputs.append((f[3:-2] if f.startswith("lib") else f[:-2], [os.path.join(build, f)]))
+    args = sys.argv[3:]
+    for i, a in enumerate(args):
+        if a == "--objects":
+            d = args[i + 1]
+            objs = [os.path.join(r, f) for r, _, fs in os.walk(d) for f in fs
+                    if f.endswith((".obj", ".o"))]
+            name = os.path.basename(os.path.normpath(d)).removesuffix(".dir")
+            inputs.append((name + " (objects)", sorted(objs)))
     defined_all = set()
     users = {}
-    for lib in libs:
-        d, u = nm(llvm_nm, os.path.join(build, lib))
-        defined_all.update(d)
-        for s in u:
-            users.setdefault(s, set()).add(lib[3:-2] if lib.startswith("lib") else lib)
+    for name, files in inputs:
+        for path in files:
+            d, u = nm(llvm_nm, path)
+            defined_all.update(d)
+            for s in u:
+                users.setdefault(s, set()).add(name)
     result = {}
     for s in sorted(users):
         if s in defined_all:

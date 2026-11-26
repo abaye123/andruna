@@ -88,6 +88,75 @@ jobs:
       - name: Test
         run: cargo test --workspace --target ${{ matrix.target }}
 
+  # AOSP layers 1 and 2 (liblog, libbase, libziparchive, libartbase,
+  # libdexfile, ...) built with CMake and Ninja. About 25 s per
+  # architecture on an 8-thread laptop, plus the fetch.
+  aosp:
+    name: aosp (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+            Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe" -OutFile rustup-init.exe
+            ./rustup-init.exe -y --default-toolchain none --profile minimal
+            Remove-Item rustup-init.exe
+            "$env:USERPROFILE\.cargo\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+          }
+          rustup show active-toolchain
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: cargo xtask toolchain
+
+      - name: CMake and Ninja
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { python -m pip install ninja }
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { python -m pip install cmake }
+          cmake --version
+          ninja --version
+
+      - name: Cache AOSP sources
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp/aosp.lock') }}
+
+      # Only the projects the build uses (libcore cannot be checked out on
+      # Windows at this tag; see aosp/README.md).
+      - name: Fetch
+        run: >
+          cargo xtask fetch
+          --project art --project bionic --project external/fmtlib
+          --project external/googletest --project external/lz4
+          --project external/tinyxml2 --project external/zlib
+          --project frameworks/libs/modules-utils --project libnativehelper
+          --project system/core --project system/libbase
+          --project system/libziparchive --project system/logging
+
+      - name: Build
+        run: cargo xtask aosp-build --arch ${{ matrix.arch }}
+
   deny:
     name: cargo deny
     runs-on: ubuntu-latest

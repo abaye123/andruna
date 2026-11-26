@@ -1,0 +1,122 @@
+Make the 64-bit integer types, constants and formats independent of `long` in the ANDRUNA build.
+
+Andruna compiles AOSP code for a Windows target, where `long` is 32 bits
+(LLP64), while __LP64__ is defined to select the 64-bit Android ABI. With
+the upstream definitions, int64_t and intptr_t would be 32 bits, INT64_C
+would make `long` constants, the fast16/fast32 limits would be 32-bit
+and PRId64/PRIdPTR would print with `l`. Under ANDRUNA they use
+`long long` and `ll`, which are 64 bits on every target.
+
+diff --git a/libc/include/inttypes.h b/libc/include/inttypes.h
+index 43c8ea8..9e5e059 100644
+--- a/libc/include/inttypes.h
++++ b/libc/include/inttypes.h
+@@ -24,7 +24,11 @@
+ 
+ __BEGIN_DECLS
+ 
+-#ifdef __LP64__
++#if defined(ANDRUNA)
++/* LLP64: 64-bit integers and pointers are `long long`. */
++#define __PRI_64_prefix  "ll"
++#define __PRI_PTR_prefix "ll"
++#elif defined(__LP64__)
+ #define __PRI_64_prefix  "l"
+ #define __PRI_PTR_prefix "l"
+ #else
+diff --git a/libc/include/stdint.h b/libc/include/stdint.h
+index 1e228fa..43cdc9a 100644
+--- a/libc/include/stdint.h
++++ b/libc/include/stdint.h
+@@ -42,7 +42,7 @@ typedef short __int16_t;
+ typedef unsigned short __uint16_t;
+ typedef int __int32_t;
+ typedef unsigned int __uint32_t;
+-#if defined(__LP64__)
++#if defined(__LP64__) && !defined(ANDRUNA)
+ typedef long __int64_t;
+ typedef unsigned long __uint64_t;
+ #else
+@@ -50,7 +50,11 @@ typedef long long __int64_t;
+ typedef unsigned long long __uint64_t;
+ #endif
+ 
+-#if defined(__LP64__)
++#if defined(ANDRUNA)
++/* LLP64: `long` is 32 bits, pointers are 64 bits. */
++typedef long long __intptr_t;
++typedef unsigned long long __uintptr_t;
++#elif defined(__LP64__)
+ typedef long __intptr_t;
+ typedef unsigned long __uintptr_t;
+ #else
+@@ -140,7 +144,7 @@ typedef int64_t       intmax_t;
+ #define INTMAX_C(c)       INT64_C(c)
+ #define UINTMAX_C(c)      UINT64_C(c)
+ 
+-#if defined(__LP64__)
++#if defined(__LP64__) && !defined(ANDRUNA)
+ #  define INT64_C(c)      c ## L
+ #  define UINT64_C(c)     c ## UL
+ #  define INTPTR_C(c)     INT64_C(c)
+@@ -149,9 +153,15 @@ typedef int64_t       intmax_t;
+ #else
+ #  define INT64_C(c)      c ## LL
+ #  define UINT64_C(c)     c ## ULL
+-#  define INTPTR_C(c)     INT32_C(c)
+-#  define UINTPTR_C(c)    UINT32_C(c)
+-#  define PTRDIFF_C(c)    INT32_C(c)
++#  if defined(ANDRUNA)
++#    define INTPTR_C(c)   INT64_C(c)
++#    define UINTPTR_C(c)  UINT64_C(c)
++#    define PTRDIFF_C(c)  INT64_C(c)
++#  else
++#    define INTPTR_C(c)   INT32_C(c)
++#    define UINTPTR_C(c)  UINT32_C(c)
++#    define PTRDIFF_C(c)  INT32_C(c)
++#  endif
+ #endif
+ 
+ #define INT8_MIN         (-128)
+@@ -169,23 +179,41 @@ typedef int64_t       intmax_t;
+ #define INT16_MAX        (32767)
+ #define INT_LEAST16_MIN  INT16_MIN
+ #define INT_LEAST16_MAX  INT16_MAX
++#if defined(ANDRUNA)
++#define INT_FAST16_MIN   INT64_MIN
++#define INT_FAST16_MAX   INT64_MAX
++#else
+ #define INT_FAST16_MIN   (-__LONG_MAX__ - 1L)
+ #define INT_FAST16_MAX   __LONG_MAX__
++#endif
+ 
+ #define UINT16_MAX       (65535)
+ #define UINT_LEAST16_MAX UINT16_MAX
++#if defined(ANDRUNA)
++#define UINT_FAST16_MAX  UINT64_MAX
++#else
+ #define UINT_FAST16_MAX  (__LONG_MAX__ * 2UL + 1UL)
++#endif
+ 
+ #define INT32_MIN        (-2147483647-1)
+ #define INT32_MAX        (2147483647)
+ #define INT_LEAST32_MIN  INT32_MIN
+ #define INT_LEAST32_MAX  INT32_MAX
++#if defined(ANDRUNA)
++#define INT_FAST32_MIN   INT64_MIN
++#define INT_FAST32_MAX   INT64_MAX
++#else
+ #define INT_FAST32_MIN   (-__LONG_MAX__ - 1L)
+ #define INT_FAST32_MAX   __LONG_MAX__
++#endif
+ 
+ #define UINT32_MAX       (4294967295U)
+ #define UINT_LEAST32_MAX UINT32_MAX
++#if defined(ANDRUNA)
++#define UINT_FAST32_MAX  UINT64_MAX
++#else
+ #define UINT_FAST32_MAX  (__LONG_MAX__ * 2UL + 1UL)
++#endif
+ 
+ #define INT64_MIN        (INT64_C(-9223372036854775807)-1)
+ #define INT64_MAX        (INT64_C(9223372036854775807))

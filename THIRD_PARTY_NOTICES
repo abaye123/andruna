@@ -12,4 +12,29 @@ dependencies are checked by `cargo deny check licenses` (deny.toml).
 Components
 ----------
 
-(none yet)
+The AOSP components below are compiled by aosp/ (cargo xtask aosp-build)
+at tag android-17.0.0_r1 (commits in aosp/aosp.lock), from
+https://android.googlesource.com. Nothing built from them ships yet; the
+full license texts are added here when they do. Each license file named is
+in the fetched project (third_party/aosp/<path>).
+
+- ART (libartbase, libdexfile, libartpalette, runtime headers)
+  platform/art - Apache-2.0 - NOTICE
+- bionic headers (libc/include, libc/platform, libc/kernel)
+  platform/bionic - Apache-2.0, BSD, ISC, MIT (libc/NOTICE); the kernel
+  UAPI headers are generated and contain only constants, structures and
+  macros
+- liblog - platform/system/logging - Apache-2.0 - liblog/NOTICE
+- libbase - platform/system/libbase - Apache-2.0 and BSD - NOTICE
+- libcutils, libutils (parts) - platform/system/core - Apache-2.0 -
+  libutils/NOTICE, file headers
+- libziparchive - platform/system/libziparchive - Apache-2.0 - file headers
+- libnativehelper headers - platform/libnativehelper - Apache-2.0 - NOTICE
+- modules-utils build headers - platform/frameworks/libs/modules-utils -
+  Apache-2.0 - file headers
+- fmtlib - platform/external/fmtlib - MIT - LICENSE
+- zlib (Chromium zlib) - platform/external/zlib - Zlib - LICENSE
+- lz4, lib/ only - platform/external/lz4 - BSD-2-Clause - lib/LICENSE
+- tinyxml2 - platform/external/tinyxml2 - Zlib - LICENSE.txt
+- dlmalloc header (read by the libart attempt) - platform/external/dlmalloc
+  - public domain (explicit dedication) - NOTICE

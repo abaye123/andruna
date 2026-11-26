@@ -54,6 +54,8 @@ target_compile_options(aosp_android INTERFACE
   -mno-ms-bitfields
   # Android platform defaults.
   -fno-exceptions
+  # On by default for Android targets, off for windows-gnu.
+  $<$<COMPILE_LANGUAGE:CXX>:-fsized-deallocation>
   -funwind-tables
   -ffunction-sections
   -fdata-sections
