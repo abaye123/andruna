@@ -1,6 +1,6 @@
 # 0011 - Initial AOSP release tag
 
-**Status:** proposed, 2026-11-26
+**Status:** accepted, 2026-11-26
 
 ## Context
 AOSP is fetched at one pinned release tag (open question 12). Every project

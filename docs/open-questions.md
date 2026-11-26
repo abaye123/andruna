@@ -13,5 +13,5 @@
 | 9 | Proposed desktop adaptations in the compatibility policy | Maintainer, one ADR each |
 | 10 | Windows 10 support after the first release | Maintainer, after phase 8 |
 | 11 | Hosted ARM64 Windows CI runners, or self-hosted (hosted `windows-11-arm` is listed for public and private repositories; private: 2 vCPU, 8 GB, billed per minute; CI uses it, not yet run) | Phase 0 |
-| 12 | Initial AOSP release tag (proposed: `android-17.0.0_r1`, [ADR 0011](decisions/0011-initial-aosp-tag.md)) | Maintainer, phase 0 |
+| 12 | Initial AOSP release tag (decided: `android-17.0.0_r1`, [ADR 0011](decisions/0011-initial-aosp-tag.md)) | Maintainer, phase 0 |
 | 13 | Product name check (trademarks, domains) for "Andruna" | Maintainer |
