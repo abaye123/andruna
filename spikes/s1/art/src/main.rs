@@ -156,22 +156,31 @@ fn cmd_run(args: &[String]) -> Result<i32, String> {
     host::threads::run_on_guest_stack(|| {
         code = (|| {
             let mut linker = loader::Linker::new(lib_path());
-            load(&mut linker, &exe)?;
             // Objects the guest will dlopen (ART: libart.so and the libcore
-            // natives) are loaded now, so static TLS is laid out once.
+            // natives) are loaded with the executable, so static TLS is laid
+            // out once.
+            let mut paths = vec![PathBuf::from(&exe)];
             let preload = std::env::var("S1_PRELOAD").unwrap_or_else(|_| DEFAULT_PRELOAD.into());
             for p in preload.split(';').filter(|p| !p.is_empty()) {
-                if linker.objects.iter().any(|o| o.name == p) {
-                    continue;
-                }
                 match linker.find_library(p) {
-                    Ok(path) => {
-                        linker.load(&path)?;
-                    }
+                    Ok(path) => paths.push(path),
                     Err(_) => eprintln!("[s1] preload: {p} not found, skipped"),
                 }
             }
-            report::loaded(&linker, std::time::Duration::ZERO);
+            let t = Instant::now();
+            linker.load_all(&paths)?;
+            report::loaded(&linker, t.elapsed());
+            // Debug aid: S1_PEEK=<object>:<hex vaddr> prints 6 words there.
+            if let Ok(p) = std::env::var("S1_PEEK") {
+                if let Some((o, a)) = p.split_once(':') {
+                    let a = u64::from_str_radix(a.trim_start_matches("0x"), 16).unwrap_or(0);
+                    if let Some(ob) = linker.objects.iter().find(|x| x.name == o) {
+                        // SAFETY: debug read inside a mapped object.
+                        let w = unsafe { core::slice::from_raw_parts((ob.bias + a) as *const u64, 6) };
+                        eprintln!("[s1] peek {o}+{a:#x} (bias {:#x}): {w:x?}", ob.bias);
+                    }
+                }
+            }
             host::dl::set_linker(&mut linker);
             let t = host::threads::new_record();
             let _area = host::threads::enter_guest_thread(t);
@@ -379,6 +388,72 @@ fn cmd_crash() -> Result<i32, String> {
     r
 }
 
+/// Cost of reaching a Thread field the Android way (one segment-relative
+/// load, `%gs:off`) and the ANDRUNA way (load the Thread* from the TLS slot
+/// at `%fs:0x38`, then `off(reg)`), on a guest thread. The single load is
+/// measured as `%fs:off`: the same instruction form with another segment.
+#[cfg(target_arch = "x86_64")]
+fn cmd_tlscost() -> Result<i32, String> {
+    host::threads::run_on_guest_stack(|| {
+        // Any object will do: the TLS layout needs one.
+        let mut linker = loader::Linker::new(lib_path());
+        load(&mut linker, "libc.so").expect("libc.so");
+        let t = host::threads::new_record();
+        let _area = host::threads::enter_guest_thread(t);
+        let tp = tls::current_tp();
+        // A fake Thread: 4 KiB, field at offset 0x100 holds 1.
+        let thread = Box::leak(vec![0u64; 512].into_boxed_slice());
+        thread[0x100 / 8] = 1;
+        // SAFETY: slot 7 of this thread's TCB (bionic TLS_SLOT_ART_THREAD_SELF).
+        let saved = unsafe { *((tp + 0x38) as *const u64) };
+        unsafe { *((tp + 0x38) as *mut u64) = thread.as_ptr() as u64 };
+        let n: u64 = 200_000_000;
+        let mut best = [f64::MAX; 3];
+        for _ in 0..5 {
+            let t0 = Instant::now();
+            let mut acc: u64 = 0;
+            // SAFETY: reads %fs:0x100 of the TCB area (mapped) in a loop.
+            unsafe {
+                core::arch::asm!(
+                    "2:", "add {acc}, qword ptr fs:[0x38]", "dec {i}", "jnz 2b",
+                    acc = inout(reg) acc, i = inout(reg) n => _, options(nostack));
+            }
+            best[0] = best[0].min(t0.elapsed().as_secs_f64() * 1e9 / n as f64);
+            let t0 = Instant::now();
+            // SAFETY: loads the Thread* from the slot, then a field of it.
+            unsafe {
+                core::arch::asm!(
+                    "2:", "mov r11, qword ptr fs:[0x38]", "add {acc}, qword ptr [r11 + 0x100]",
+                    "dec {i}", "jnz 2b",
+                    acc = inout(reg) acc, i = inout(reg) n => _, out("r11") _, options(nostack));
+            }
+            best[1] = best[1].min(t0.elapsed().as_secs_f64() * 1e9 / n as f64);
+            let t0 = Instant::now();
+            // SAFETY: as above, store form (what top_quick_frame updates do).
+            unsafe {
+                core::arch::asm!(
+                    "2:", "mov r11, qword ptr fs:[0x38]", "mov qword ptr [r11 + 0x108], {i}",
+                    "dec {i}", "jnz 2b",
+                    i = inout(reg) n => _, out("r11") _, options(nostack));
+            }
+            best[2] = best[2].min(t0.elapsed().as_secs_f64() * 1e9 / n as f64);
+            std::hint::black_box(acc);
+        }
+        println!("segment load fs:[off] (stands for Android's gs:[off]): {:.3} ns", best[0]);
+        println!("fs:[0x38] then [reg+off] (ANDRUNA):                    {:.3} ns", best[1]);
+        println!("fs:[0x38] then store [reg+off]:                         {:.3} ns", best[2]);
+        println!("FS-base lazy restores on this thread: {}", tls::restores_here());
+        // SAFETY: restores the slot.
+        unsafe { *((tp + 0x38) as *mut u64) = saved };
+    });
+    Ok(0)
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn cmd_tlscost() -> Result<i32, String> {
+    Err("x64 only".into())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Err(e) = init_lx() {
@@ -393,6 +468,7 @@ fn main() {
         Some("link") => cmd_link(&args[1..]),
         Some("unwind") => cmd_unwind(),
         Some("winload") => cmd_winload(&args[1..]),
+        Some("tlscost") => cmd_tlscost(),
         Some("check") => {
             let m = host::missing_from_table();
             println!("host_symbols.txt names missing from the host table: {m:?}");

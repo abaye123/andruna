@@ -72,7 +72,7 @@ def main():
     opts += a.extra
     env = dict(os.environ)
     env["S8_ROOT"] = str(root)
-    env.setdefault("S8_LIB_PATH", ";".join(str(GUEST / d) for d in ("aosp", "sysroot/usr/lib", "libcxx-install/lib")))
+    env.setdefault("S8_LIB_PATH", ";".join(str(GUEST / d) for d in ("aosp", "natives-build", "natives-build/manual", "sysroot/usr/lib", "libcxx-install/lib")))
     cmd = [str(RUNNER), "run", str(GUEST / "aosp" / "dalvikvm")] + opts + ["-cp", dex, a.cls] + a.args
     print("+", " ".join(cmd), flush=True)
     return subprocess.run(cmd, env=env).returncode

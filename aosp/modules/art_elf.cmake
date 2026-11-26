@@ -162,8 +162,11 @@ target_link_libraries(libsigchain_static PUBLIC aosp_android art_defaults art_as
 # --- art/libnativebridge, art/libnativeloader --------------------------------
 add_library(libnativebridge STATIC "${_art}/libnativebridge/native_bridge.cc")
 target_include_directories(libnativebridge PUBLIC "${_art}/libnativebridge/include")
-target_link_libraries(libnativebridge PUBLIC aosp_android art_defaults libbase liblog
+target_link_libraries(libnativebridge PUBLIC aosp_android libbase liblog
   libnativehelper_headers)
+# art_defaults stays private: its ART_TARGET_ANDROID would select
+# libnativeloader's namespace code below.
+target_link_libraries(libnativebridge PRIVATE art_defaults)
 target_include_directories(libnativebridge PRIVATE "${AOSP}/bionic/libc/platform" "${AOSP}/bionic/libdl/include_private")
 
 # The host variant of libnativeloader (plain dlopen of the library path, no

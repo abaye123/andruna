@@ -162,12 +162,18 @@ impl Linker {
     /// Loads `path` and all its dependencies, links them and runs their
     /// initializers. Returns the index of the main object.
     pub fn load(&mut self, path: &Path) -> Result<usize, String> {
+        self.load_all(&[path.to_path_buf()])
+    }
+
+    /// Loads several objects and their dependencies together (one static
+    /// TLS layout for all of them). Returns the index of the first.
+    pub fn load_all(&mut self, paths: &[PathBuf]) -> Result<usize, String> {
         let t0 = Instant::now();
         let main = self.objects.len();
-        let mut queue = vec![(
-            path.to_path_buf(),
-            path.file_name().unwrap().to_string_lossy().into_owned(),
-        )];
+        let mut queue: Vec<(PathBuf, String)> = paths
+            .iter()
+            .map(|p| (p.clone(), p.file_name().unwrap().to_string_lossy().into_owned()))
+            .collect();
         let mut qi = 0;
         while qi < queue.len() {
             let (p, name) = queue[qi].clone();

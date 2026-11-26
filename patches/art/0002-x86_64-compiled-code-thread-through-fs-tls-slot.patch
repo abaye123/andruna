@@ -10,7 +10,7 @@ TryToTransitionFromRunnableToNative (a callee-save scratch register).
 Without ANDRUNA, gs() is the GS segment prefix as before.
 
 diff --git a/compiler/utils/x86_64/assembler_x86_64.cc b/compiler/utils/x86_64/assembler_x86_64.cc
-index 46258c9..716dc2e 100644
+index 46258c9..e69591e 100644
 --- a/compiler/utils/x86_64/assembler_x86_64.cc
 +++ b/compiler/utils/x86_64/assembler_x86_64.cc
 @@ -24,6 +24,12 @@
@@ -48,7 +48,7 @@ index 46258c9..716dc2e 100644
 +    EmitUint8(0x64);  // FS
 +  }
 +  movq(thread_base, Address::Absolute(0x38, /*no_rip=*/ true));
-+  thread_base_ = thread_base;
++  thread_base_ = thread_base.AsRegister();
 +  thread_base_pending_ = true;
 +  return this;
 +}
@@ -62,7 +62,7 @@ index 46258c9..716dc2e 100644
 +  CHECK_EQ(operand.rm(), RSP);
 +  CHECK_EQ(operand.base(), RBP);
 +  CHECK_EQ(operand.rex(), 0);
-+  thread_operand_.emplace(thread_base_, operand.disp32());
++  thread_operand_.emplace(CpuRegister(thread_base_), operand.disp32());
 +  return *thread_operand_;
 +}
 +#else
@@ -162,7 +162,7 @@ index 46258c9..716dc2e 100644
    // For dst, SPL, BPL, SIL, DIL need the rex prefix.
    bool force = dst.AsRegister() > 3;
 diff --git a/compiler/utils/x86_64/assembler_x86_64.h b/compiler/utils/x86_64/assembler_x86_64.h
-index e3ffe5c..eca58e6 100644
+index e3ffe5c..9a8e4f0 100644
 --- a/compiler/utils/x86_64/assembler_x86_64.h
 +++ b/compiler/utils/x86_64/assembler_x86_64.h
 @@ -17,6 +17,7 @@
@@ -193,7 +193,7 @@ index e3ffe5c..eca58e6 100644
 +  // that holds the Thread*.
 +  const Operand& ThreadRelative(const Operand& operand);
 +  bool thread_base_pending_ = false;
-+  CpuRegister thread_base_ = CpuRegister(R11);
++  Register thread_base_ = R11;
 +  std::optional<Address> thread_operand_;
 +#endif
    void EmitImmediate(const Immediate& imm, bool is_16_op = false);

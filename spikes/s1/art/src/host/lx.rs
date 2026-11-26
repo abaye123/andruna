@@ -306,6 +306,46 @@ gfn! {
     }
 }
 
+gfn! {
+    /// `mmap`. lx has no file-backed mappings yet: a file mapping is made
+    /// as an anonymous private mapping filled with `pread` (spike limit:
+    /// `MAP_SHARED` changes are not written back and other mappings of
+    /// the file do not see them).
+    pub unsafe fn h_mmap(a: *mut c_void, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut c_void {
+        const MAP_SHARED: i32 = 1;
+        const MAP_ANONYMOUS: i32 = 0x20;
+        const PROT_WRITE: i32 = 2;
+        guard(|| {
+            if flags & MAP_ANONYMOUS != 0 || fd < 0 {
+                // SAFETY: forwarded unchanged.
+                return unsafe { sys::mmap(a, len, prot, flags, fd, off) };
+            }
+            let anon = (flags & !MAP_SHARED) | 2 /* MAP_PRIVATE */ | MAP_ANONYMOUS;
+            // SAFETY: a new anonymous mapping, writable while it is filled.
+            let p = unsafe { sys::mmap(a, len, prot | PROT_WRITE, anon, -1, 0) };
+            if p as isize == -1 {
+                return p;
+            }
+            let mut done = 0usize;
+            while done < len {
+                // SAFETY: inside the new mapping.
+                let r = unsafe {
+                    sys::pread64(fd, (p as *mut u8).add(done) as *mut c_void, len - done, off + done as i64)
+                };
+                if r <= 0 {
+                    break; // past the end of the file: the rest stays zero
+                }
+                done += r as usize;
+            }
+            if prot & PROT_WRITE == 0 {
+                // SAFETY: the mapping just made.
+                unsafe { sys::mprotect(p, len, prot) };
+            }
+            p
+        })
+    }
+}
+
 /// Defines plain forwards: same arguments, same result.
 macro_rules! forward {
     ($($name:ident => $target:ident ( $($a:ident : $t:ty),* ) -> $r:ty;)*) => {$(
@@ -327,7 +367,6 @@ forward! {
     h_stat => stat(p: *const c_char, st: *mut c_void) -> i32;
     h_lstat => lstat(p: *const c_char, st: *mut c_void) -> i32;
     h_fstatat => fstatat(d: i32, p: *const c_char, st: *mut c_void, flags: i32) -> i32;
-    h_mmap => mmap(a: *mut c_void, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut c_void;
     h_munmap => munmap(a: *mut c_void, len: usize) -> i32;
     h_mprotect => mprotect(a: *mut c_void, len: usize, prot: i32) -> i32;
     h_madvise => madvise(a: *mut c_void, len: usize, advice: i32) -> i32;

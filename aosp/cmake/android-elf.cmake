@@ -31,6 +31,10 @@ target_compile_options(aosp_android INTERFACE
   # Android platform defaults (Soong passes the stack protector
   # explicitly; it reads the guard through the thread pointer).
   -fstack-protector-strong
+  # Soong's default for device code: automatic variables start zeroed.
+  # AOSP code relies on it (for example ART's InlinedVector leaves size_
+  # uninitialized).
+  -ftrivial-auto-var-init=zero
   -fno-exceptions
   -funwind-tables
   -ffunction-sections

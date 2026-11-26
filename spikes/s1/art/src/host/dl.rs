@@ -117,6 +117,13 @@ gfn! {
                     if let Some(a) = l.lookup_in(h - 1, &n) {
                         return Some(a);
                     }
+                    // The guest libc's functions that the host implements
+                    // (libsigchain looks up the real sigaction in libc.so).
+                    if l.objects[h - 1].name == "libc.so" {
+                        if let Some(a) = l.lookup_host(&n) {
+                            return Some(a);
+                        }
+                    }
                 }
                 l.lookup_global(&n).or_else(|| l.lookup_host(&n))
             })
@@ -287,5 +294,9 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("android_create_namespace", h_null_namespace as usize),
         ("android_link_namespaces", h_false as usize),
         ("android_init_anonymous_namespace", h_false as usize),
+        // libnativeloader's namespace queries (its Android code is not
+        // built, see aosp/modules/art_elf.cmake): no namespace, not bridged.
+        ("FindNativeLoaderNamespaceByClassLoader", h_null_namespace as usize),
+        ("IsNamespaceNativeBridged", h_false as usize),
     ]
 }

@@ -233,6 +233,14 @@ pub fn deliver(
     if h <= 1 || h == usize::MAX || FLAGS[sig as usize].load(Ordering::Acquire) & SA_SIGINFO == 0 {
         return false;
     }
+    static LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *LOG.get_or_init(|| std::env::var_os("S1_SIGLOG").is_some()) {
+        eprintln!(
+            "[s1] signal {sig} code {code:#x} pc {:#x} {} addr {addr:#x}",
+            ctx.Rip,
+            crate::debug::describe(ctx.Rip).unwrap_or_default()
+        );
+    }
     let mut si = SigInfo { signo: sig, errno: 0, code: si_code, pad: 0, addr, rest: [0; 13] };
     if sig == SIGSEGV {
         si.code = if mapped(addr) { 2 } else { 1 }; // SEGV_ACCERR / SEGV_MAPERR

@@ -29,6 +29,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Mutex;
 
 pub mod dl;
+pub mod extra;
 pub mod fs;
 pub mod lx;
 pub mod signal;
@@ -141,6 +142,7 @@ pub fn table() -> HashMap<&'static str, usize> {
         .chain(misc::symbols())
         .chain(dl::symbols())
         .chain(signal::symbols())
+        .chain(extra::symbols())
     {
         let old = t.insert(n, a);
         assert!(old.is_none(), "host symbol {n} defined twice");
