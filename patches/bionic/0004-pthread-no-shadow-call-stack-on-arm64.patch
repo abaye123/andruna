@@ -1,0 +1,22 @@
+Do not set up the shadow call stack (x18) on arm64 in the ANDRUNA build.
+
+On Windows ARM64, x18 is the platform register and always points to the
+thread environment block; writing it breaks every Windows call made by
+the thread. Bionic allocates a shadow call stack for each thread and
+stores its address in x18 (spike S4). Android's app code does not use
+shadow call stacks, and nothing in the guest is built with
+-fsanitize=shadow-call-stack, so under ANDRUNA on arm64 the set-up is
+skipped and x18 is left alone.
+
+diff --git a/libc/bionic/pthread_create.cpp b/libc/bionic/pthread_create.cpp
+--- a/libc/bionic/pthread_create.cpp
++++ b/libc/bionic/pthread_create.cpp
+@@ -128,7 +128,7 @@
+ }
+ 
+ static void __init_shadow_call_stack(pthread_internal_t* thread __unused) {
+-#if defined(__aarch64__) || defined(__riscv)
++#if (defined(__aarch64__) && !defined(ANDRUNA)) || defined(__riscv)
+   // Allocate the shadow call stack and its guard region.
+   char* scs_guard_region = reinterpret_cast<char*>(
+       mmap(nullptr, SCS_GUARD_REGION_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0));

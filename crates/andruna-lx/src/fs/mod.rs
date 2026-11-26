@@ -16,6 +16,7 @@
 pub mod file;
 pub mod mount;
 pub mod path;
+pub mod stream;
 
 use std::sync::{Arc, RwLock};
 
