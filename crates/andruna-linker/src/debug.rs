@@ -41,6 +41,18 @@ pub fn report(args: std::fmt::Arguments<'_>) {
     let _ = writeln!(std::io::stderr().lock(), "[andruna-linker] {args}");
 }
 
+/// `ANDRUNA_TRACE`: loader progress on standard error.
+pub fn tracing() -> bool {
+    static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *T.get_or_init(|| std::env::var_os("ANDRUNA_TRACE").is_some())
+}
+
+pub fn trace(args: std::fmt::Arguments<'_>) {
+    if tracing() {
+        report(args);
+    }
+}
+
 pub fn register(o: &Object) {
     let mut r = RANGES.lock().unwrap_or_else(|e| e.into_inner());
     r.push(Range {

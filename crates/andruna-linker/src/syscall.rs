@@ -97,6 +97,27 @@ pub unsafe fn lx_raw(n: i64, a: [i64; 6]) -> i64 {
 /// The pointer arguments satisfy the contract of system call `n`, as for
 /// the Linux kernel.
 pub unsafe fn dispatch(n: i64, a: [i64; 6]) -> i64 {
+    // SAFETY: forwarded from this function's contract.
+    let r = unsafe { dispatch_inner(n, a) };
+    if trace() {
+        crate::debug::report(format_args!(
+            "syscall {n}({:#x}, {:#x}, {:#x}, {:#x}) = {r}",
+            a[0], a[1], a[2], a[3]
+        ));
+    }
+    r
+}
+
+/// `ANDRUNA_STRACE`: report every guest system call on standard error.
+fn trace() -> bool {
+    static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *T.get_or_init(|| std::env::var_os("ANDRUNA_STRACE").is_some())
+}
+
+/// # Safety
+///
+/// As for [`dispatch`].
+unsafe fn dispatch_inner(n: i64, a: [i64; 6]) -> i64 {
     match n {
         nr::EXIT => crate::thread::exit_current(a[0] as i32, None),
         nr::EXIT_GROUP => crate::process::exit_process(a[0] as i32),

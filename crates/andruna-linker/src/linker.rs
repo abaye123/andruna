@@ -546,7 +546,9 @@ impl Linker {
         {
             self.relocate(b)?;
             self.protect_and_register(b)?;
+            crate::debug::trace(format_args!("bridge: init"));
             self.bridge = Some(Bridge::new(self, b)?);
+            crate::debug::trace(format_args!("bridge: ready"));
         }
         for &id in new {
             self.register_tls(id)?;
@@ -737,6 +739,7 @@ impl Linker {
     // ---------------------------------------------------------------
 
     fn relocate(&mut self, id: ObjectId) -> Result<()> {
+        crate::debug::trace(format_args!("relocating {}", self.obj(id).name));
         let mut relas: Vec<Rela> = Vec::new();
         let (mut packed, mut relr) = (0usize, 0usize);
         let o = self.obj(id);

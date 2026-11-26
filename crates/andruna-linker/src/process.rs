@@ -270,7 +270,9 @@ fn start(ctx: MainCtx) -> Result<std::convert::Infallible> {
     l.hwcap = hwcap;
     l.hwcap2 = hwcap2;
     l.startup = Some(s);
+    crate::debug::trace(format_args!("loading {}", program.exe));
     let loaded = l.load(&program.exe, None, crate::linker::rtld::NOW)?;
+    crate::debug::trace(format_args!("loaded {} objects", l.objects().count()));
     let main = l.get(loaded.root).expect("main");
     let entry = main.addr(main.headers.ehdr.e_entry);
     let main_fn = main
@@ -278,6 +280,7 @@ fn start(ctx: MainCtx) -> Result<std::convert::Infallible> {
         .map(|(_, s)| main.addr(s.st_value));
     let bionic = l.bridge.is_some();
     if let Some(b) = &l.bridge {
+        crate::debug::trace(format_args!("bridge: finishing the main thread"));
         b.finish_main_thread();
     } else {
         // No bionic: a built-in TLS area for the main thread.

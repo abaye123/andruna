@@ -117,7 +117,10 @@ impl Image {
             bias: base.wrapping_sub(h.min_vaddr),
             file_mapped: false,
         };
-        if let Err(e) = img.map_segments(h, src, what) {
+        if let Err(e) = img
+            .map_segments(h, src, what)
+            .and_then(|()| img.protect_segments(h))
+        {
             img.unmap();
             return Err(e);
         }
@@ -185,8 +188,25 @@ impl Image {
         Ok(())
     }
 
-    /// Applies segment protections and `PT_GNU_RELRO`.
+    /// Applies `PT_GNU_RELRO` after relocation (the segments already have
+    /// their own protections, see [`Self::map`]).
     pub fn protect(&self, h: &Headers) -> Result<()> {
+        for p in h.phdrs.iter().filter(|p| p.p_type == PT_GNU_RELRO) {
+            let s = page_down(self.bias + p.p_vaddr);
+            let e = page_down(self.bias + p.p_vaddr + p.p_memsz);
+            if e > s {
+                andruna_lx::mem::mprotect(s as usize, (e - s) as usize, PROT_READ)
+                    .map_err(|e| Error::new(format!("RELRO mprotect failed: errno {}", e.0)))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Gives each segment its own protection (the union for a page two
+    /// segments share), as bionic maps them: code is executable before
+    /// relocation, because IFUNC resolvers run during relocation; nothing
+    /// writes to non-writable segments (text relocations are rejected).
+    fn protect_segments(&self, h: &Headers) -> Result<()> {
         // Union of the protections of every segment touching a page.
         let mut pages: Vec<(u64, u64, u32)> = Vec::new();
         for p in h.loads() {
@@ -212,14 +232,6 @@ impl Image {
         for (s, e, prot) in pages.into_iter().filter(|r| r.1 > r.0) {
             andruna_lx::mem::mprotect(s as usize, (e - s) as usize, prot)
                 .map_err(|e| Error::new(format!("mprotect failed: errno {}", e.0)))?;
-        }
-        for p in h.phdrs.iter().filter(|p| p.p_type == PT_GNU_RELRO) {
-            let s = page_down(self.bias + p.p_vaddr);
-            let e = page_down(self.bias + p.p_vaddr + p.p_memsz);
-            if e > s {
-                andruna_lx::mem::mprotect(s as usize, (e - s) as usize, PROT_READ)
-                    .map_err(|e| Error::new(format!("RELRO mprotect failed: errno {}", e.0)))?;
-            }
         }
         flush_code(self.base, self.size);
         Ok(())
@@ -330,7 +342,7 @@ mod tests {
         let h = parse_phdrs(&file, &eh, PAGE, "t").unwrap();
         let mut img = Image::map(&h, &mut Bytes(&file), "t").unwrap();
         assert_eq!(img.size, 0x5000);
-        // SAFETY: the image is mapped read-write before protect.
+        // SAFETY: the image is mapped and readable.
         unsafe {
             assert_eq!(*(img.bias as *const [u8; 4]), *b"\x7fELF");
             let d = (img.bias + 0x1200) as *const u8;
