@@ -53,6 +53,16 @@ pub fn register_objects(objs: &[Object]) {
     if let Ok(dir) = std::env::var("S8_LLDB_FILE") {
         let _ = std::fs::write(dir, cmds);
     }
+    // The same for WinDbg/cdb: `.reload` of each object at its base, for
+    // the debugger's ELF/DWARF symbol support (S8.md, "Debugging").
+    if let Ok(f) = std::env::var("S8_WINDBG_FILE") {
+        let mut w = String::new();
+        for o in objs {
+            let dir = o.path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+            w.push_str(&format!(".sympath+ {dir}\n.reload /f /i {}={:#x},{:#x}\n", o.name, o.base, o.size));
+        }
+        let _ = std::fs::write(f, w);
+    }
     if std::env::var_os("S8_UNWIND").is_some() {
         for o in objs {
             match crate::unwind::register(o) {
