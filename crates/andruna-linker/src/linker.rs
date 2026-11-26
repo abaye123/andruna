@@ -371,7 +371,10 @@ impl Linker {
                 .parent()
                 .map(|d| d.display().to_string())
                 .unwrap_or_default(),
-            Origin::Guest(p) => p.rsplit_once('/').map(|x| x.0.to_string()).unwrap_or_default(),
+            Origin::Guest(p) => p
+                .rsplit_once('/')
+                .map(|x| x.0.to_string())
+                .unwrap_or_default(),
             Origin::Memory => String::new(),
         };
         if let Some(rp) = o.dynamic.runpath.or(o.dynamic.rpath) {
@@ -379,7 +382,10 @@ impl Linker {
                 .string_lossy(rp)
                 .split(':')
                 .filter(|s| !s.is_empty())
-                .map(|s| s.replace("${ORIGIN}", &origin_dir).replace("$ORIGIN", &origin_dir))
+                .map(|s| {
+                    s.replace("${ORIGIN}", &origin_dir)
+                        .replace("$ORIGIN", &origin_dir)
+                })
                 .collect();
         }
         if o.dynamic.flags_1 & DF_1_NODELETE != 0 {
@@ -729,17 +735,24 @@ impl Linker {
 
     fn relocate(&mut self, id: ObjectId) -> Result<()> {
         let mut relas: Vec<Rela> = Vec::new();
+        let (mut packed, mut relr) = (0usize, 0usize);
         let o = self.obj(id);
         let d = o.dynamic.clone();
         if let Some((a, sz)) = d.android_rela {
-            let p = decode_aps2(o.bytes(a, sz)?, true).map_err(|e| Error::invalid(&o.name, e.message()))?;
-            self.stats.packed += p.len();
+            let p = decode_aps2(o.bytes(a, sz)?, true)
+                .map_err(|e| Error::invalid(&o.name, e.message()))?;
+            packed += p.len();
             relas.extend(p);
         }
         if let Some((a, sz)) = d.android_rel {
-            let p = decode_aps2(o.bytes(a, sz)?, false).map_err(|e| Error::invalid(&o.name, e.message()))?;
-            self.stats.packed += p.len();
-            relas.extend(p.into_iter().map(|r| self.rel_addend(id, r)).collect::<Result<Vec<_>>>()?);
+            let p = decode_aps2(o.bytes(a, sz)?, false)
+                .map_err(|e| Error::invalid(&o.name, e.message()))?;
+            packed += p.len();
+            relas.extend(
+                p.into_iter()
+                    .map(|r| self.rel_addend(id, r))
+                    .collect::<Result<Vec<_>>>()?,
+            );
         }
         if let Some((a, sz)) = d.rela {
             relas.extend(read_table::<Rela>(o, a, sz)?);
@@ -763,9 +776,11 @@ impl Linker {
                 let p = o.check(off, 8)?;
                 // SAFETY: RELR targets are words in the object's writable
                 // data, mapped read-write until protect (checked above).
-                unsafe { (p as *mut u64).write_unaligned((p as *const u64).read_unaligned().wrapping_add(bias)) };
-                self.stats.relr += 1;
-                self.stats.relocations += 1;
+                unsafe {
+                    (p as *mut u64)
+                        .write_unaligned((p as *const u64).read_unaligned().wrapping_add(bias))
+                };
+                relr += 1;
             }
         }
         if let Some((a, sz)) = d.jmprel {
@@ -782,6 +797,9 @@ impl Linker {
                 }
             }
         }
+        self.stats.packed += packed;
+        self.stats.relr += relr;
+        self.stats.relocations += relr;
         let scope = self.scope(id);
         let mut cache: HashMap<u32, Option<Def>> = HashMap::new();
         let mut irelative = Vec::new();
@@ -893,7 +911,12 @@ impl Linker {
                     Some(Def { obj: Some(o), .. }) => self.module_of(o)?,
                     None if si == 0 => self.module_of(id)?,
                     None => 0,
-                    Some(_) => return Err(Error::invalid(&self.obj(id).name, "TLS symbol bound to the host")),
+                    Some(_) => {
+                        return Err(Error::invalid(
+                            &self.obj(id).name,
+                            "TLS symbol bound to the host",
+                        ));
+                    }
                 };
                 write(m as u64);
             }
@@ -939,7 +962,9 @@ impl Linker {
     /// The defining object and symbol offset of a TLS relocation.
     fn tls_target(&self, id: ObjectId, si: u32, def: Option<Def>) -> Result<(ObjectId, u64)> {
         match def {
-            Some(Def { obj: Some(o), sym, .. }) => Ok((o, sym.st_value)),
+            Some(Def {
+                obj: Some(o), sym, ..
+            }) => Ok((o, sym.st_value)),
             None if si == 0 => Ok((id, 0)),
             _ => Err(Error::invalid(
                 &self.obj(id).name,
@@ -949,31 +974,39 @@ impl Linker {
     }
 
     fn static_offset(&self, id: ObjectId) -> Result<i64> {
-        self.obj(id)
-            .tls
-            .and_then(|t| t.tp_offset)
-            .ok_or_else(|| {
-                Error::invalid(
-                    &self.obj(id).name,
-                    "static TLS relocation (initial-exec) against a dynamically loaded TLS module",
-                )
-            })
+        self.obj(id).tls.and_then(|t| t.tp_offset).ok_or_else(|| {
+            Error::invalid(
+                &self.obj(id).name,
+                "static TLS relocation (initial-exec) against a dynamically loaded TLS module",
+            )
+        })
     }
 
     fn tlsdesc(&mut self, id: ObjectId, si: u32, def: Option<Def>, a: u64) -> Result<(u64, u64)> {
         let machine = self.obj(id).machine;
         let run = self.runs_code();
         if si != 0 && def.is_none() {
-            let f = if run { tls::tlsdesc_undefined_weak(machine)? } else { 0 };
+            let f = if run {
+                tls::tlsdesc_undefined_weak(machine)?
+            } else {
+                0
+            };
             return Ok((f, a));
         }
         let (m, v) = self.tls_target(id, si, def)?;
         let t = self.obj(m).tls.expect("TLS target");
         if let Some(off) = t.tp_offset {
-            let f = if run { tls::tlsdesc_static(machine)? } else { 0 };
+            let f = if run {
+                tls::tlsdesc_static(machine)?
+            } else {
+                0
+            };
             return Ok((f, (off as u64).wrapping_add(v).wrapping_add(a)));
         }
-        let b = self.bridge.as_ref().ok_or_else(|| Error::new("dynamic TLS needs bionic"))?;
+        let b = self
+            .bridge
+            .as_ref()
+            .ok_or_else(|| Error::new("dynamic TLS needs bionic"))?;
         let (f, generation) = (b.tlsdesc_dynamic(), b.tls_generation(t.module)?);
         let arg = Box::new([generation, t.module as u64, v.wrapping_add(a)]);
         let p = arg.as_ptr() as u64;
@@ -1055,6 +1088,13 @@ impl Linker {
             }
         }
         Ok((fns, dead))
+    }
+
+    /// Adds `delta` references to an object (thread-local destructors of
+    /// a DSO keep it loaded).
+    pub fn adjust_refcount(&mut self, id: ObjectId, delta: isize) {
+        let o = self.obj_mut(id);
+        o.refcount = o.refcount.saturating_add_signed(delta);
     }
 
     /// Unmaps objects released by [`Self::release`].
@@ -1141,7 +1181,10 @@ impl RelKind {
 fn read_table<T: Copy>(o: &Object, a: u64, sz: u64) -> Result<Vec<T>> {
     let n = core::mem::size_of::<T>() as u64;
     if sz % n != 0 {
-        return Err(Error::invalid(&o.name, "relocation table size is not a multiple of its entry"));
+        return Err(Error::invalid(
+            &o.name,
+            "relocation table size is not a multiple of its entry",
+        ));
     }
     o.check(a, sz)?;
     (0..sz / n).map(|i| o.read::<T>(a + i * n)).collect()

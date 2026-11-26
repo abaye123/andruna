@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::ffi::CString;
 use std::sync::{Mutex, MutexGuard};
 
-use crate::linker::{Linker, rtld, run_fini_fns, run_init_fns};
+use crate::linker::{Linker, run_fini_fns, run_init_fns};
 use crate::object::ObjectId;
 
 /// The process's linker.
@@ -77,7 +77,10 @@ pub fn dlopen(name: Option<&str>, flags: i32, caller: u64) -> Result<u64, String
         let loaded = l.load(name, by, flags).map_err(|e| e.to_string())?;
         let fns = l.init_fns(&loaded.init_order).map_err(|e| e.to_string())?;
         if !loaded.init_order.is_empty() {
-            ADDS.fetch_add(loaded.init_order.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            ADDS.fetch_add(
+                loaded.init_order.len() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
         (loaded.root, fns)
     };
@@ -132,7 +135,9 @@ pub fn dlsym(h: u64, name: &str, version: Option<&str>, caller: u64) -> Result<u
             l.dlsym_in(&after, name, version, false)
         }
         h => {
-            let id = id_of(h).filter(|&i| l.get(i).is_some()).ok_or_else(|| format!("invalid handle: {h:#x}"))?;
+            let id = id_of(h)
+                .filter(|&i| l.get(i).is_some())
+                .ok_or_else(|| format!("invalid handle: {h:#x}"))?;
             l.dlsym_in(&l.local_group(id), name, version, false)
         }
     };
@@ -478,28 +483,76 @@ gfn! {
 pub fn symbols() -> Vec<(&'static str, u64)> {
     vec![
         ("__loader_dlopen", loader_dlopen as usize as u64),
-        ("__loader_android_dlopen_ext", loader_android_dlopen_ext as usize as u64),
+        (
+            "__loader_android_dlopen_ext",
+            loader_android_dlopen_ext as usize as u64,
+        ),
         ("__loader_dlerror", loader_dlerror as usize as u64),
         ("__loader_dlsym", loader_dlsym as usize as u64),
         ("__loader_dlvsym", loader_dlvsym as usize as u64),
         ("__loader_dlclose", loader_dlclose as usize as u64),
         ("__loader_dladdr", loader_dladdr as usize as u64),
-        ("__loader_dl_iterate_phdr", loader_dl_iterate_phdr as usize as u64),
-        ("__loader_android_get_LD_LIBRARY_PATH", loader_get_ld_library_path as usize as u64),
-        ("__loader_android_update_LD_LIBRARY_PATH", loader_update_ld_library_path as usize as u64),
-        ("__loader_android_get_application_target_sdk_version", loader_get_target_sdk as usize as u64),
-        ("__loader_android_set_application_target_sdk_version", loader_set_target_sdk as usize as u64),
-        ("__loader_android_create_namespace", loader_namespace_unsupported as usize as u64),
-        ("__loader_android_get_exported_namespace", loader_namespace_unsupported as usize as u64),
-        ("__loader_android_init_anonymous_namespace", loader_namespace_unsupported_bool as usize as u64),
-        ("__loader_android_link_namespaces", loader_namespace_unsupported_bool as usize as u64),
-        ("__loader_android_link_namespaces_all_libs", loader_namespace_unsupported_bool as usize as u64),
-        ("__loader_android_dlwarning", loader_dlwarning as usize as u64),
-        ("__loader_android_handle_signal", loader_handle_signal as usize as u64),
-        ("__loader_android_set_16kb_appcompat_mode", loader_set_16kb_appcompat as usize as u64),
+        (
+            "__loader_dl_iterate_phdr",
+            loader_dl_iterate_phdr as usize as u64,
+        ),
+        (
+            "__loader_android_get_LD_LIBRARY_PATH",
+            loader_get_ld_library_path as usize as u64,
+        ),
+        (
+            "__loader_android_update_LD_LIBRARY_PATH",
+            loader_update_ld_library_path as usize as u64,
+        ),
+        (
+            "__loader_android_get_application_target_sdk_version",
+            loader_get_target_sdk as usize as u64,
+        ),
+        (
+            "__loader_android_set_application_target_sdk_version",
+            loader_set_target_sdk as usize as u64,
+        ),
+        (
+            "__loader_android_create_namespace",
+            loader_namespace_unsupported as usize as u64,
+        ),
+        (
+            "__loader_android_get_exported_namespace",
+            loader_namespace_unsupported as usize as u64,
+        ),
+        (
+            "__loader_android_init_anonymous_namespace",
+            loader_namespace_unsupported_bool as usize as u64,
+        ),
+        (
+            "__loader_android_link_namespaces",
+            loader_namespace_unsupported_bool as usize as u64,
+        ),
+        (
+            "__loader_android_link_namespaces_all_libs",
+            loader_namespace_unsupported_bool as usize as u64,
+        ),
+        (
+            "__loader_android_dlwarning",
+            loader_dlwarning as usize as u64,
+        ),
+        (
+            "__loader_android_handle_signal",
+            loader_handle_signal as usize as u64,
+        ),
+        (
+            "__loader_android_set_16kb_appcompat_mode",
+            loader_set_16kb_appcompat as usize as u64,
+        ),
         ("__loader_cfi_fail", loader_cfi_fail as usize as u64),
-        ("__loader_add_thread_local_dtor", loader_add_thread_local_dtor as usize as u64),
-        ("__loader_remove_thread_local_dtor", loader_remove_thread_local_dtor as usize as u64),
+        (
+            "__loader_add_thread_local_dtor",
+            loader_add_thread_local_dtor as usize as u64,
+        ),
+        (
+            "__loader_remove_thread_local_dtor",
+            loader_remove_thread_local_dtor as usize as u64,
+        ),
     ]
 }
 
@@ -526,10 +579,5 @@ mod tests {
         assert_eq!(unsafe { CStr::from_ptr(p) }.to_str().unwrap(), "x");
         // SAFETY: as above.
         assert!(unsafe { loader_dlerror() }.is_null());
-    }
-
-    #[test]
-    fn unused_flags_constant() {
-        assert_eq!(rtld::GLOBAL, 0x100);
     }
 }

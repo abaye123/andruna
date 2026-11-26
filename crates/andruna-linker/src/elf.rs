@@ -425,7 +425,7 @@ pub fn parse_ehdr(bytes: &[u8], machine: u16, what: &str) -> Result<Ehdr> {
     if usize::from(eh.e_phentsize) != size_of::<Phdr>() {
         return Err(bad("e_phentsize is not 56"));
     }
-    if eh.e_phnum == 0 || eh.e_phnum > 65536 / 56 {
+    if eh.e_phnum == 0 || usize::from(eh.e_phnum) > 65536 / 56 {
         return Err(bad("bad e_phnum"));
     }
     Ok(eh)
@@ -503,8 +503,10 @@ pub fn parse_phdrs(bytes: &[u8], eh: &Ehdr, page: u64, what: &str) -> Result<Hea
     // Every other segment that the loader reads at run time must lie in the
     // mapped span.
     for p in &phdrs {
-        if matches!(p.p_type, PT_DYNAMIC | PT_TLS | PT_GNU_RELRO | PT_GNU_EH_FRAME)
-            && (p.p_vaddr < min || p.p_vaddr.saturating_add(p.p_memsz) > max)
+        if matches!(
+            p.p_type,
+            PT_DYNAMIC | PT_TLS | PT_GNU_RELRO | PT_GNU_EH_FRAME
+        ) && (p.p_vaddr < min || p.p_vaddr.saturating_add(p.p_memsz) > max)
         {
             return Err(bad(format!(
                 "segment type {:#x} lies outside the loaded span",

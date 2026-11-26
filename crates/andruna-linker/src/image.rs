@@ -95,8 +95,12 @@ impl Image {
             -1,
             0,
         )
-        .map_err(|e| Error::new(format!("\"{what}\": cannot reserve {span:#x} bytes: errno {}", e.0)))?
-            as u64;
+        .map_err(|e| {
+            Error::new(format!(
+                "\"{what}\": cannot reserve {span:#x} bytes: errno {}",
+                e.0
+            ))
+        })? as u64;
         let base = raw.div_ceil(align) * align;
         if base > raw {
             let _ = andruna_lx::mem::munmap(raw as usize, (base - raw) as usize);
@@ -134,7 +138,9 @@ impl Image {
                     -1,
                     0,
                 )
-                .map_err(|e| Error::new(format!("\"{what}\": cannot map a segment: errno {}", e.0)))?;
+                .map_err(|e| {
+                    Error::new(format!("\"{what}\": cannot map a segment: errno {}", e.0))
+                })?;
                 mapped_to = end;
             }
             if p.p_filesz > 0
@@ -155,7 +161,9 @@ impl Image {
                         let tail = self.bias + p.p_vaddr + p.p_filesz;
                         // SAFETY: the rest of the last file page belongs to
                         // this segment (.bss) and is mapped read-write.
-                        unsafe { core::ptr::write_bytes(tail as *mut u8, 0, (fend - tail) as usize) };
+                        unsafe {
+                            core::ptr::write_bytes(tail as *mut u8, 0, (fend - tail) as usize)
+                        };
                         self.file_mapped = true;
                         continue;
                     }
@@ -185,12 +193,14 @@ impl Image {
             let start = page_down(self.bias + p.p_vaddr);
             let end = page_up(self.bias + p.p_vaddr + p.p_memsz);
             let prot = prot_of(p.p_flags);
-            if let Some(last) = pages.last_mut()
+            let prev = pages.last().copied();
+            if let Some(last) = prev
                 && last.1 > start
             {
                 // The first page is shared with the previous segment.
                 let shared_end = last.1.min(end);
-                last.1 = start;
+                let n = pages.len();
+                pages[n - 1].1 = start;
                 pages.push((start, shared_end, last.2 | prot));
                 if end > shared_end {
                     pages.push((shared_end, end, prot));
@@ -276,7 +286,10 @@ impl SegmentSource for Bytes<'_> {
         let (Some(s), Some(e)) = (s, e) else {
             return Err(Error::new("segment outside the file"));
         };
-        let src = self.0.get(s..e).ok_or_else(|| Error::new("segment outside the file"))?;
+        let src = self
+            .0
+            .get(s..e)
+            .ok_or_else(|| Error::new("segment outside the file"))?;
         // SAFETY: the caller guarantees `dst` is writable for `len` bytes,
         // and the source is a separate buffer.
         unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) };
@@ -289,6 +302,14 @@ mod tests {
     use super::*;
     use crate::elf::tests::{image, load};
     use crate::elf::*;
+
+    fn win_protect(a: u64) -> u32 {
+        use windows::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery};
+        let mut m = MEMORY_BASIC_INFORMATION::default();
+        // SAFETY: queries the address space only.
+        unsafe { VirtualQuery(Some(a as *const _), &mut m, core::mem::size_of_val(&m)) };
+        m.Protect.0
+    }
 
     #[test]
     fn maps_copies_and_protects() {
@@ -318,14 +339,8 @@ mod tests {
             assert_eq!(*((img.bias + 0x4000) as *const u64), 0);
         }
         img.protect(&h).unwrap();
-        assert_eq!(
-            andruna_lx::mem::protection_of(img.base as usize, 0x1000),
-            Some(PROT_READ | PROT_EXEC)
-        );
-        assert_eq!(
-            andruna_lx::mem::protection_of((img.base + 0x2000) as usize, 0x1000),
-            Some(PROT_READ | PROT_WRITE)
-        );
+        assert_eq!(win_protect(img.base), 0x20, "PAGE_EXECUTE_READ");
+        assert_eq!(win_protect(img.base + 0x2000), 0x04, "PAGE_READWRITE");
         img.unmap();
     }
 

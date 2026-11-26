@@ -423,7 +423,10 @@ mod x64 {
     }
 
     pub fn register(o: &Object) -> Result<usize, String> {
-        let hdr = o.headers.find(PT_GNU_EH_FRAME).ok_or("no PT_GNU_EH_FRAME")?;
+        let hdr = o
+            .headers
+            .find(PT_GNU_EH_FRAME)
+            .ok_or("no PT_GNU_EH_FRAME")?;
         let base = o.image.base;
         let size = o.image.size;
         // .eh_frame_hdr: version, eh_frame_ptr_enc, fde_count_enc,
@@ -518,9 +521,8 @@ mod x64 {
         unsafe { core::ptr::copy_nonoverlapping(entries.as_ptr(), table, entries.len()) };
         // SAFETY: a table of `entries.len()` records that stays mapped for
         // the life of the process.
-        let ok = unsafe {
-            RtlAddFunctionTable(core::slice::from_raw_parts(table, entries.len()), base)
-        };
+        let ok =
+            unsafe { RtlAddFunctionTable(core::slice::from_raw_parts(table, entries.len()), base) };
         if !ok {
             return Err("RtlAddFunctionTable failed".into());
         }

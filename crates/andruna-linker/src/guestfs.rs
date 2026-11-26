@@ -55,7 +55,14 @@ impl SegmentSource for GuestFile {
                 )
             };
             if n <= 0 {
-                return Err(Error::new(format!("read failed: {}", if n == 0 { "end of file".to_string() } else { format!("errno {}", -n) })));
+                return Err(Error::new(format!(
+                    "read failed: {}",
+                    if n == 0 {
+                        "end of file".to_string()
+                    } else {
+                        format!("errno {}", -n)
+                    }
+                )));
             }
             done += n as u64;
         }

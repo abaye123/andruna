@@ -115,7 +115,13 @@ fn enter_stack(top: u64, entry: u64, a0: u64, a1: u64) -> ! {
 
 #[cfg(target_arch = "x86_64")]
 #[unsafe(naked)]
-unsafe extern "sysv64" fn switch_and_call(top: u64, entry: u64, a0: u64, a1: u64, save: *mut u64) -> ! {
+unsafe extern "sysv64" fn switch_and_call(
+    top: u64,
+    entry: u64,
+    a0: u64,
+    a1: u64,
+    save: *mut u64,
+) -> ! {
     core::arch::naked_asm!(
         "mov [r8], rsp",
         "mov rsp, rdi",
@@ -374,13 +380,13 @@ impl GuestStack {
 /// may be below data the caller placed on it) and calls the host function
 /// `f(arg)` there; `f` never returns (it enters guest code or ends the
 /// process). Returns once the thread runs.
-pub fn spawn_on_stack(top: u64, f: gty!(fn(u64) -> !), arg: u64) -> crate::Result<()> {
+pub fn spawn_on_stack(top: u64, f: u64, arg: u64) -> crate::Result<()> {
     let start = Box::into_raw(Box::new(Start {
         flags: 0,
         stack: top,
         tls: 0,
         ctid: 0,
-        entry: f as usize as u64,
+        entry: f,
         func: arg,
         arg: 0,
     }));
@@ -438,11 +444,8 @@ mod tests {
         let tls = Box::new([0u64; 8]);
         let tid = Box::new(AtomicI32::new(-1));
         let ctid = tid.as_ptr();
-        let flags = CLONE_VM
-            | CLONE_THREAD
-            | CLONE_SETTLS
-            | CLONE_PARENT_SETTID
-            | CLONE_CHILD_CLEARTID;
+        let flags =
+            CLONE_VM | CLONE_THREAD | CLONE_SETTLS | CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID;
         let r = clone_thread(
             flags,
             stack.top(),
@@ -462,11 +465,26 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         assert_eq!(tid.load(Ordering::Acquire), 0);
-        assert_eq!(SEEN.load(Ordering::SeqCst), 0x55 ^ stack.top() ^ tls.as_ptr() as u64);
+        assert_eq!(
+            SEEN.load(Ordering::SeqCst),
+            0x55 ^ stack.top() ^ tls.as_ptr() as u64
+        );
     }
 
     #[test]
     fn processes_cannot_be_cloned() {
-        assert_eq!(clone_thread(0, 1, core::ptr::null_mut(), 0, core::ptr::null_mut(), 1, 0, 0), -ENOSYS);
+        assert_eq!(
+            clone_thread(
+                0,
+                1,
+                core::ptr::null_mut(),
+                0,
+                core::ptr::null_mut(),
+                1,
+                0,
+                0
+            ),
+            -ENOSYS
+        );
     }
 }

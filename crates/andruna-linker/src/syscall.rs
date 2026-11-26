@@ -239,7 +239,7 @@ mod tests {
         // SAFETY: the entry's convention; the arguments are valid for `n`.
         unsafe {
             core::arch::asm!(
-                "sub rsp, 8", "call {f}", "add rsp, 8",
+                "call {f}",
                 f = in(reg) f,
                 inout("rax") n => r,
                 in("rdi") a[0], in("rsi") a[1], in("rdx") a[2],
@@ -285,22 +285,37 @@ mod tests {
     #[test]
     fn getrandom_fills_and_validates() {
         let mut b = [0u8; 64];
-        assert_eq!(call(nr::GETRANDOM, [b.as_mut_ptr() as i64, 64, 0, 0, 0, 0]), 64);
+        assert_eq!(
+            call(nr::GETRANDOM, [b.as_mut_ptr() as i64, 64, 0, 0, 0, 0]),
+            64
+        );
         assert!(b.iter().any(|&x| x != 0));
         assert_eq!(call(nr::GETRANDOM, [0, 8, 0, 0, 0, 0]), -i64::from(EFAULT));
-        assert_eq!(call(nr::GETRANDOM, [b.as_mut_ptr() as i64, 8, 0x100, 0, 0, 0]), -i64::from(EINVAL));
+        assert_eq!(
+            call(nr::GETRANDOM, [b.as_mut_ptr() as i64, 8, 0x100, 0, 0, 0]),
+            -i64::from(EINVAL)
+        );
     }
 
     #[test]
     fn writev_to_a_bad_descriptor() {
         let data = *b"abc";
         let v = [[data.as_ptr() as u64, 3u64]];
-        assert_eq!(call(nr::WRITEV, [-1, v.as_ptr() as i64, 1, 0, 0, 0]), -i64::from(EBADF));
-        assert_eq!(call(nr::WRITEV, [-1, v.as_ptr() as i64, -1, 0, 0, 0]), -i64::from(EINVAL));
+        assert_eq!(
+            call(nr::WRITEV, [-1, v.as_ptr() as i64, 1, 0, 0, 0]),
+            -i64::from(EBADF)
+        );
+        assert_eq!(
+            call(nr::WRITEV, [-1, v.as_ptr() as i64, -1, 0, 0, 0]),
+            -i64::from(EINVAL)
+        );
     }
 
     #[test]
     fn identity() {
-        assert_eq!(call(nr::GETUID, [0; 6]), i64::from(andruna_lx::process::uid()));
+        assert_eq!(
+            call(nr::GETUID, [0; 6]),
+            i64::from(andruna_lx::process::uid())
+        );
     }
 }

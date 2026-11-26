@@ -54,11 +54,9 @@ pub fn decode_aps2(data: &[u8], is_rela: bool) -> Result<Vec<Rela>> {
             cur.r_addend = 0;
         }
         for _ in 0..group_size {
-            cur.r_offset = cur.r_offset.wrapping_add(if by_delta {
-                delta
-            } else {
-                r.next()? as u64
-            });
+            cur.r_offset =
+                cur.r_offset
+                    .wrapping_add(if by_delta { delta } else { r.next()? as u64 });
             if !by_info {
                 cur.r_info = r.next()? as u64;
             }
@@ -205,9 +203,18 @@ pub(crate) mod tests {
     fn aps2_rejects_corrupt_input() {
         assert!(decode_aps2(b"APS1", true).is_err());
         assert!(decode_aps2(&aps2(&[2, 0]), true).is_err(), "truncated");
-        assert!(decode_aps2(&aps2(&[1, 0, 5, 0]), true).is_err(), "group > count");
-        assert!(decode_aps2(&aps2(&[1, 0, 0, 0]), true).is_err(), "empty group");
-        assert!(decode_aps2(&aps2(&[-1, 0]), true).is_err(), "negative count");
+        assert!(
+            decode_aps2(&aps2(&[1, 0, 5, 0]), true).is_err(),
+            "group > count"
+        );
+        assert!(
+            decode_aps2(&aps2(&[1, 0, 0, 0]), true).is_err(),
+            "empty group"
+        );
+        assert!(
+            decode_aps2(&aps2(&[-1, 0]), true).is_err(),
+            "negative count"
+        );
         assert!(
             decode_aps2(&aps2(&[1, 0, 1, 8, 0, 0, 0]), false).is_err(),
             "addend in REL"

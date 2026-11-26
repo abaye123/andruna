@@ -123,7 +123,8 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         code,
         0xC000_0005 | 0xC000_001D | 0xC000_0094 | 0xC000_00FD | 0xC000_0096
     );
-    if fatal && std::env::var_os("ANDRUNA_NO_CRASH_REPORT").is_none()
+    if fatal
+        && std::env::var_os("ANDRUNA_NO_CRASH_REPORT").is_none()
         && let Some(d) = describe(pc)
     {
         let mut e = std::io::stderr().lock();

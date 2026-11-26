@@ -158,8 +158,9 @@ impl DynamicInfo {
 
 /// The GNU hash of a symbol name (`DT_GNU_HASH`).
 pub fn gnu_hash(name: &[u8]) -> u32 {
-    name.iter()
-        .fold(5381u32, |h, &c| h.wrapping_mul(33).wrapping_add(u32::from(c)))
+    name.iter().fold(5381u32, |h, &c| {
+        h.wrapping_mul(33).wrapping_add(u32::from(c))
+    })
 }
 
 /// The System V hash of a name (`DT_HASH`, and version hashes).
@@ -277,7 +278,10 @@ impl Object {
     /// The NUL-terminated string at `off` in `DT_STRTAB`.
     pub fn string(&self, off: u64) -> Result<&[u8]> {
         if off >= self.dynamic.strsz {
-            return Err(Error::invalid(&self.name, "string offset outside DT_STRTAB"));
+            return Err(Error::invalid(
+                &self.name,
+                "string offset outside DT_STRTAB",
+            ));
         }
         let tab = self.bytes(self.dynamic.strtab, self.dynamic.strsz)?;
         let s = &tab[off as usize..];
@@ -538,11 +542,17 @@ mod tests {
         assert!(d.pltrel_is_rela);
         let mut v = base.clone();
         v.push(e(DT_RELA, 0x400));
-        assert!(DynamicInfo::from_entries(&v, "t").is_err(), "RELA without size");
+        assert!(
+            DynamicInfo::from_entries(&v, "t").is_err(),
+            "RELA without size"
+        );
         let mut v = base.clone();
         v.push(e(DT_SYMENT, 16));
         assert!(DynamicInfo::from_entries(&v, "t").is_err(), "bad syment");
-        assert!(DynamicInfo::from_entries(&base[1..], "t").is_err(), "no strtab");
+        assert!(
+            DynamicInfo::from_entries(&base[1..], "t").is_err(),
+            "no strtab"
+        );
         let mut v = base.clone();
         v.push(e(DT_FLAGS, DF_SYMBOLIC | DF_TEXTREL));
         let d = DynamicInfo::from_entries(&v, "t").unwrap();

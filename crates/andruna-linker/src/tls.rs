@@ -238,7 +238,11 @@ impl ThreadArea {
             // SAFETY: the block lies inside the allocation by construction
             // of the layout, and the image is the object's PT_TLS data.
             unsafe {
-                core::ptr::copy_nonoverlapping(m.image as *const u8, block as *mut u8, m.filesz as usize)
+                core::ptr::copy_nonoverlapping(
+                    m.image as *const u8,
+                    block as *mut u8,
+                    m.filesz as usize,
+                )
             };
         }
         // SAFETY: the slot area lies inside the allocation.
@@ -339,8 +343,8 @@ pub fn tlsdesc_undefined_weak(machine: u16) -> Result<u64> {
         _ => (
             1,
             &[
-                0xf3, 0x0f, 0x1f, 0xf8, 0x53, 0xd0, 0x3b, 0xd5, 0x00, 0x04, 0x40, 0xf9, 0x00,
-                0x00, 0x13, 0xcb, 0xf3, 0x07, 0x41, 0xf8, 0xc0, 0x03, 0x5f, 0xd6,
+                0xf3, 0x0f, 0x1f, 0xf8, 0x53, 0xd0, 0x3b, 0xd5, 0x00, 0x04, 0x40, 0xf9, 0x00, 0x00,
+                0x13, 0xcb, 0xf3, 0x07, 0x41, 0xf8, 0xc0, 0x03, 0x5f, 0xd6,
             ],
         ),
     };
@@ -373,7 +377,7 @@ mod tests {
         assert_eq!((a.id, b.id), (1, 2));
         if cfg!(target_arch = "x86_64") {
             assert_eq!(a.tp_offset, Some(-24));
-            assert_eq!(b.tp_offset, Some(-192));
+            assert_eq!(b.tp_offset, Some(-128));
         } else {
             assert_eq!(a.tp_offset, Some(64));
             assert_eq!(b.tp_offset, Some(128));

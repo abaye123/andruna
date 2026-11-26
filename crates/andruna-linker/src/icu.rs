@@ -84,18 +84,36 @@ gfn! {
 
 pub fn symbols() -> Vec<(&'static str, u64)> {
     vec![
-        ("__icu4x_bionic_general_category", general_category as usize as u64),
-        ("__icu4x_bionic_east_asian_width", east_asian_width as usize as u64),
-        ("__icu4x_bionic_hangul_syllable_type", hangul_syllable_type as usize as u64),
-        ("__icu4x_bionic_is_alphabetic", is_alphabetic as usize as u64),
-        ("__icu4x_bionic_is_default_ignorable_code_point", is_default_ignorable as usize as u64),
+        (
+            "__icu4x_bionic_general_category",
+            general_category as usize as u64,
+        ),
+        (
+            "__icu4x_bionic_east_asian_width",
+            east_asian_width as usize as u64,
+        ),
+        (
+            "__icu4x_bionic_hangul_syllable_type",
+            hangul_syllable_type as usize as u64,
+        ),
+        (
+            "__icu4x_bionic_is_alphabetic",
+            is_alphabetic as usize as u64,
+        ),
+        (
+            "__icu4x_bionic_is_default_ignorable_code_point",
+            is_default_ignorable as usize as u64,
+        ),
         ("__icu4x_bionic_is_lowercase", is_lowercase as usize as u64),
         ("__icu4x_bionic_is_alnum", is_alnum as usize as u64),
         ("__icu4x_bionic_is_blank", is_blank as usize as u64),
         ("__icu4x_bionic_is_graph", is_graph as usize as u64),
         ("__icu4x_bionic_is_print", is_print as usize as u64),
         ("__icu4x_bionic_is_xdigit", is_xdigit as usize as u64),
-        ("__icu4x_bionic_is_white_space", is_white_space as usize as u64),
+        (
+            "__icu4x_bionic_is_white_space",
+            is_white_space as usize as u64,
+        ),
         ("__icu4x_bionic_is_uppercase", is_uppercase as usize as u64),
         ("__icu4x_bionic_to_upper", to_upper as usize as u64),
         ("__icu4x_bionic_to_lower", to_lower as usize as u64),

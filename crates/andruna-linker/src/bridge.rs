@@ -113,7 +113,8 @@ impl Bridge {
         // SAFETY: a bridge function; the arguments live across the call.
         let f: TlsExeFn = unsafe { core::mem::transmute(self.tls_exe) };
         let id = f(
-            seg.as_ref().map_or(core::ptr::null(), |s| s as *const Segment),
+            seg.as_ref()
+                .map_or(core::ptr::null(), |s| s as *const Segment),
             name.as_ptr(),
             &mut off,
         );
