@@ -345,7 +345,9 @@ patcher source in dex2oat (S1 round 5), and lx's arm64 signal frames.
 - The boot jars and test dex files were the S1 build's outputs at the same
   tag (`spikes/s1/java/build_boot.py`), not rebuilt; the boot class path
   build still lives under `spikes/`.
-- ICU time zone data (`/apex/com.android.tzdata`) is missing (ART logs it);
-  dex files in the jars are not 4-byte aligned, so ART extracts them.
+- ICU time zone data (`/apex/com.android.tzdata`) was missing (ART logged
+  it); since the libcore tests' round 2 it is staged in the ART root
+  (ADR 0021). Dex files in the jars are not 4-byte aligned, so ART extracts
+  them.
 - libunwindstack is a stand-in; writable shared file mappings are copies
   written back on `msync`, `munmap` and exit.

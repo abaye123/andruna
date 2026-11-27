@@ -46,6 +46,8 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# The scripts live in the source tree; keep it free of bytecode caches.
+sys.dont_write_bytecode = True
 sys.path.insert(0, HERE)
 import build_boot as bb  # noqa: E402
 
@@ -299,7 +301,16 @@ def build_conscrypt():
     srcs = []
     for d in ("repackaged/common/src/main/java", "repackaged/platform/src/main/java",
               "publicapi/src/main/java"):
-        srcs += bb.glob_java(os.path.join(CONSCRYPT, *d.split("/")))
+        root = os.path.join(CONSCRYPT, *d.split("/"))
+        for p in bb.glob_java(root):
+            with open(p, encoding="utf-8") as f:
+                text = f.read()
+            if FB_FROM in text:
+                # The jarjar rule applies to Conscrypt's own references too.
+                write_text(os.path.join(gen, os.path.relpath(p, root)),
+                           text.replace(FB_FROM, FB_TO))
+            else:
+                srcs.append(p)
     srcs += bb.glob_java(gen)
     log(f"sources: conscrypt {len(srcs)}")
     cj = compile_library("conscrypt", srcs)

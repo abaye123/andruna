@@ -502,7 +502,9 @@ mod tests {
             boot_classpath(),
             "/apex/com.android.art/javalib/core-oj.jar:\
              /apex/com.android.art/javalib/core-libart.jar:\
-             /apex/com.android.art/javalib/core-icu4j.jar:             /apex/com.android.art/javalib/bouncycastle.jar:             /apex/com.android.art/javalib/conscrypt.jar"
+             /apex/com.android.art/javalib/core-icu4j.jar:\
+             /apex/com.android.art/javalib/bouncycastle.jar:\
+             /apex/com.android.art/javalib/conscrypt.jar"
         );
     }
 }

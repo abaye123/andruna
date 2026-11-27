@@ -451,6 +451,7 @@ def main(argv):
     else:
         jars = build_boot()
         # bouncycastle.jar and conscrypt.jar (the security providers).
+        sys.dont_write_bytecode = True
         import build_security
         build_security.main()
     build_tests(jars)

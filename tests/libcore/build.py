@@ -71,8 +71,10 @@ SOURCE_PATH = [
 ]
 
 # Directories whose non-Java files are test resources (as core-tests'
-# java_resource_dirs).
+# java_resource_dirs; harmony-tests holds serialization resources luni's
+# tests read).
 RESOURCE_DIRS = [
+    "harmony-tests/src/test/resources",
     "luni/src/test/java",
     "luni/src/test/resources",
     "support/src/test/java",

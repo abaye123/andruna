@@ -9,271 +9,16 @@
 
 # Generated from the andruna-app runs (int and jit) of 2026-11-27 with
 # tests/libcore/expect.py, then reviewed: categories and reasons are
-# docs/plan/phase1/libcore-tests.md. The S1 runner has no expectations here.
+# docs/plan/phase1/libcore-tests.md. Updated after the second round
+# (Conscrypt, Bouncy Castle, NativeBN and time zone data): the lines of tests
+# that pass now are removed, and failures that the missing providers hid are
+# listed under their own causes. The S1 runner has no expectations here.
 
-# --- bootclasspath (198) -----------------------------------------------
-libcore.java.io.FilterInputStreamNullSourceTest#testDigestInputStream | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.io.ObjectOutputStreamTest#testCloseInWriteObject | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_current(class_libcore.java.io.ObjectStreamClassSuidTest$BaseWithStaticInitializer,_1857698805282079740,_1857698805282079740)_[0] | bootclasspath | fail: java.lang.IllegalStateException: java.lang.reflect.InvocationTargetException @ libcore.java.io.ObjectStreamClassSuidTest.checkSerialVersionUID(ObjectStreamClassSuidTest.java:148) /
-libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_current(class_libcore.java.io.ObjectStreamClassSuidTest$BaseWithoutStaticInitializer,_-4805670618654058372,_-4805670618654058372)_[1] | bootclasspath | fail: java.lang.IllegalStateException: java.lang.reflect.InvocationTargetException @ libcore.java.io.ObjectStreamClassSuidTest.checkSerialVersionUID(ObjectStreamClassSuidTest.java:148) /
-libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_current(class_libcore.java.io.ObjectStreamClassSuidTest$InheritStaticInitializer,_509356435664048990,_-6712883765570708525)_[4] | bootclasspath | fail: java.lang.IllegalStateException: java.lang.reflect.InvocationTargetException @ libcore.java.io.ObjectStreamClassSuidTest.checkSerialVersionUID(ObjectStreamClassSuidTest.java:148) /
-libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_current(class_libcore.java.io.ObjectStreamClassSuidTest$WithStaticInitializer,_8758222524306909802,_8758222524306909802)_[2] | bootclasspath | fail: java.lang.IllegalStateException: java.lang.reflect.InvocationTargetException @ libcore.java.io.ObjectStreamClassSuidTest.checkSerialVersionUID(ObjectStreamClassSuidTest.java:148) /
-libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_current(class_libcore.java.io.ObjectStreamClassSuidTest$WithoutStaticInitializer,_-6923417559496792279,_-6923417559496792279)_[3] | bootclasspath | fail: java.lang.IllegalStateException: java.lang.reflect.InvocationTargetException @ libcore.java.io.ObjectStreamClassSuidTest.checkSerialVersionUID(ObjectStreamClassSuidTest.java:148) /
-libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_targetSdkVersion_23(class_libcore.java.io.ObjectStreamClassSuidTest$BaseWithStaticInitializer,_1857698805282079740,_1857698805282079740)_[0] | bootclasspath | fail: java.lang.IllegalStateException: java.lang.reflect.InvocationTargetException @ libcore.java.io.ObjectStreamClassSuidTest.checkSerialVersionUID(ObjectStreamClassSuidTest.java:148) /
-libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_targetSdkVersion_23(class_libcore.java.io.ObjectStreamClassSuidTest$BaseWithoutStaticInitializer,_-4805670618654058372,_-4805670618654058372)_[1] | bootclasspath | fail: java.lang.IllegalStateException: java.lang.reflect.InvocationTargetException @ libcore.java.io.ObjectStreamClassSuidTest.checkSerialVersionUID(ObjectStreamClassSuidTest.java:148) /
-libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_targetSdkVersion_23(class_libcore.java.io.ObjectStreamClassSuidTest$InheritStaticInitializer,_509356435664048990,_-6712883765570708525)_[4] | bootclasspath | fail: java.lang.IllegalStateException: java.lang.reflect.InvocationTargetException @ libcore.java.io.ObjectStreamClassSuidTest.checkSerialVersionUID(ObjectStreamClassSuidTest.java:148) /
-libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_targetSdkVersion_23(class_libcore.java.io.ObjectStreamClassSuidTest$WithStaticInitializer,_8758222524306909802,_8758222524306909802)_[2] | bootclasspath | fail: java.lang.IllegalStateException: java.lang.reflect.InvocationTargetException @ libcore.java.io.ObjectStreamClassSuidTest.checkSerialVersionUID(ObjectStreamClassSuidTest.java:148) /
-libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_targetSdkVersion_23(class_libcore.java.io.ObjectStreamClassSuidTest$WithoutStaticInitializer,_-6923417559496792279,_-6923417559496792279)_[3] | bootclasspath | fail: java.lang.IllegalStateException: java.lang.reflect.InvocationTargetException @ libcore.java.io.ObjectStreamClassSuidTest.checkSerialVersionUID(ObjectStreamClassSuidTest.java:148) /
-libcore.java.io.OldAndroidSerializationTest#testSerialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.io.OldObjectOutputStreamTest#test_putFields | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.io.SerializationTest#testDeserializeProxyWasInterface | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.io.SerializationTest#testDeserializeStaticInitializerIsRunEventually | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.io.SerializationTest#testMissingSerialVersionUid | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.io.SerializationTest#testSerializeUnserializableField | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.io.UncheckedIOExceptionTest#testSerializationSelf | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.lang.LambdaImplementationTest#testArgumentCapturingLambda | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.lang.LambdaImplementationTest#testBadSerializableLambda | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.lang.LambdaImplementationTest#testInstanceMethodReferenceLambda | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.lang.LambdaImplementationTest#testMultipleInterfaceLambda | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.lang.LambdaImplementationTest#testNonCapturingLambda | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.lang.LambdaImplementationTest#testObjectMethodReferenceLambda | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.lang.LambdaImplementationTest#testSerializableLambda_withState | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.lang.LambdaImplementationTest#testSerializableLambda_withoutState | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.lang.LambdaImplementationTest#testStaticMethodReferenceLambda | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.lang.ThrowableTest#testCauseSerialization | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.lang.ThrowableTest#testDisableSuppressionSerialization | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.lang.ThrowableTest#testEnableSuppressionSerialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.lang.ThrowableTest#testSuppressedSerialization | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.lang.ThrowableTest#testThrowableSubclassSerialVersionUIDComputation_target23 | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.nio.file.AccessDeniedExceptionTest#test_serialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.nio.file.AtomicMoveNotSupportedExceptionTest#test_serialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_getFileAttributeView | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_getFileAttributeView_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_getFileStore | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_getPath | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_getScheme | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_installedProviders | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_isHidden | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_isHidden_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_isSameFile | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_isSameFile_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_move | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_move_CopyOption | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_move_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_move_directory | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_move_directory_DirectoryNotEmptyException | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_NoSuchFileException([APPEND])_[4] | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_NoSuchFileException([READ,_CREATE])_[5] | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_NoSuchFileException([READ,_CREATE])_[7] | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_NoSuchFileException([READ])_[1] | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_NoSuchFileException([TRUNCATE_EXISTING,_CREATE])_[6] | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_NoSuchFileException([TRUNCATE_EXISTING])_[3] | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_NoSuchFileException([WRITE])_[2] | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_NoSuchFileException([])_[0] | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_withFileAttributes | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileSystem$URI$Map | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_probeContentType_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_readAttributes | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_readAttributes_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_readSymbolicLink | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_readSymbolicLink_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProvider2Test#test_setAttribute | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_copy | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_copy_CopyOption | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_copy_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_copy_directory | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_createDirectory | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_createDirectory$String$FileAttr | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_createDirectory$String$FileAttr_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_createDirectory_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_createSymbolicLink | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_createSymbolicLink$Path$Attr | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_createSymbolicLink$Path$Attr_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_createSymbolicLink_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_delete | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_deleteIfExist | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_deleteIfExist_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_delete_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newByteChannel | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newByteChannel_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newByteChannel_openOption_WRITE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newByteChannel_openOption_WRITE_READ | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newDirectoryStream$Filter_Exception | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newDirectoryStream$Filter_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newDirectoryStream$Path$Filter | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newInputStream | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newInputStream_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newInputStream_openOption | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newInputStream_twice | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newOutputStream | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newOutputStream_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newOutputStream_openOption_APPEND | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newOutputStream_openOption_CREATE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newOutputStream_openOption_CREATE_NEW | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newOutputStream_openOption_READ | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newOutputStream_openOption_SYNC | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newOutputStream_openOption_TRUNCATE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_newOutputStream_openOption_WRITE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#testIterator | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#testIterator_afterClose | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#testIterator_calledTwice | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#testUnixSecureDirectoryStreamHasFinalizer | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#test_deleteDirectory | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#test_deleteFile | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#test_getFileAttributeView | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#test_getFileAttributeView_Path | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#test_getFileAttributeView_Path_LinkOptions | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#test_move | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#test_newByteChannel | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#test_newByteChannel_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#test_newDirectoryStream | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#test_newDirectoryStream_Exception | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DefaultSecureDirectoryStreamTest#test_newDirectoryStream_symbolicLink | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.DirectoryNotEmptyExceptionTest#test_serialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.nio.file.FileAlreadyExistsExceptionTest#test_serialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.nio.file.FileSystemExceptionTest#test_serialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.nio.file.FileSystemLoopExceptionTest#test_serialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.nio.file.FileSystemsTest#test_getDefault | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.FileSystemsTest#test_getFileSystem | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.FileSystemsTest#test_newFileSystem$Path | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.FileSystemsTest#test_newFileSystem$Path$ClassLoader | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.FileSystemsTest#test_newFileSystem$Path$ClassLoader_customClassLoader | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.FileSystemsTest#test_newFileSystem$Path$Map | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.FileSystemsTest#test_newFileSystem$Path$Map$ClassLoader_customClassLoader | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.FileSystemsTest#test_newFileSystem$URI$Map | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.FileSystemsTest#test_newFileSystem$URI$Map$ClassLoader | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.FileSystemsTest#test_newFileSystem$URI$Map$ClassLoader_customClassLoader | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_compareTo | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_compareTo_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_endsWith$Path | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_endsWith$Path_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_endsWith$String | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_endsWith$String_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_equals | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_equals_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_getFileName | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_getFileSystem | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_getName | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_getNameCount | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_getParent | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_getRoot | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_get_URI | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_hashCode | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_isAbsolute | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_iterator | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_iterator_hasRoot | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_normalize | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_ofString | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind$WatchEvent_Modifier | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind$WatchEvent_Modifier_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind_Exception | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind_Exception_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_relativize | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_relativize_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_resolve$Path | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_resolve$Path_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_resolve$String | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_resolve$String_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_resolveSibling$Path | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_resolveSibling$String | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_resolveSibling$String_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_resolveSibling$String_Path | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_startsWith$Path | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_startsWith$Path_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_startsWith$String | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_startsWith$String_NPE | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_subPath | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_toAbsolutePath | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_toFile | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_toRealPath | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_toString | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.LinuxPathTest#test_toURI | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.NoSuchFileExceptionTest#test_serialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.nio.file.NotDirectoryExceptionTest#test_serialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.nio.file.NotLinkExceptionTest#test_serialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.nio.file.WatchServiceTest#test_EventMask | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.WatchServiceTest#test_cancel | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.WatchServiceTest#test_multipleKeys | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.WatchServiceTest#test_multipleServices | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.WatchServiceTest#test_removeTarget | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.WatchServiceTest#test_singleDirectory | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.nio.file.WatchServiceTest#test_singleFile | bootclasspath | FilesSetup cannot create its temporary directory (no SecureRandom provider); the NullPointerException comes from its tearDown
-libcore.java.text.AttributedCharacterIteratorAttributeTest#testSerializingSubclass | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.text.DateFormatSymbolsTest#testSerialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.util.EnumSetTest#testLargeEnumSetSerialization | bootclasspath | fail: java.lang.NoClassDefFoundError: sun.security.jca.Providers @ sun.security.jca.GetInstance.getInstance(GetInstance.java:156) / root cause java.lang.AssertionError: Unable to configu
-libcore.java.util.EnumSetTest#testSmallEnumSetSerialization | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.util.InvalidPropertiesFormatExceptionTest#testSerialize_notSupported | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.util.PropertiesTest#storeToXml_withCharset_andBack | bootclasspath | no XML transformer (Xalan is not on the boot class path)
-libcore.java.util.UUIDTest#testCurrentImplementation_invalidInputs | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
-libcore.java.util.UUIDTest#testJava8Implementation_allowsLongInputs | bootclasspath | fail: java.lang.NoClassDefFoundError: java.util.UUID$Holder @ java.util.UUID.randomUUID(UUID.java:153) / root cause java.lang.AssertionError: Unable to configure default providers
+# --- art (2) -----------------------------------------------------------
+libcore.java.math.BigIntegerTest#test_Constructor_IILjava_util_Random | art | thousands of NativeBN calls through the boot image's compiled JNI stubs hit the null Thread* fault (finding 2): a crash, or a timeout with the JIT; passes with --no-boot-image
+libcore.java.math.BigIntegerTest#test_probablePrime | art | thousands of NativeBN calls through the boot image's compiled JNI stubs hit the null Thread* fault (finding 2): a crash, or a timeout with the JIT; passes with --no-boot-image
 
-# --- tzdata (60) ------------------------------------------------------
-libcore.java.text.DateFormatTest#testGetTimeInstance_withLocaleExtension | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testDstZoneNameWithNonDstTimestamp | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testDstZoneWithNonDstTimestampForNonHourDstZone | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testFiveCount_Z | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testFormatUtcLong | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testFormatUtcShort | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testFormattingUncommonTimeZoneAbbreviations | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testNonDstZoneNameWithDstTimestamp | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testNonDstZoneWithDstTimestampForNonHourDstZone | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testParseArabic | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testParseMetazoneFallbacksToLocale | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testParseTimezoneOnly | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testParseUtcLong | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testParseUtcShort | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testParsingUncommonTimeZoneAbbreviations | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testTimeZoneFormatting | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#testTimeZoneNotChangedByParse | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.text.SimpleDateFormatTest#test_59383 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#testAdd24HoursOverDstForwardAdds24Hours | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#testAddOneDayAndOneDayOver30MinuteDstForwardAdds48Hours | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#testAddOneDayOverDstBackAdds25HoursAt0000 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#testAddOneDayOverDstBackAdds25HoursAt0100 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#testAddOneDayOverDstForwardAdds23HoursAt0100 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#testAddOneDayOverDstForwardAdds24HoursAt0000 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#testAddTwoDaysOver30MinuteDstForwardAdds47AndAHalfHours | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#testAddTwoHalfDaysOverDstForwardAdds23HoursAt0100 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#testCalendarSerialization | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#testGetInstance_withTzExtension | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#testToInstant | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#test_clear_45877_afternoon | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.CalendarTest#test_clear_45877_morning | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.DateTest#test_toGMTString_nonUs | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.DateTest#test_toGMTString_us | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.DateTest#test_toString_nonUs | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.DateTest#test_toString_us | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.GregorianCalendarTest#test_computeTime_enteringDst | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.GregorianCalendarTest#test_computeTime_enteringDst_DelegatingTimeZone_LosAngeles_2014 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.GregorianCalendarTest#test_computeTime_enteringDst_TimeZone_LosAngeles_2014 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.GregorianCalendarTest#test_fieldsAffectedByGregorianCutOver | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.GregorianCalendarTest#test_fromZonedDateTime | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.GregorianCalendarTest#test_toZonedDateTime | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.OldAndroidLocaleTest#testResourceBundles | tzdata | fail: junit.framework.ComparisonFailure: expected:<[Central European Standard Time]> but was:<[GMT+00:00]> @ junit.framework.Assert.assertEquals(Assert.java:100)
-libcore.java.util.OldGregorianCalendarTest#test_computeFields | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.OldTimeZoneTest#test_getDisplayName | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.OldTimeZoneTest#test_getDisplayNameLjava_util_Locale | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.OldTimeZoneTest#test_getDisplayNameZI | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.OldTimeZoneTest#test_getDisplayNameZILjava_util_Locale | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.OldTimeZoneTest#test_getID | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.OldTimeZoneTest#test_hasSameRulesLjava_util_TimeZone | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.SimpleTimeZoneTest#testStandardNewYork2014 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.SimpleTimeZoneTest#testStandardParis2014 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.TimeZoneTest#testApia | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.TimeZoneTest#testGetDisplayNameShort_nonHourOffsets | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.TimeZoneTest#testHasSameRules | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.TimeZoneTest#testHelsinkiOverflow | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.TimeZoneTest#testOverflowing32BitUnixDates | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.TimeZoneTest#testPreHistoricInDaylightTime | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.TimeZoneTest#testPreHistoricInDaylightTime_old | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.TimeZoneTest#testPreHistoricOffsets | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.TimeZoneTest#test_getDSTSavings | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-
-# --- lx-syscall (27) --------------------------------------------------
+# --- lx-syscall (47) --------------------------------------------------
 libcore.java.io.ConsoleTest#testReadPassword | lx-syscall | tcgetattr on a non-terminal must fail with ENOTTY
 libcore.java.io.ConsoleTest#testReadPasswordWithPrompt | lx-syscall | tcgetattr on a non-terminal must fail with ENOTTY
 libcore.java.io.FileDescriptorTest#test_isSocket | lx-syscall | fail: java.io.FileNotFoundException: /dev/null: open failed: ENOENT (No such file or directory) @ libcore.io.IoBridge.open(IoBridge.java:574) / root cause android.system.ErrnoException:
@@ -284,15 +29,32 @@ libcore.java.io.InterruptedStreamTest#testInterruptReadablePipeChannel | lx-sysc
 libcore.java.io.InterruptedStreamTest#testInterruptReadableSocketChannel | lx-syscall | fail: java.net.SocketException: Function not implemented @ sun.nio.ch.Net.socket0(Native Method)
 libcore.java.io.InterruptedStreamTest#testInterruptWritablePipeChannel | lx-syscall | fail: java.io.IOException: Function not implemented @ sun.nio.ch.IOUtil.makePipe(Native Method)
 libcore.java.io.InterruptedStreamTest#testInterruptWritableSocketChannel | lx-syscall | fail: java.net.SocketException: Function not implemented @ sun.nio.ch.Net.socket0(Native Method)
-libcore.java.io.OldFileTest#test_deleteOnExit | environment | starts a child VM (fork/exec, not in phase 1): Cannot run program "dalvikvm": error=38, Function not implemented @ java.lang.ProcessBuilder.start(ProcessBuilder.java:1050) / root cause java.io.IOException:
 libcore.java.io.OldFilterInputStreamTest#test_available | lx-syscall | fail: java.io.IOException: Function not implemented @ java.io.FileInputStream.available0(Native Method)
 libcore.java.lang.OldSystemTest#test_currentTimeMillis | lx-syscall | System.currentTimeMillis() is 0: the wall clock (gettimeofday) reads the epoch
 libcore.java.lang.OldThreadTest#test_sleepJ | lx-syscall | measures Thread.sleep with System.currentTimeMillis(), which is 0 (wall clock reads the epoch)
 libcore.java.lang.OldThreadTest#test_sleepJI | lx-syscall | measures Thread.sleep with System.currentTimeMillis(), which is 0 (wall clock reads the epoch)
+libcore.java.nio.file.DefaultFileSystemProvider2Test#test_move_CopyOption | lx-syscall | setting file times (futimens or utimensat) fails with ENOSYS
+libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_withFileAttributes | lx-syscall | setting file times (futimens or utimensat) fails with ENOSYS
+libcore.java.nio.file.DefaultFileSystemProvider2Test#test_readAttributes | lx-syscall | setting file times (futimens or utimensat) fails with ENOSYS
+libcore.java.nio.file.DefaultFileSystemProviderTest#test_copy_CopyOption | lx-syscall | setting file times (futimens or utimensat) fails with ENOSYS
+libcore.java.nio.file.DefaultFileSystemProviderTest#test_createDirectory$String$FileAttr | lx-syscall | mkdir does not apply the requested mode (rwx------ reads back as rwxr-xr-x)
 libcore.java.nio.file.LinuxFileSystemTest#dataFilestore | lx-syscall | no FileStore: /proc/mounts lists no mount for / and /data
 libcore.java.nio.file.LinuxFileSystemTest#rootFilestore | lx-syscall | no FileStore: /proc/mounts lists no mount for / and /data
 libcore.java.nio.file.LinuxFileSystemTest#test_getFileStores | lx-syscall | no FileStore: /proc/mounts lists no mount for / and /data
 libcore.java.nio.file.LinuxFileSystemTest#test_newWatchService | lx-syscall | fail: java.io.IOException: Function not implemented @ sun.nio.fs.LinuxWatchService.<init>(LinuxWatchService.java:68)
+libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind$WatchEvent_Modifier | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind$WatchEvent_Modifier_NPE | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind_Exception | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind_Exception_NPE | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.LinuxPathTest#test_register$WatchService$WatchEvent_Kind_NPE | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.WatchServiceTest#test_EventMask | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.WatchServiceTest#test_cancel | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.WatchServiceTest#test_multipleKeys | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.WatchServiceTest#test_multipleServices | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.WatchServiceTest#test_removeTarget | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.WatchServiceTest#test_singleDirectory | lx-syscall | no inotify for WatchService (ENOSYS)
+libcore.java.nio.file.WatchServiceTest#test_singleFile | lx-syscall | no inotify for WatchService (ENOSYS)
 libcore.java.text.DecimalFormatTest#testLocaleGroupingSeparator | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the currency of de_AT is ATS
 libcore.java.text.NumberFormatTest#test_currencyFromLocale | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the locale's currency is the one of 1970 (FRF, ATS)
 libcore.java.text.NumberFormatTest#test_currencyWithPatternDigits | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the locale's currency is the one of 1970 (FRF, ATS)
@@ -301,18 +63,19 @@ libcore.java.text.OldNumberFormatTest#test_getCurrencyInstanceLjava_util_Locale 
 libcore.java.text.SimpleDateFormatTest#test2DigitYearStartIsCloned | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0) (two-digit year start)
 libcore.java.util.CurrencyTest#test_getSymbol_38622 | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the locale's currency is the one of 1970 (FRF, ATS)
 libcore.java.util.OldAndroidLocaleTest#testICULocales | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the currency of fr_FR is FRF
+libcore.java.util.TimeZoneTest#testDisplayNames | lx-syscall | probably the wall clock: it reads 1970 (System.currentTimeMillis() is 0), and the zone's rules of 1970 are used (zones without a metazone name then)
+libcore.java.util.TimeZoneTest#testDisplayNames_nonUS | lx-syscall | probably the wall clock: it reads 1970 (System.currentTimeMillis() is 0), and the zone's rules of 1970 are used (zones without a metazone name then)
+libcore.java.util.TimeZoneTest#test_useDaylightTime_Taiwan | lx-syscall | probably the wall clock: it reads 1970 (System.currentTimeMillis() is 0), and the zone's rules of 1970 are used (Taiwan had daylight saving time after 1970)
 
-# --- icu-data (3) ----------------------------------------------------
+# --- bootclasspath (1) ------------------------------------------------
+libcore.java.util.PropertiesTest#storeToXml_withCharset_andBack | bootclasspath | no XML transformer (Xalan is not on the boot class path)
+
+# --- icu-data (2) ------------------------------------------------------
 libcore.java.text.DateFormatSymbolsTest#test_getInstance_unknown_locale | icu-data | fail: junit.framework.AssertionFailedError: expected:<java.text.DateFormatSymbols@16886a77> but was:<java.text.DateFormatSymbols@17bff917> @ junit.framework.Assert.fail(Assert.java:57)
 libcore.java.text.DecimalFormatSymbolsTest#test_getInstance_unknown_or_invalid_locale | icu-data | fail: junit.framework.AssertionFailedError: expected:<java.text.DecimalFormatSymbols@9c0a6846> but was:<java.text.DecimalFormatSymbols@a2dd4e46> @ junit.framework.Assert.fail(Assert.java
-libcore.java.util.LocaleTest#test_SerializationBug_26387905 | icu-data | fail: java.lang.NullPointerException: Attempt to invoke virtual method 'java.io.InputStream java.net.URL.openStream()' on a null object reference @ libcore.java.util.LocaleTest.test_Seri
 
-# --- missing-native (3) ----------------------------------------------
-libcore.java.math.BigIntegerTest#test_Constructor_IILjava_util_Random | missing-native | fail: java.lang.UnsatisfiedLinkError: No implementation found for void libcore.math.NativeBN.BN_free(long) (tried Java_libcore_math_NativeBN_BN_1free and Java_libcore_math_NativeBN_BN_1f
-libcore.java.math.BigIntegerTest#test_probablePrime | missing-native | fail: java.lang.UnsatisfiedLinkError: No implementation found for void libcore.math.NativeBN.BN_free(long) (tried Java_libcore_math_NativeBN_BN_1free and Java_libcore_math_NativeBN_BN_1f
-libcore.java.math.OldBigDecimalArithmeticTest#testPowMathContextNonTrivial | missing-native | fail: java.lang.UnsatisfiedLinkError: No implementation found for void libcore.math.NativeBN.BN_free(long) (tried Java_libcore_math_NativeBN_BN_1free and Java_libcore_math_NativeBN_BN_1f
-
-# --- environment (7) -------------------------------------------------
+# --- environment (8) --------------------------------------------------
+libcore.java.io.OldFileTest#test_deleteOnExit | environment | starts a child VM (fork/exec, not in phase 1): Cannot run program "dalvikvm": error=38, Function not implemented @ java.lang.ProcessBuilder.start(ProcessBuilder.java:1050) / root cause java.io.IOException:
 libcore.java.lang.OldRuntimeTest#test_execLjava_lang_String | environment | Runtime.exec starts a child process (fork/exec), not provided in phase 1
 libcore.java.lang.OldRuntimeTest#test_execLjava_lang_StringArray | environment | Runtime.exec starts a child process (fork/exec), not provided in phase 1
 libcore.java.lang.OldRuntimeTest#test_execLjava_lang_StringArrayLjava_lang_StringArray | environment | Runtime.exec starts a child process (fork/exec), not provided in phase 1
@@ -321,18 +84,24 @@ libcore.java.lang.OldRuntimeTest#test_execLjava_lang_StringLjava_lang_StringArra
 libcore.java.lang.OldRuntimeTest#test_execLjava_lang_StringLjava_lang_StringArrayLjava_io_File | environment | Runtime.exec starts a child process (fork/exec), not provided in phase 1
 libcore.java.lang.OldSystemTest#test_load | environment | ClassLoader.findLibrary("log") finds no liblog.so on java.library.path
 
-# --- harness (3) -----------------------------------------------------
+# --- harness (5) ------------------------------------------------------
 junit.framework.TestSuite$1#warning | harness | LocaleInternalsTest has no test methods JUnit 3 accepts in this build
 libcore.java.lang.OldStackTraceElementTest#initializationError | harness | fail: java.lang.UnsatisfiedLinkError: dlopen failed: library "libjavacoretests.so" not found @ java.lang.Runtime.loadLibrary0(Runtime.java:1111)
 libcore.java.nio.BufferTest#initializationError | harness | fail: java.lang.UnsatisfiedLinkError: dlopen failed: library "libjavacoretests.so" not found @ java.lang.Runtime.loadLibrary0(Runtime.java:1111)
+libcore.java.nio.file.FileSystemsTest#test_newFileSystem$Path$ClassLoader_customClassLoader | harness | the test resource filesystemstest.jar is not built into the test jar
+libcore.java.nio.file.FileSystemsTest#test_newFileSystem$URI$Map$ClassLoader_customClassLoader | harness | the test resource filesystemstest.jar is not built into the test jar
 
-# --- triage (13) ------------------------------------------------------
+# --- triage (17) ------------------------------------------------------
+libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_targetSdkVersion_23(class_libcore.java.io.ObjectStreamClassSuidTest$InheritStaticInitializer,_509356435664048990,_-6712883765570708525)_[4] | triage | the SUID computed for targetSdkVersion 23 is the current one (was hidden behind the missing MessageDigest)
 libcore.java.io.OldAndroidFileTest#testFile | triage | fail: java.lang.IllegalArgumentException: Prefix string too short @ java.io.File.createTempFile(File.java:1996)
 libcore.java.io.OldFileWriterTest#test_handleEarlyEOFChar_2 | triage | fail: junit.framework.ComparisonFailure: expected:<...AAAAAAAAAAAAAAAAAAAA[BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
 libcore.java.lang.OldThreadTest#test_getState | triage | hangs (no result for 120 s): Thread.getState of a sleeping or waiting thread
+libcore.java.lang.OldThreadTest#test_yield | triage | timing: compares two counter threads after Thread.sleep(1100); failed once in 4 runs, and again in the JIT run of round 2
 libcore.java.lang.RecordTest#gettingRecordFieldOffset_shouldThrow_afterBaklava | triage | fail: java.lang.AssertionError: expected java.lang.UnsupportedOperationException to be thrown, but nothing was thrown @ org.junit.Assert.assertThrows(Assert.java:1028)
 libcore.java.lang.RecordTest#testReflection | triage | fail: java.lang.AssertionError @ org.junit.Assert.fail(Assert.java:87)
 libcore.java.lang.SystemTest#testSystemProperties_mutable | triage | fail: java.lang.NullPointerException @ java.util.concurrent.ConcurrentHashMap.putVal(ConcurrentHashMap.java:1023)
+libcore.java.nio.file.LinuxPathTest#test_toRealPath | triage | toRealPath with '..' and a symbolic link fails an assertion (was hidden behind the temporary directory failure)
+libcore.java.nio.file.LinuxPathTest#test_toURI | triage | toURI of /dir/.. ends with '/': the path resolves as a directory although /dir does not exist (was hidden behind the temporary directory failure)
 libcore.java.text.DecimalFormatTest#test_setMaximumIntegerDigits | triage | fail: junit.framework.AssertionFailedError: expected:<309> but was:<400> @ junit.framework.Assert.fail(Assert.java:57)
 libcore.java.text.OldDecimalFormatSymbolsTest#test_RIHarmony_compatible | triage | fail: junit.framework.AssertionFailedError: Failed to load /serialization/java/text/DecimalFormatSymbols.ser @ junit.framework.Assert.fail(Assert.java:57)
 libcore.java.util.ListOfTest#empty | triage | List.of().contains(null) did not throw NullPointerException here; a direct check does throw
@@ -340,4 +109,3 @@ libcore.java.util.MapOfTest#empty[OF] | triage | Map.of(): a null key or value c
 libcore.java.util.MapOfTest#manyEntries[OF] | triage | Map.of(): a null key or value check did not throw NullPointerException here
 libcore.java.util.SetOfTest#empty | triage | Set.of().contains(null) did not throw NullPointerException here
 libcore.java.util.concurrent.ForkJoinPoolTest#testGetRunningThreadCount | triage | timing: a worker still counted as running (failed once in 4 runs)
-libcore.java.lang.OldThreadTest#test_yield | triage | timing: compares two counter threads after Thread.sleep(1100); failed once in 4 runs
