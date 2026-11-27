@@ -33,7 +33,8 @@
 //!   against the Windows commit limit at once (Linux overcommits).
 //! - `madvise(MADV_DONTNEED)` decommits and recommits the pages. Another
 //!   thread touching them during that window takes an access violation; the
-//!   signal layer must retry such faults (see [`crate::signal`]).
+//!   signal layer waits for the window to close and retries such faults
+//!   ([`DISCARDS_ACTIVE`], [`DISCARDS_DONE`], `crate::signal`).
 //! - File mappings are private memory filled from the file when the
 //!   mapping is made (`pread`). For `MAP_PRIVATE` this is Linux behavior,
 //!   except that later changes to the file are never seen (Linux leaves
@@ -49,6 +50,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use windows::Win32::System::Memory::{
     MEM_COMMIT, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_NOACCESS, PAGE_PROTECTION_FLAGS,
@@ -162,6 +164,28 @@ pub struct AddressSpace {
 }
 
 static SPACE: Mutex<AddressSpace> = Mutex::new(AddressSpace::new());
+
+/// `MADV_DONTNEED` windows (decommitted, not yet recommitted) open now.
+pub(crate) static DISCARDS_ACTIVE: AtomicU32 = AtomicU32::new(0);
+/// `MADV_DONTNEED` windows closed so far.
+pub(crate) static DISCARDS_DONE: AtomicU64 = AtomicU64::new(0);
+
+/// Marks a decommit-recommit window for the signal layer's fault retry.
+struct DiscardWindow;
+
+impl DiscardWindow {
+    fn open() -> Self {
+        DISCARDS_ACTIVE.fetch_add(1, Ordering::SeqCst);
+        DiscardWindow
+    }
+}
+
+impl Drop for DiscardWindow {
+    fn drop(&mut self) {
+        DISCARDS_DONE.fetch_add(1, Ordering::SeqCst);
+        DISCARDS_ACTIVE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// `mmap` on the process address space.
 pub fn mmap(
@@ -603,6 +627,7 @@ impl AddressSpace {
                 if !committed {
                     continue;
                 }
+                let _window = DiscardWindow::open();
                 os::decommit(start, end - start)?;
                 if prot == PROT_NONE {
                     // Stays reserved; the next mprotect commits zero pages.

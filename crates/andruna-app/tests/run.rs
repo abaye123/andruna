@@ -257,12 +257,9 @@ fn jni_stub_slow_paths_with_the_boot_image() {
     jni_stress("jni-aot", &["--mode", "jit"]);
 }
 
-/// Without the boot image every method, JNI stubs included, is
-/// JIT-compiled at its first call.
+/// Without the boot image the JIT compiles the stubs of the native methods
+/// once they are hot (the default threshold, as in the libcore runs).
 #[test]
 fn jni_stub_slow_paths_with_jit_compiled_stubs() {
-    jni_stress(
-        "jni-jit",
-        &["--mode", "jit", "--no-boot-image", "-Xjitthreshold:0"],
-    );
+    jni_stress("jni-jit", &["--mode", "jit", "--no-boot-image"]);
 }

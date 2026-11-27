@@ -4,6 +4,9 @@
 // threads or runs a checkpoint on them, so the compiled JNI stubs regularly
 // find a thread flag set and take their slow paths (artJniMethodStart before
 // the native call, artJniMethodEnd after it), which need the Thread*.
+// stat() is slow enough (a file system call through andruna-lx) that a GC
+// often suspends the thread while it is in native code.
+import android.system.ErrnoException;
 import android.system.Os;
 
 public class JniStress {
@@ -26,6 +29,14 @@ public class JniStress {
                         }
                         Os.getuid();
                         c += 2;
+                        if (k % 10 == 0) {
+                            try {
+                                Os.stat("/");
+                            } catch (ErrnoException e) {
+                                throw new AssertionError(e);
+                            }
+                            c++;
+                        }
                     }
                     // Some garbage, so that the GC has work to do.
                     Object[] junk = new Object[64];
@@ -50,11 +61,18 @@ public class JniStress {
         }
         stop = true;
         long total = 0;
+        boolean ok = true;
         for (int i = 0; i < threads; i++) {
             workers[i].join();
             total += calls[i];
+            // A worker that ended with an exception never stored its count.
+            ok &= calls[i] > 0;
         }
         System.out.println("jni stress: " + threads + " threads, " + total + " native calls, "
                 + gcs + " GCs, " + walks + " stack walks");
+        if (!ok) {
+            System.out.println("jni stress: a worker thread failed");
+            System.exit(1);
+        }
     }
 }
