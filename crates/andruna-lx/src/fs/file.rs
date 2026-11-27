@@ -33,6 +33,11 @@ impl RegularFile {
         Self::with_path(handle, Vec::new())
     }
 
+    /// The Windows handle, for calls that act on the file itself.
+    pub fn raw_handle(&self) -> windows::Win32::Foundation::HANDLE {
+        self.handle.raw()
+    }
+
     pub fn with_path(handle: OwnedHandle, path: Vec<u8>) -> Self {
         Self {
             handle,
@@ -134,8 +139,29 @@ impl FileOps for RegularFile {
         true
     }
 
+    /// The path the file was opened by; `" (deleted)"` is appended, as on
+    /// Linux, once that name no longer refers to this file.
     fn path(&self) -> Option<Vec<u8>> {
-        (!self.path.is_empty()).then(|| self.path.clone())
+        if self.path.is_empty() {
+            return None;
+        }
+        let mut p = self.path.clone();
+        let same = match (
+            os::info(self.handle.raw()),
+            super::fstatat(
+                crate::linux::fcntl::AT_FDCWD,
+                &self.path,
+                AT_SYMLINK_NOFOLLOW,
+            ),
+        ) {
+            (Ok(mine), Ok(st)) => st.ino == mine.file_id && st.dev == mine.volume,
+            (Ok(_), Err(_)) => false,
+            _ => true,
+        };
+        if !same {
+            p.extend_from_slice(b" (deleted)");
+        }
+        Some(p)
     }
 }
 
@@ -171,6 +197,11 @@ pub const DT_REG: u8 = 8;
 pub const DT_LNK: u8 = 10;
 
 impl Directory {
+    /// The Windows handle, for calls that act on the directory itself.
+    pub fn raw_handle(&self) -> windows::Win32::Foundation::HANDLE {
+        self.handle.raw()
+    }
+
     pub fn new(handle: OwnedHandle, path: Vec<u8>) -> Self {
         Self {
             handle,
@@ -319,6 +350,17 @@ fn filetime_to_timespec(ft: i64) -> Timespec {
 pub fn stat_from_info(info: &os::Info) -> StatData {
     let mode = if is_symlink_tag(info.reparse_tag) {
         S_IFLNK | 0o777
+    } else if let Some(m) = info.mode {
+        // The stored mode ([`super::modes`]): its permission bits, and its
+        // type for special files kept as regular files.
+        let kind = if info.directory {
+            S_IFDIR
+        } else if matches!(m & S_IFMT, S_IFSOCK | S_IFIFO) {
+            m & S_IFMT
+        } else {
+            S_IFREG
+        };
+        kind | (m & 0o7777)
     } else if info.directory {
         S_IFDIR | 0o755
     } else if info.attributes & ATTR_READONLY != 0 {

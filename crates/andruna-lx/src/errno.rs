@@ -57,6 +57,20 @@ impl Errno {
     pub const EOVERFLOW: Self = Self(EOVERFLOW);
     pub const EOPNOTSUPP: Self = Self(EOPNOTSUPP);
     pub const ETIMEDOUT: Self = Self(ETIMEDOUT);
+    pub const ENOTSOCK: Self = Self(ENOTSOCK);
+    pub const EDESTADDRREQ: Self = Self(EDESTADDRREQ);
+    pub const EMSGSIZE: Self = Self(EMSGSIZE);
+    pub const EPROTOTYPE: Self = Self(EPROTOTYPE);
+    pub const ENOPROTOOPT: Self = Self(ENOPROTOOPT);
+    pub const EPROTONOSUPPORT: Self = Self(EPROTONOSUPPORT);
+    pub const ESOCKTNOSUPPORT: Self = Self(ESOCKTNOSUPPORT);
+    pub const EAFNOSUPPORT: Self = Self(EAFNOSUPPORT);
+    pub const EADDRINUSE: Self = Self(EADDRINUSE);
+    pub const ECONNRESET: Self = Self(ECONNRESET);
+    pub const EISCONN: Self = Self(EISCONN);
+    pub const ENOTCONN: Self = Self(ENOTCONN);
+    pub const ECONNREFUSED: Self = Self(ECONNREFUSED);
+    pub const ENOTTY: Self = Self(ENOTTY);
 
     /// Maps a Win32 error code (`GetLastError`) to the closest Linux error.
     ///

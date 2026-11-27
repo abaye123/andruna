@@ -56,6 +56,13 @@ pub fn linux_tid(w: u32) -> u32 {
     }
 }
 
+/// `getppid`: the process that started this one (a Windows process id),
+/// or 0 once it has ended, as Linux reports for a parent outside the
+/// process's view.
+pub fn getppid() -> i32 {
+    thread::parent_process_id() as i32
+}
+
 pub fn sched_yield() {
     thread::yield_now();
 }
@@ -154,6 +161,21 @@ pub unsafe fn prctl(
     }
 }
 
+/// The main thread's stack: the address of the initial block (argc,
+/// argv, envp, auxv) and the stack's size; `(0, 0)` until the host sets it.
+static MAIN_STACK: RwLock<(u64, u64)> = RwLock::new((0, 0));
+
+/// Records the guest main thread's stack (`startstack` in
+/// `/proc/self/stat`, `RLIMIT_STACK`).
+pub fn set_main_stack(start: u64, size: u64) {
+    *crate::util::write(&MAIN_STACK) = (start, size);
+}
+
+/// The main thread's initial stack block and stack size.
+pub fn main_stack() -> (u64, u64) {
+    *crate::util::read(&MAIN_STACK)
+}
+
 /// The program: its Windows path and its arguments.
 static PROGRAM: RwLock<Option<(std::path::PathBuf, Vec<String>)>> = RwLock::new(None);
 
@@ -211,5 +233,17 @@ mod tests {
         assert_ne!(main_tid, other);
         assert!(main_tid > 0 && other > 0);
         sched_yield();
+    }
+
+    #[test]
+    fn parent_and_its_cpu_clock() {
+        // The test runner started this process and is still running.
+        let ppid = getppid();
+        assert!(ppid > 0);
+        let clk =
+            crate::linux::time::make_process_cpuclock(ppid, crate::linux::time::CPUCLOCK_SCHED);
+        assert!(crate::time::clock_gettime(clk).is_ok());
+        let none = crate::linux::time::make_process_cpuclock(0x7fff_fff0, 2);
+        assert!(crate::time::clock_gettime(none).is_err());
     }
 }

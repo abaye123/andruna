@@ -1,114 +1,19 @@
 //! A stand-in for logd's write socket while there is no log service.
 //!
 //! liblog sends each record as one datagram to the Unix socket
-//! `/dev/socket/logdw`. lx has no sockets yet, so the loader answers
-//! `socket(AF_UNIX, SOCK_DGRAM)` with a descriptor of its own
-//! ([`crate::interim`]); `connect` to `/dev/socket/logdw` succeeds on it, and
-//! every datagram written to it (`writev`, `write`, `sendmsg`) is written to
+//! `/dev/socket/logdw`. The loader receives the datagrams sent to that name
+//! in the process ([`install`]), and every one is written to
 //! the guest's standard error (descriptor 2) as `P/tag(tid): message`, for records of the main, system
 //! and crash buffers at or above `ANDRUNA_LOG_PRIORITY` (a letter of
 //! `VDIWEF` or a number; default `W`). Binary buffers (events, stats,
 //! security) are dropped. sysd's log service replaces this in phase 2.
 
-use std::collections::HashSet;
 use std::io::Write as _;
-use std::sync::Mutex;
 
-use andruna_lx::UserBuf;
-use andruna_lx::errno::SysResult;
-use andruna_lx::linux::errno::ENOTSOCK;
-
-const ECONNREFUSED: i32 = 111;
-use andruna_lx::fd::{FileOps, OpenFile};
-use andruna_lx::linux::stat::{S_IFSOCK, StatData};
-
-/// Descriptors that are logd sockets; true once connected.
-static SOCKETS: Mutex<Vec<(i32, bool)>> = Mutex::new(Vec::new());
-
-/// The logd socket file type (datagrams written with `write`).
-#[derive(Debug)]
-pub struct LogSocket;
-
-impl FileOps for LogSocket {
-    fn write(&self, _file: &OpenFile, buf: UserBuf) -> SysResult<usize> {
-        // SAFETY: the caller's buffer is readable for its length.
-        let b = unsafe { core::slice::from_raw_parts(buf.ptr(), buf.len()) };
-        record(b);
-        Ok(buf.len())
-    }
-
-    fn stat(&self) -> SysResult<StatData> {
-        Ok(StatData {
-            mode: S_IFSOCK | 0o777,
-            nlink: 1,
-            blksize: 4096,
-            ..Default::default()
-        })
-    }
-}
-
-/// Creates a logd socket descriptor.
-pub fn socket(cloexec: bool) -> i64 {
-    let f = OpenFile::new(Box::new(LogSocket), 2);
-    match andruna_lx::fd::FDS.insert(std::sync::Arc::new(f), cloexec, 0) {
-        Ok(fd) => {
-            let mut s = SOCKETS.lock().unwrap_or_else(|e| e.into_inner());
-            s.retain(|x| x.0 != fd);
-            s.push((fd, false));
-            i64::from(fd)
-        }
-        Err(e) => -i64::from(e.0),
-    }
-}
-
-pub fn is_socket(fd: i32) -> bool {
-    SOCKETS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .any(|x| x.0 == fd)
-}
-
-/// `connect`: only logd's write socket exists.
-pub fn connect(fd: i32, path: &[u8]) -> i64 {
-    let mut s = SOCKETS.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(e) = s.iter_mut().find(|x| x.0 == fd) else {
-        return -i64::from(ENOTSOCK);
-    };
-    if path == b"/dev/socket/logdw" {
-        e.1 = true;
-        0
-    } else {
-        -i64::from(ECONNREFUSED)
-    }
-}
-
-/// The descriptor was closed.
-pub fn closed(fd: i32) {
-    SOCKETS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .retain(|x| x.0 != fd);
-}
-
-/// A datagram gathered from an `iovec` array.
-///
-/// # Safety
-///
-/// `v` points to `n` readable `struct iovec`, each a readable buffer.
-pub unsafe fn gather(v: *const [u64; 2], n: usize) -> Vec<u8> {
-    let mut out = Vec::new();
-    for i in 0..n {
-        // SAFETY: the function's contract.
-        let [base, len] = unsafe { v.add(i).read_unaligned() };
-        if len != 0 && base != 0 {
-            // SAFETY: as above.
-            out.extend_from_slice(unsafe {
-                core::slice::from_raw_parts(base as *const u8, len as usize)
-            });
-        }
-    }
-    out
+/// Receives liblog's datagrams at `/dev/socket/logdw` through andruna-lx's
+/// Unix sockets ([`andruna_lx::socket::register_sink`]).
+pub fn install() {
+    let _ = andruna_lx::socket::register_sink("/dev/socket/logdw", record);
 }
 
 fn min_priority() -> u8 {
@@ -204,16 +109,6 @@ const WRITE: i64 = 1;
 #[cfg(target_arch = "aarch64")]
 const WRITE: i64 = 64;
 
-/// Descriptors of the closed set, for tests.
-pub fn sockets() -> HashSet<i32> {
-    SOCKETS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .map(|x| x.0)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,17 +123,5 @@ mod tests {
         assert_eq!((p, tid, tag, msg), (6, 0x1234, &b"art"[..], &b"boom"[..]));
         b[0] = 2; // events: binary
         assert!(parse(&b).is_none());
-    }
-
-    #[test]
-    fn socket_connects_only_to_logd() {
-        let fd = socket(true) as i32;
-        assert!(fd >= 0);
-        assert!(is_socket(fd));
-        assert_eq!(connect(fd, b"/dev/socket/other"), -i64::from(ECONNREFUSED));
-        assert_eq!(connect(fd, b"/dev/socket/logdw"), 0);
-        let _ = andruna_lx::fd::FDS.close(fd);
-        closed(fd);
-        assert!(!sockets().contains(&fd));
     }
 }

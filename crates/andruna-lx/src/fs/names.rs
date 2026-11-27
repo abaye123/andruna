@@ -80,12 +80,18 @@ pub fn unlinkat(dirfd: i32, path: &[u8], flags: u32) -> SysResult<()> {
 }
 
 /// `mkdirat`. The mode is not stored (see [`super`]).
-pub fn mkdirat(dirfd: i32, path: &[u8], _mode: u32) -> SysResult<()> {
+pub fn mkdirat(dirfd: i32, path: &[u8], mode: u32) -> SysResult<()> {
     let r = resolve_at(dirfd, path)?;
     if os::attributes(&r.windows).is_some() {
         return Err(Errno::EEXIST);
     }
-    os::create_directory(&r.windows).map_err(|c| name_error(c, &r))
+    os::create_directory(&r.windows).map_err(|c| name_error(c, &r))?;
+    // Record the mode; the directory exists either way.
+    if let Ok((h, _)) = open_name(&r, FILE_WRITE_EA.0) {
+        let m = super::modes::creation_mode(crate::linux::stat::S_IFDIR, mode);
+        super::modes::set_created(&h, m);
+    }
+    Ok(())
 }
 
 /// `renameat2`.

@@ -163,6 +163,8 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
                 let m = core::slice::from_raw_parts(ptr(2) as *const u8, ptr(1).min(1024));
                 sched::setaffinity(int(0), m).map(|()| 0)
             }
+            // Pipes, polling, timers, sockets, limits and modes.
+            _ => super::syscall_ext::dispatch(sysno, a),
         }
     }
 }
@@ -396,6 +398,20 @@ unsafe fn sys_futex(
         None
     };
     futex::futex(word, op, val, t.as_ref(), val3)
+}
+
+/// [`syscall`] without delivering queued signals when the call returns:
+/// for a host whose system call entry switches stacks, which delivers them
+/// itself with [`signal::deliver_after_syscall`] once the caller's stack
+/// is back in place. Returns -1 with `errno` set on failure, as
+/// [`syscall`].
+///
+/// # Safety
+///
+/// See the module documentation.
+pub unsafe fn syscall_without_delivery(number: i64, a: [i64; 6]) -> i64 {
+    // SAFETY: forwarded from this function's contract.
+    guard(|| unsafe { dispatch(number, a) })
 }
 
 /// `long syscall(long number, ...)`.

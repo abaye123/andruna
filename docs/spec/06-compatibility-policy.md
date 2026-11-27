@@ -45,6 +45,7 @@ as an ADR and listed here.
 | microG presented with Google's public signing certificate, only when signed by microG's key | Proposed ([Google services](07-google-services.md)) |
 | Windows accent color as Android's dynamic color source | Proposed |
 | System property defaults (SDK level, ABI, Andruna's brand, product and device) | Accepted ([ADR 0019](../decisions/0019-system-property-defaults.md)) |
+| File modes stored by lx, initial umask 077, resource limits of the real process | Proposed ([ADR 0020](../decisions/0020-lx-file-modes-and-limits.md)) |
 
 ## Review
 

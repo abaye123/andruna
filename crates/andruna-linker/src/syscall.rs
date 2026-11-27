@@ -8,11 +8,8 @@
 //! (`-errno` on failure). The stubs then set bionic's `errno` themselves.
 //!
 //! The calls that concern threads, the thread pointer and the process's
-//! lifetime are the loader's ([`crate::thread`], [`crate::tls`]); a few
-//! that are compositions of lx's public interface (`readv`, `writev`,
-//! `gettimeofday` and `time`, which share the vDSO's code,
-//! [`crate::vdso`]) and `getrandom` are implemented here until lx has
-//! them; everything else
+//! lifetime are the loader's ([`crate::thread`], [`crate::tls`]), and
+//! `getrandom` is implemented here until lx has it; everything else
 //! goes to andruna-lx's `syscall` export, which reports `ENOSYS` for calls
 //! it does not implement.
 
@@ -38,8 +35,6 @@ pub mod nr {
     pub const SET_TID_ADDRESS: i64 = 218;
     pub const EXIT_GROUP: i64 = 231;
     pub const GETRANDOM: i64 = 318;
-    pub const GETTIMEOFDAY: i64 = 96;
-    pub const TIME: i64 = 201;
     pub const CLONE3: i64 = 435;
 }
 
@@ -59,7 +54,6 @@ pub mod nr {
     pub const GETEGID: i64 = 177;
     pub const CLONE: i64 = 220;
     pub const GETRANDOM: i64 = 278;
-    pub const GETTIMEOFDAY: i64 = 169;
     pub const CLONE3: i64 = 435;
 }
 
@@ -71,15 +65,9 @@ const GRND_NONBLOCK: i64 = 1;
 const GRND_RANDOM: i64 = 2;
 const GRND_INSECURE: i64 = 4;
 
-mod lx {
-    unsafe extern "C" {
-        /// andruna-lx's `long syscall(long number, ...)` export (Windows
-        /// convention): -1 with lx's `errno` set on failure.
-        pub fn syscall(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64;
-    }
-}
-
-/// Calls andruna-lx's dispatcher and returns the raw kernel value.
+/// Calls andruna-lx's dispatcher and returns the raw kernel value. Queued
+/// signals are not delivered here: `__andruna_syscall` delivers them once
+/// the guest's stack is back (`deliver_signals`).
 ///
 /// # Safety
 ///
@@ -87,7 +75,7 @@ mod lx {
 pub unsafe fn lx_raw(n: i64, a: [i64; 6]) -> i64 {
     andruna_lx::errno::set_errno(andruna_lx::errno::Errno(0));
     // SAFETY: forwarded from this function's contract.
-    let r = unsafe { lx::syscall(n, a[0], a[1], a[2], a[3], a[4], a[5]) };
+    let r = unsafe { andruna_lx::syscall_without_delivery(n, a) };
     if r == -1 {
         let e = andruna_lx::errno::errno();
         if e != 0 {
@@ -157,27 +145,10 @@ unsafe fn dispatch_inner(n: i64, a: [i64; 6]) -> i64 {
         nr::GETUID | nr::GETEUID => i64::from(andruna_lx::process::uid()),
         nr::GETGID | nr::GETEGID => i64::from(andruna_lx::process::gid()),
         nr::GETRANDOM => getrandom(a[0] as *mut u8, a[1] as usize, a[2]),
-        // The vDSO's functions, for raw system calls (andruna-lx has
-        // no wall-clock calls besides clock_gettime).
-        // SAFETY: the caller's pointers (contract).
-        nr::GETTIMEOFDAY => i64::from(unsafe { crate::vdso::gettimeofday(a[0] as _, a[1] as _) }),
-        #[cfg(target_arch = "x86_64")]
-        // SAFETY: as above.
-        nr::TIME => unsafe { crate::vdso::time(a[0] as _) },
         nr::MADVISE if matches!(a[2], 4 | 8) => {
             // SAFETY: forwarded from this function's contract.
             unsafe { discard_below_sp(a) }
         }
-        nr::WRITEV if crate::logd::is_socket(a[0] as i32) && a[2] >= 0 => {
-            // SAFETY: the caller's iovec array (contract).
-            let d = unsafe { crate::logd::gather(a[1] as *const [u64; 2], a[2] as usize) };
-            crate::logd::record(&d);
-            d.len() as i64
-        }
-        // SAFETY: forwarded from this function's contract.
-        nr::WRITEV => unsafe { iov(a[0] as i32, a[1] as *const [u64; 2], a[2] as i32, true) },
-        // SAFETY: as above.
-        nr::READV => unsafe { iov(a[0] as i32, a[1] as *const [u64; 2], a[2] as i32, false) },
         // SAFETY: forwarded from this function's contract.
         _ => unsafe { forward(n, a) },
     }
@@ -271,44 +242,6 @@ fn getrandom(buf: *mut u8, len: usize, flags: i64) -> i64 {
     len as i64
 }
 
-/// `readv`/`writev` as a sequence of `read`/`write` on lx's descriptors;
-/// stops at the first short transfer, as the kernel does for files.
-///
-/// # Safety
-///
-/// `v` points to `n` readable `struct iovec`, each a valid buffer.
-unsafe fn iov(fd: i32, v: *const [u64; 2], n: i32, write: bool) -> i64 {
-    if !(0..=1024).contains(&n) {
-        return -i64::from(EINVAL);
-    }
-    if n > 0 && v.is_null() {
-        return -i64::from(EFAULT);
-    }
-    let mut total: i64 = 0;
-    for i in 0..n as usize {
-        // SAFETY: inside the caller's array (contract).
-        let [base, len] = unsafe { v.add(i).read_unaligned() };
-        if len == 0 {
-            continue;
-        }
-        let n = if write { nr::WRITE } else { nr::READ };
-        // SAFETY: the caller's buffer (contract).
-        let r = unsafe { lx_raw(n, [i64::from(fd), base as i64, len as i64, 0, 0, 0]) };
-        let r = if r < 0 { Err(r) } else { Ok(r as u64) };
-        match r {
-            Ok(k) => {
-                total += k as i64;
-                if k < len {
-                    break;
-                }
-            }
-            Err(e) if total == 0 => return e,
-            Err(_) => break,
-        }
-    }
-    total
-}
-
 gfn! {
     /// The Rust side of `__andruna_syscall`: the number arrives as the
     /// seventh argument (pushed by the x64 entry, moved to x6 on arm64).
@@ -326,6 +259,16 @@ gfn! {
     /// (the entry moves the stack pointer there); otherwise 0.
     unsafe fn stack_enter() -> u64 {
         crate::thread::enter_host_stack()
+    }
+}
+
+gfn! {
+    /// After every system call, on the guest's stack with the TEB bounds
+    /// of that stack: delivers the signals queued for the thread, so that
+    /// handlers run (and may `siglongjmp`) as they would after a Linux
+    /// system call, not on the Windows stack the call ran on.
+    unsafe fn deliver_signals() -> () {
+        andruna_lx::signal::deliver_after_syscall()
     }
 }
 
@@ -389,12 +332,18 @@ pub unsafe extern "sysv64" fn andruna_syscall() {
         "call {leave}",
         "mov rax, [rbp - 16]",
         "3:",
+        // Back on the guest stack (16-byte aligned at rbp - 64).
+        "mov [rbp - 16], rax",
+        "lea rsp, [rbp - 64]",
+        "call {deliver}",
+        "mov rax, [rbp - 16]",
         "lea rsp, [rbp - 8]",
         "pop rbx",
         "pop rbp",
         "ret",
         enter = sym stack_enter,
         leave = sym stack_leave,
+        deliver = sym deliver_signals,
         entry = sym raw_entry,
     )
 }
@@ -432,12 +381,18 @@ pub unsafe extern "C" fn andruna_syscall() {
         "bl {leave}",
         "mov x0, x20",
         "3:",
+        // Back on the guest stack.
+        "sub sp, x29, #80",
+        "str x0, [sp, #56]",
+        "bl {deliver}",
+        "ldr x0, [sp, #56]",
         "sub sp, x29, #16",
         "ldp x19, x20, [sp], #16",
         "ldp x29, x30, [sp], #16",
         "ret",
         enter = sym stack_enter,
         leave = sym stack_leave,
+        deliver = sym deliver_signals,
         entry = sym raw_entry,
     )
 }
@@ -447,11 +402,11 @@ pub fn symbols() -> Vec<(&'static str, u64)> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Calls `__andruna_syscall` the way a bionic stub does.
-    fn call(n: i64, a: [i64; 6]) -> i64 {
+    pub(crate) fn call(n: i64, a: [i64; 6]) -> i64 {
         let f = andruna_syscall as usize;
         let r: i64;
         #[cfg(target_arch = "x86_64")]

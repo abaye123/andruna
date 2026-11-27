@@ -464,14 +464,10 @@ pub fn deliver_pending() {
     if QUEUED.load(Ordering::SeqCst) == 0 {
         return;
     }
-    let Some(t) = current_if_any() else {
-        // A thread that never touched signals can still get process signals.
-        if lock(&PROCESS_PENDING).is_empty() {
-            return;
-        }
-        deliver_with(&current(), None);
-        return;
-    };
+    // A thread that never touched signals can still have been sent one
+    // (its state exists by tid) or get a process signal: `current` finds
+    // or creates its state.
+    let t = current_if_any().unwrap_or_else(current);
     deliver_with(&t, None);
 }
 
@@ -684,6 +680,13 @@ pub fn sigsuspend(mask: SigSet, sigsetsize: usize) -> SysResult<()> {
     Err(Errno::EINTR)
 }
 
+/// Delivers the calling thread's queued signals after a system call made
+/// with [`crate::syscall_without_delivery`], on the stack the caller runs
+/// on again (the host's system call entry calls it after switching back).
+pub fn deliver_after_syscall() {
+    deliver_at_syscall_exit();
+}
+
 /// Saves the calling thread's lx `errno` around signal delivery at system
 /// call exit, so that handlers cannot change the call's result.
 pub(crate) fn deliver_at_syscall_exit() {
@@ -693,6 +696,30 @@ pub(crate) fn deliver_at_syscall_exit() {
     let e = crate::errno::errno();
     deliver_pending();
     crate::errno::set_errno(Errno(e));
+}
+
+/// Queues the signal of a POSIX timer expiry (`si_code == SI_TIMER`, the
+/// timer id in `si_timerid`) for thread `tid` or the process, unless the
+/// same timer's previous signal is still pending. Returns whether it was
+/// queued; when it was not, the caller counts an overrun, as Linux does.
+pub(crate) fn queue_timer(tid: Option<i32>, info: SigInfo) -> SysResult<bool> {
+    let target = match tid {
+        Some(t) => Some(thread_of(t)?),
+        None => None,
+    };
+    let timer = info.fields[0] as u32;
+    let same = |i: &SigInfo| {
+        i.si_code == SI_TIMER && i.si_signo == info.si_signo && i.fields[0] as u32 == timer
+    };
+    let pending = target
+        .as_ref()
+        .is_some_and(|t| lock(&t.pending).iter().any(same))
+        || lock(&PROCESS_PENDING).iter().any(same);
+    if pending {
+        return Ok(false);
+    }
+    queue(target.as_ref(), info);
+    Ok(true)
 }
 
 #[cfg(test)]

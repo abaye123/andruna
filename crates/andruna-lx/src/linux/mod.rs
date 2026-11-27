@@ -17,6 +17,7 @@ pub mod errno;
 pub mod fcntl;
 pub mod futex;
 pub mod mman;
+pub mod poll;
 pub mod signal;
 pub mod stat;
 pub mod syscall_nr;

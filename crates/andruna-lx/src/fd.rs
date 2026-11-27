@@ -23,9 +23,21 @@ use crate::util::{self, UserBuf};
 /// limit to 32768 for apps).
 pub const NOFILE_MAX: usize = 32768;
 
+/// The soft `RLIMIT_NOFILE`: new descriptors are below it.
+static NOFILE_LIMIT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(NOFILE_MAX);
+
+/// Sets the soft `RLIMIT_NOFILE` ([`crate::rlimit`]).
+pub fn set_nofile_limit(n: usize) {
+    NOFILE_LIMIT.store(n.min(NOFILE_MAX), Ordering::Relaxed);
+}
+
 /// Operations of one kind of open file. Defaults give the Linux error for
 /// objects that do not support the operation.
-pub trait FileOps: Send + Sync + fmt::Debug {
+///
+/// `Any` lets the calls specific to one kind of object (sockets, eventfd,
+/// timerfd, epoll) find it behind a descriptor.
+pub trait FileOps: core::any::Any + Send + Sync + fmt::Debug {
     /// `read` at the description's offset.
     fn read(&self, _file: &OpenFile, _buf: UserBuf) -> SysResult<usize> {
         Err(Errno::EINVAL)
@@ -87,6 +99,15 @@ pub trait FileOps: Send + Sync + fmt::Debug {
     fn mappable(&self) -> bool {
         false
     }
+
+    /// The `poll` events (`crate::linux::poll`) the object is ready for
+    /// now. Files and directories are always readable and writable, as on
+    /// Linux. Objects whose readiness changes call
+    /// [`crate::waitq::notify`] when it does.
+    fn poll(&self) -> u32 {
+        use crate::linux::poll::*;
+        POLLIN | POLLOUT | POLLRDNORM | POLLWRNORM
+    }
 }
 
 /// An open file description.
@@ -117,6 +138,12 @@ impl OpenFile {
 
     pub fn ops(&self) -> &dyn FileOps {
         &*self.ops
+    }
+
+    /// The object as its concrete type, if it is a `T`.
+    pub fn downcast<T: FileOps>(&self) -> Option<&T> {
+        let any: &dyn core::any::Any = &*self.ops;
+        any.downcast_ref()
     }
 
     pub fn status_flags(&self) -> u32 {
@@ -264,7 +291,7 @@ impl FdTable {
     /// Installs `file` at the lowest free descriptor not below `min`.
     pub fn insert(&self, file: Arc<OpenFile>, cloexec: bool, min: usize) -> SysResult<i32> {
         let mut slots = util::write(&self.slots);
-        let i = (min..NOFILE_MAX)
+        let i = (min..NOFILE_LIMIT.load(Ordering::Relaxed))
             .find(|&i| slots.get(i).is_none_or(Option::is_none))
             .ok_or(Errno::EMFILE)?;
         if i >= slots.len() {
