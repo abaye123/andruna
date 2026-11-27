@@ -172,10 +172,21 @@ pub fn mmap(
     fd: i32,
     offset: i64,
 ) -> SysResult<usize> {
-    if flags & MAP_ANONYMOUS == 0 {
-        return map_file(addr, len, prot, flags, fd, offset);
+    let a = if flags & MAP_ANONYMOUS == 0 {
+        map_file(addr, len, prot, flags, fd, offset)?
+    } else {
+        lock(&SPACE).mmap(addr, len, prot, flags, fd, offset)?
+    };
+    if let Some(l) = page_round_up(len) {
+        clear_names(&mut lock(&NAMES), a, a + l);
+        if flags & MAP_ANONYMOUS == 0
+            && let Ok(f) = crate::fd::FDS.get(fd)
+            && let Some(p) = f.ops().path()
+        {
+            lock(&NAMES).insert(a, (a + l, p));
+        }
     }
-    lock(&SPACE).mmap(addr, len, prot, flags, fd, offset)
+    Ok(a)
 }
 
 /// A file mapping: private memory filled from the file (see the module
@@ -242,7 +253,11 @@ fn map_file(
 
 /// `munmap` on the process address space.
 pub fn munmap(addr: usize, len: usize) -> SysResult<()> {
-    lock(&SPACE).munmap(addr, len)
+    lock(&SPACE).munmap(addr, len)?;
+    if let Some(l) = page_round_up(len) {
+        clear_names(&mut lock(&NAMES), addr, addr.saturating_add(l));
+    }
+    Ok(())
 }
 
 /// `mprotect` on the process address space.
@@ -305,6 +320,97 @@ pub fn mremap(addr: usize, old_len: usize, new_len: usize, flags: u32) -> SysRes
     }
     s.munmap(addr, old)?;
     Ok(to)
+}
+
+/// Names of mappings for `/proc/self/maps` (start -> (end, name)).
+static NAMES: Mutex<BTreeMap<usize, (usize, Vec<u8>)>> = Mutex::new(BTreeMap::new());
+
+/// Names `[addr, addr+len)` (`prctl(PR_SET_VMA_ANON_NAME)`, file paths).
+/// An empty name removes it.
+pub fn set_name(addr: usize, len: usize, name: &[u8]) -> SysResult<()> {
+    let (start, end) = check_range(addr, len)?;
+    if lock(&SPACE).require_mapped(start, end).is_err() {
+        return Err(Errno::ENOMEM);
+    }
+    let mut n = lock(&NAMES);
+    clear_names(&mut n, start, end);
+    if !name.is_empty() {
+        n.insert(start, (end, name.to_vec()));
+    }
+    Ok(())
+}
+
+/// Removes names in `[start, end)`, cutting names that overlap it.
+fn clear_names(n: &mut BTreeMap<usize, (usize, Vec<u8>)>, start: usize, end: usize) {
+    let hit: Vec<usize> = n
+        .range(..end)
+        .filter(|(_, (e, _))| *e > start)
+        .map(|(s, _)| *s)
+        .collect();
+    for s in hit {
+        let (e, name) = n.remove(&s).expect("present");
+        if s < start {
+            n.insert(s, (start, name.clone()));
+        }
+        if e > end {
+            n.insert(end, (e, name));
+        }
+    }
+}
+
+/// `/proc/self/maps` for lx's mappings: one line per run of pages with
+/// the same protection and name.
+pub fn maps() -> Vec<u8> {
+    let s = lock(&SPACE);
+    let names = lock(&NAMES);
+    let name_at = |a: usize| {
+        names
+            .range(..=a)
+            .next_back()
+            .filter(|(_, (e, _))| *e > a)
+            .map(|(_, (_, n))| n.clone())
+    };
+    // (start, end, protection, shared, name)
+    type Line = (usize, usize, u32, bool, Option<Vec<u8>>);
+    let mut lines: Vec<Line> = Vec::new();
+    for (&start, span) in &s.spans {
+        let Kind::Mapped { prot, no_write, .. } = span.kind else {
+            continue;
+        };
+        // Split at name boundaries inside the span.
+        let mut cuts = vec![start, span.end];
+        for (&ns, (ne, _)) in names.range(start..span.end) {
+            cuts.push(ns);
+            cuts.push((*ne).min(span.end));
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        for w in cuts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let name = name_at(a);
+            match lines.last_mut() {
+                Some(l) if l.1 == a && l.2 == prot && l.3 == no_write && l.4 == name => l.1 = b,
+                _ => lines.push((a, b, prot, no_write, name)),
+            }
+        }
+    }
+    let mut out = String::new();
+    for (a, b, prot, shared, name) in lines {
+        let p = |bit: u32, c: char| if prot & bit != 0 { c } else { '-' };
+        out.push_str(&format!(
+            "{a:08x}-{b:08x} {}{}{}{} 00000000 00:00 0",
+            p(PROT_READ, 'r'),
+            p(PROT_WRITE, 'w'),
+            p(PROT_EXEC, 'x'),
+            if shared { 's' } else { 'p' },
+        ));
+        if let Some(n) = name {
+            out.push_str("                          ");
+            out.push_str(&String::from_utf8_lossy(&n));
+        }
+        out.push('\n');
+    }
+    out.into_bytes()
 }
 
 /// Whether lx has a mapping at `addr` (`None` if the table is busy, as it

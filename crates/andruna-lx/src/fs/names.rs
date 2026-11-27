@@ -209,6 +209,13 @@ pub fn readlinkat(dirfd: i32, path: &[u8], size: usize) -> SysResult<Vec<u8>> {
     if size == 0 || size > i32::MAX as usize {
         return Err(Errno::EINVAL);
     }
+    if let Some((_, node)) = proc_lookup(dirfd, path, true)? {
+        let proc::Node::Link(mut t) = node else {
+            return Err(Errno::EINVAL);
+        };
+        t.truncate(size);
+        return Ok(t);
+    }
     let r = resolve_at(dirfd, path)?;
     let (h, info) = open_name(&r, 0)?;
     if !is_symlink_tag(info.reparse_tag) {

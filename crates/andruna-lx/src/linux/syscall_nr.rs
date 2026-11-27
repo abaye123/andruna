@@ -67,6 +67,7 @@ pub enum Sysno {
     SchedGetPriorityMin,
     SchedSetaffinity,
     SchedGetaffinity,
+    Prctl,
     // Only on x86_64 (arm64 has no legacy forms).
     Open,
     Stat,
@@ -146,6 +147,7 @@ pub const X86_64: Table = Table(&[
     (145, Sysno::SchedGetscheduler),
     (146, Sysno::SchedGetPriorityMax),
     (147, Sysno::SchedGetPriorityMin),
+    (157, Sysno::Prctl),
     (186, Sysno::Gettid),
     (200, Sysno::Tkill),
     (202, Sysno::Futex),
@@ -221,6 +223,7 @@ pub const AARCH64: Table = Table(&[
     (137, Sysno::RtSigtimedwait),
     (138, Sysno::RtSigqueueinfo),
     (139, Sysno::RtSigreturn),
+    (167, Sysno::Prctl),
     (172, Sysno::Getpid),
     (178, Sysno::Gettid),
     (215, Sysno::Munmap),

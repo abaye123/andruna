@@ -72,6 +72,16 @@ pub trait FileOps: Send + Sync + fmt::Debug {
         Err(Errno::ENOTDIR)
     }
 
+    /// The Linux path the object was opened by, for `/proc/self/fd`.
+    fn path(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// A short kind name for objects without a path (`anon_inode:[...]`).
+    fn kind_name(&self) -> &'static str {
+        "file"
+    }
+
     /// Whether `mmap` can map the object (with `pread` for the contents);
     /// others give `ENODEV`.
     fn mappable(&self) -> bool {
@@ -225,6 +235,16 @@ fn index(fd: i32) -> SysResult<usize> {
 }
 
 impl FdTable {
+    /// The open descriptors, in order.
+    pub fn open_fds(&self) -> Vec<i32> {
+        util::read(&self.slots)
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.is_some())
+            .map(|(i, _)| i as i32)
+            .collect()
+    }
+
     pub const fn new() -> Self {
         Self {
             slots: RwLock::new(Vec::new()),

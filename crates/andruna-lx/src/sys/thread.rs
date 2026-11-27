@@ -72,6 +72,70 @@ pub fn set_affinity(tid: u32, mask: u64) -> SysResult<()> {
     Ok(())
 }
 
+/// The thread ids of this process.
+pub fn threads() -> Vec<u32> {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+    let pid = current_process_id();
+    // SAFETY: creates a snapshot handle that `owned` closes.
+    let Ok(h) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) }) else {
+        return vec![current_thread_id()];
+    };
+    let owned = OwnedHandle::from_raw(h);
+    let mut e = THREADENTRY32 {
+        dwSize: core::mem::size_of::<THREADENTRY32>() as u32,
+        ..Default::default()
+    };
+    let mut out = Vec::new();
+    // SAFETY: `e` is a valid THREADENTRY32 with its size set.
+    let mut ok = unsafe { Thread32First(owned.raw(), &mut e) }.is_ok();
+    while ok {
+        if e.th32OwnerProcessID == pid {
+            out.push(e.th32ThreadID);
+        }
+        // SAFETY: as above.
+        ok = unsafe { Thread32Next(owned.raw(), &mut e) }.is_ok();
+    }
+    out.sort_unstable();
+    out
+}
+
+fn open_named(
+    tid: u32,
+    access: windows::Win32::System::Threading::THREAD_ACCESS_RIGHTS,
+) -> Option<OwnedHandle> {
+    // SAFETY: opens a new handle that the result owns.
+    let h = unsafe { OpenThread(access, false, tid) }.ok()?;
+    Some(OwnedHandle::from_raw(h))
+}
+
+/// The Windows description (name) of thread `tid`.
+pub fn description(tid: u32) -> Option<String> {
+    use windows::Win32::System::Threading::GetThreadDescription;
+    let h = open_named(tid, THREAD_QUERY_LIMITED_INFORMATION)?;
+    // SAFETY: `h` is a live thread handle; the returned string is freed
+    // with LocalFree below.
+    let p = unsafe { GetThreadDescription(h.raw()) }.ok()?;
+    // SAFETY: a NUL-terminated string from Windows.
+    let s = unsafe { p.to_string() }.ok();
+    // SAFETY: the string was allocated by GetThreadDescription.
+    unsafe {
+        windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(p.0 as _)))
+    };
+    s
+}
+
+/// Sets the Windows description (name) of thread `tid`.
+pub fn set_description(tid: u32, name: &str) -> SysResult<()> {
+    use windows::Win32::System::Threading::{SetThreadDescription, THREAD_SET_LIMITED_INFORMATION};
+    let h = open_named(tid, THREAD_SET_LIMITED_INFORMATION).ok_or(Errno::ESRCH)?;
+    let w: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: `h` is a live thread handle; `w` is NUL-terminated.
+    unsafe { SetThreadDescription(h.raw(), windows::core::PCWSTR(w.as_ptr())) }
+        .map_err(|_| Errno::EINVAL)
+}
+
 /// Whether `tid` is a running thread of this process.
 pub fn is_own_thread(tid: u32) -> bool {
     // SAFETY: opens a new handle that `owned` closes.

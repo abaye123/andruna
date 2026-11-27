@@ -130,6 +130,9 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
             Sysno::Faccessat => fs::faccessat(int(0), path(ptr(1))?, int(2), 0).map(|()| 0),
             Sysno::Faccessat2 => fs::faccessat(int(0), path(ptr(1))?, int(2), uint(3)).map(|()| 0),
             Sysno::Access => fs::faccessat(AT_FDCWD, path(ptr(0))?, int(1), 0).map(|()| 0),
+            Sysno::Prctl => {
+                crate::process::prctl(int(0), a[1] as u64, a[2] as u64, a[3] as u64, a[4] as u64)
+            }
             Sysno::SchedGetscheduler => sched::getscheduler(int(0)).map(i64::from),
             Sysno::SchedSetscheduler => {
                 let prio = read_arg(ptr(2) as *const i32)?;

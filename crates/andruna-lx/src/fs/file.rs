@@ -24,13 +24,20 @@ const ATTR_READONLY: u32 = 0x1;
 pub struct RegularFile {
     handle: OwnedHandle,
     pos: Mutex<u64>,
+    /// The Linux path it was opened by (empty if unknown).
+    path: Vec<u8>,
 }
 
 impl RegularFile {
     pub fn new(handle: OwnedHandle) -> Self {
+        Self::with_path(handle, Vec::new())
+    }
+
+    pub fn with_path(handle: OwnedHandle, path: Vec<u8>) -> Self {
         Self {
             handle,
             pos: Mutex::new(0),
+            path,
         }
     }
 
@@ -125,6 +132,10 @@ impl FileOps for RegularFile {
 
     fn mappable(&self) -> bool {
         true
+    }
+
+    fn path(&self) -> Option<Vec<u8>> {
+        (!self.path.is_empty()).then(|| self.path.clone())
     }
 }
 
@@ -237,32 +248,17 @@ impl FileOps for Directory {
         Ok(())
     }
 
+    fn path(&self) -> Option<Vec<u8>> {
+        Some(self.path.clone())
+    }
+
     fn getdents(&self, out: &mut Vec<u8>, max: usize) -> SysResult<()> {
         let mut pos = lock(&self.pos);
         if pos.1.is_none() || pos.0 == 0 {
             pos.1 = Some(self.list()?);
         }
-        let (mut i, list) = (pos.0 as usize, pos.1.as_ref().expect("listed"));
-        while let Some(e) = list.get(i) {
-            // d_ino, d_off, d_reclen, d_type, name, NUL, padded to 8.
-            let len = (19 + e.name.len() + 1).next_multiple_of(8);
-            if out.len() + len > max {
-                if out.is_empty() {
-                    return Err(Errno::EINVAL);
-                }
-                break;
-            }
-            let start = out.len();
-            out.extend_from_slice(&e.ino.to_le_bytes());
-            out.extend_from_slice(&(i as i64 + 1).to_le_bytes());
-            out.extend_from_slice(&(len as u16).to_le_bytes());
-            out.push(e.kind);
-            out.extend_from_slice(&e.name);
-            out.resize(start + len, 0);
-            i += 1;
-        }
-        pos.0 = i as u64;
-        Ok(())
+        let (p, list) = &mut *pos;
+        write_dirents(list.as_ref().expect("listed"), p, out, max)
     }
 
     fn stat(&self) -> SysResult<StatData> {
@@ -272,6 +268,38 @@ impl FileOps for Directory {
     fn dir_path(&self) -> Option<&[u8]> {
         Some(&self.path)
     }
+}
+
+/// Appends `linux_dirent64` records for `entries[*pos..]` to `out`, at most
+/// `max` bytes, and advances `pos` (the index of the next entry, also the
+/// `d_off` of the previous one). `EINVAL` if not even one record fits.
+pub fn write_dirents(
+    entries: &[DirEntry],
+    pos: &mut u64,
+    out: &mut Vec<u8>,
+    max: usize,
+) -> SysResult<()> {
+    let mut i = *pos as usize;
+    while let Some(e) = entries.get(i) {
+        // d_ino, d_off, d_reclen, d_type, name, NUL, padded to 8.
+        let len = (19 + e.name.len() + 1).next_multiple_of(8);
+        if out.len() + len > max {
+            if out.is_empty() {
+                return Err(Errno::EINVAL);
+            }
+            break;
+        }
+        let start = out.len();
+        out.extend_from_slice(&e.ino.to_le_bytes());
+        out.extend_from_slice(&(i as i64 + 1).to_le_bytes());
+        out.extend_from_slice(&(len as u16).to_le_bytes());
+        out.push(e.kind);
+        out.extend_from_slice(&e.name);
+        out.resize(start + len, 0);
+        i += 1;
+    }
+    *pos = i as u64;
+    Ok(())
 }
 
 /// Whether a reparse tag is a symbolic link in the Linux sense.

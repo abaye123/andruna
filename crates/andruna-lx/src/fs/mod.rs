@@ -17,6 +17,7 @@ pub mod file;
 pub mod mount;
 mod names;
 pub mod path;
+pub mod proc;
 pub mod stream;
 
 pub use names::*;
@@ -90,7 +91,7 @@ struct Resolved {
     windows: Vec<u16>,
 }
 
-fn resolve_at(dirfd: i32, path: &[u8]) -> SysResult<Resolved> {
+fn linux_at(dirfd: i32, path: &[u8]) -> SysResult<LinuxPath> {
     // An empty path is checked before the directory descriptor.
     if path.is_empty() {
         return Err(Errno::ENOENT);
@@ -103,9 +104,96 @@ fn resolve_at(dirfd: i32, path: &[u8]) -> SysResult<Resolved> {
         let f = FDS.get(dirfd)?;
         f.ops().dir_path().ok_or(Errno::ENOTDIR)?.to_vec()
     };
-    let linux = normalize(&base, path)?;
+    normalize(&base, path)
+}
+
+fn resolve_at(dirfd: i32, path: &[u8]) -> SysResult<Resolved> {
+    let linux = linux_at(dirfd, path)?;
+    if proc::is_proc(&linux) {
+        // `/proc` is lx's own; names in it cannot be created or removed.
+        return Err(Errno::EACCES);
+    }
     let windows = util::read(&MOUNTS).resolve(&linux)?;
     Ok(Resolved { linux, windows })
+}
+
+/// A `/proc` path with its symbolic links followed (all but the last one
+/// with `nofollow`), or `None` for paths outside `/proc`.
+fn proc_lookup(
+    dirfd: i32,
+    path: &[u8],
+    nofollow: bool,
+) -> SysResult<Option<(LinuxPath, proc::Node)>> {
+    let mut linux = linux_at(dirfd, path)?;
+    if !proc::is_proc(&linux) {
+        return Ok(None);
+    }
+    for _ in 0..8 {
+        // Follow links in the middle of the path (`/proc/self/...`).
+        let mut followed = false;
+        for n in 2..linux.components.len() {
+            let pre = linux.prefix(n);
+            if let Ok(proc::Node::Link(t)) = proc::lookup(&pre) {
+                let parent = linux.prefix(n - 1).to_bytes();
+                let mut np = normalize(&parent, &t)?;
+                np.components.extend_from_slice(&linux.components[n..]);
+                np.trailing_slash = linux.trailing_slash;
+                linux = np;
+                followed = true;
+                break;
+            }
+        }
+        if followed {
+            continue;
+        }
+        let node = proc::lookup(&linux)?;
+        if let proc::Node::Link(t) = &node
+            && !nofollow
+        {
+            let parent = linux.prefix(linux.components.len() - 1).to_bytes();
+            let np = normalize(&parent, t)?;
+            if !proc::is_proc(&np) {
+                return Ok(Some((np, node)));
+            }
+            linux = np;
+            continue;
+        }
+        return Ok(Some((linux, node)));
+    }
+    Err(Errno::ELOOP)
+}
+
+/// Opens a `/proc` node.
+fn proc_open(dirfd: i32, path: &[u8], flags: u32) -> SysResult<Option<i32>> {
+    let nofollow = flags & O_NOFOLLOW != 0;
+    let Some((linux, node)) = proc_lookup(dirfd, path, nofollow)? else {
+        return Ok(None);
+    };
+    let ops: Box<dyn crate::fd::FileOps> = match node {
+        proc::Node::Link(_) if !proc::is_proc(&linux) => {
+            // A link out of /proc (fd/N, exe): open the target itself.
+            return openat(AT_FDCWD, &linux.to_bytes(), flags, 0).map(Some);
+        }
+        proc::Node::Link(_) if flags & O_PATH == 0 => return Err(Errno::ELOOP),
+        proc::Node::Link(_) => return Err(Errno::ENXIO),
+        proc::Node::Dir(e) => {
+            if flags & O_ACCMODE != O_RDONLY || flags & O_CREAT != 0 {
+                return Err(Errno::EISDIR);
+            }
+            Box::new(proc::ProcDir::new(linux.to_bytes(), e))
+        }
+        proc::Node::File { content, comm_of } => {
+            if flags & O_DIRECTORY != 0 {
+                return Err(Errno::ENOTDIR);
+            }
+            if flags & O_ACCMODE != O_RDONLY && comm_of.is_none() {
+                return Err(Errno::EACCES);
+            }
+            Box::new(proc::ProcFile::new(content, comm_of))
+        }
+    };
+    let file = Arc::new(OpenFile::new(ops, flags));
+    FDS.insert(file, flags & O_CLOEXEC != 0, 0).map(Some)
 }
 
 /// Refines "not found" for `path`: `ENOTDIR` when a parent component
@@ -187,6 +275,9 @@ pub fn openat(dirfd: i32, path: &[u8], flags: u32, _mode: u32) -> SysResult<i32>
     if !path_only && acc == O_ACCMODE {
         return Err(Errno::EINVAL);
     }
+    if let Some(fd) = proc_open(dirfd, path, flags)? {
+        return Ok(fd);
+    }
     let r = resolve_at(dirfd, path)?;
     let creat = flags & O_CREAT != 0;
     let trunc = flags & O_TRUNC != 0;
@@ -232,7 +323,7 @@ pub fn openat(dirfd: i32, path: &[u8], flags: u32, _mode: u32) -> SysResult<i32>
         if trunc && !path_only {
             os::set_len(h.raw(), 0)?;
         }
-        Box::new(RegularFile::new(h))
+        Box::new(RegularFile::with_path(h, r.linux.to_bytes()))
     };
     let file = Arc::new(OpenFile::new(ops, flags));
     FDS.insert(file, flags & O_CLOEXEC != 0, 0)
@@ -249,8 +340,14 @@ pub fn fstatat(dirfd: i32, path: &[u8], flags: u32) -> SysResult<StatData> {
         }
         return FDS.get(dirfd)?.stat();
     }
-    let r = resolve_at(dirfd, path)?;
     let nofollow = flags & AT_SYMLINK_NOFOLLOW != 0;
+    if let Some((linux, node)) = proc_lookup(dirfd, path, nofollow)? {
+        if !proc::is_proc(&linux) {
+            return fstatat(AT_FDCWD, &linux.to_bytes(), flags);
+        }
+        return Ok(proc::stat(&node));
+    }
+    let r = resolve_at(dirfd, path)?;
     let (_h, info) = open_handle(
         &r,
         FILE_READ_ATTRIBUTES.0,
@@ -804,5 +901,157 @@ pub(crate) mod tests {
         );
         close(dfd).unwrap();
         close(fd).unwrap();
+    }
+
+    fn read_all(fd: i32) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let b = read_n(fd, 4096);
+            if b.is_empty() {
+                return out;
+            }
+            out.extend(b);
+        }
+    }
+
+    fn read_path(p: &str) -> SysResult<Vec<u8>> {
+        let fd = open(p, O_RDONLY)?;
+        let b = read_all(fd);
+        close(fd)?;
+        Ok(b)
+    }
+
+    #[test]
+    fn proc_self() {
+        let d = test_dir("procfs");
+        let pid = crate::process::getpid();
+        let tid = crate::process::gettid();
+
+        let status = String::from_utf8(read_path("/proc/self/status").unwrap()).unwrap();
+        assert!(status.contains(&format!("\nTgid:\t{pid}\n")), "{status}");
+        assert!(status.contains("TracerPid:\t0"));
+        let by_pid = read_path(&format!("/proc/{pid}/status")).unwrap();
+        assert!(String::from_utf8(by_pid).unwrap().contains(&format!(
+            "
+Pid:	{pid}
+"
+        )));
+        assert_eq!(read_path("/proc/1/status"), Err(Errno::ENOENT));
+        assert_eq!(read_path("/proc/self/nonexistent"), Err(Errno::ENOENT));
+        assert_eq!(
+            readlinkat(AT_FDCWD, b"/proc/self", 64),
+            Ok(pid.to_string().into_bytes())
+        );
+        assert_eq!(
+            fstatat(AT_FDCWD, b"/proc/self/fd", 0).unwrap().mode & S_IFMT,
+            S_IFDIR
+        );
+        // Names in /proc cannot be created.
+        assert_eq!(
+            open("/proc/self/new", O_CREAT | O_WRONLY),
+            Err(Errno::ENOENT)
+        );
+        assert_eq!(
+            unlinkat(AT_FDCWD, b"/proc/self/status", 0),
+            Err(Errno::EACCES)
+        );
+
+        // fd: links to the open files, listed by getdents.
+        let f = format!("{d}/x");
+        let fd = open(&f, O_CREAT | O_RDWR).unwrap();
+        write_all(fd, b"data");
+        let link = format!("/proc/self/fd/{fd}");
+        assert_eq!(
+            readlinkat(AT_FDCWD, link.as_bytes(), 256),
+            Ok(f.as_bytes().to_vec())
+        );
+        let again = open(&link, O_RDONLY).unwrap();
+        assert_eq!(read_n(again, 10), b"data");
+        close(again).unwrap();
+        let dfd = open("/proc/self/fd", O_RDONLY | O_DIRECTORY).unwrap();
+        let listed = names(&getdents64(dfd, 65536).unwrap());
+        assert!(
+            listed
+                .iter()
+                .any(|(n, k)| *n == fd.to_string() && *k == file::DT_LNK)
+        );
+        // Relative lookups from the directory descriptor.
+        assert_eq!(
+            readlinkat(dfd, fd.to_string().as_bytes(), 256),
+            Ok(f.as_bytes().to_vec())
+        );
+        close(dfd).unwrap();
+
+        // task: this thread, with a writable comm.
+        let tdir = open("/proc/self/task", O_RDONLY | O_DIRECTORY).unwrap();
+        let tasks = names(&getdents64(tdir, 65536).unwrap());
+        assert!(tasks.iter().any(|(n, _)| *n == tid.to_string()));
+        close(tdir).unwrap();
+        let comm = format!("/proc/self/task/{tid}/comm");
+        let c = open(&comm, O_WRONLY).unwrap();
+        write_all(c, b"lx-test-thread-name-long\n");
+        close(c).unwrap();
+        assert_eq!(read_path(&comm).unwrap(), b"lx-test-thread-\n");
+        assert_eq!(
+            read_path("/proc/thread-self/comm").unwrap(),
+            b"lx-test-thread-\n"
+        );
+
+        // maps: an lx mapping with its name.
+        use crate::linux::mman::*;
+        let a = crate::mem::mmap(
+            0,
+            2 * PAGE_SIZE,
+            PROT_READ,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+        .unwrap();
+        let name = c"lx-test";
+        // SAFETY: a NUL-terminated name.
+        unsafe {
+            crate::process::prctl(
+                0x5356_4d41,
+                0,
+                a as u64,
+                PAGE_SIZE as u64,
+                name.as_ptr() as u64,
+            )
+        }
+        .unwrap();
+        let maps = String::from_utf8(read_path("/proc/self/maps").unwrap()).unwrap();
+        let first = format!("{a:08x}-{:08x} r--p 00000000 00:00 0", a + PAGE_SIZE);
+        let line = maps
+            .lines()
+            .find(|l| l.starts_with(&first))
+            .expect("mapping listed");
+        assert!(line.ends_with("[anon:lx-test]"), "{line}");
+        let second = format!("{:08x}-{:08x} r--p", a + PAGE_SIZE, a + 2 * PAGE_SIZE);
+        assert!(maps.lines().any(|l| l.starts_with(&second)));
+        crate::mem::munmap(a, 2 * PAGE_SIZE).unwrap();
+        // A file mapping is named after its file.
+        let m = crate::mem::mmap(0, PAGE_SIZE, PROT_READ, MAP_PRIVATE, fd, 0).unwrap();
+        let maps = String::from_utf8(read_path("/proc/self/maps").unwrap()).unwrap();
+        assert!(
+            maps.lines()
+                .any(|l| l.starts_with(&format!("{m:08x}-")) && l.ends_with(&f))
+        );
+        crate::mem::munmap(m, PAGE_SIZE).unwrap();
+        close(fd).unwrap();
+
+        // exe and cmdline from the program the host recorded.
+        let exe_rel = format!("{d}/prog");
+        close(open(&exe_rel, O_CREAT | O_WRONLY).unwrap()).unwrap();
+        let root = std::env::temp_dir().join(format!("andruna-lx-test-{}", std::process::id()));
+        crate::process::set_program(
+            &root.join("procfs").join("prog"),
+            &["prog".into(), "-x".into()],
+        );
+        assert_eq!(
+            readlinkat(AT_FDCWD, b"/proc/self/exe", 256),
+            Ok(exe_rel.as_bytes().to_vec())
+        );
+        assert_eq!(read_path("/proc/self/cmdline").unwrap(), b"prog\0-x\0");
     }
 }

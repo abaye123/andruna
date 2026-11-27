@@ -255,6 +255,8 @@ gfn! {
 
 fn start(ctx: MainCtx) -> Result<std::convert::Infallible> {
     let MainCtx { program, stack } = ctx;
+    // For /proc/self/exe and /proc/self/cmdline (andruna-lx).
+    andruna_lx::process::set_program(std::path::Path::new(&program.exe), &program.args);
     let (hwcap, hwcap2) = hwcaps();
     // The block sits at the top of the guest stack; this frame runs below
     // it and is discarded when the entry point starts.
