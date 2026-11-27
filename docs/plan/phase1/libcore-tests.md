@@ -90,12 +90,27 @@ failure matched an expectation except `OldThreadTest#test_yield` (timing,
 now listed) and two time zone tests that had crashed in the first JIT run
 (their lines were limited to the interpreter; now unlimited).
 
+After the JNI stub fix (finding 2; branch `phase1-jni-thread`: ART root
+rebuilt with patch `art/0005`, andruna-app with the lx retry fix, same
+machine), two runs per mode without the `art` expectation:
+
+| Runner, mode | Tests | Pass | Fail | Crash | Timeout | Not run | Pass rate | Wall |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| andruna-app, interpreter | 3149 | 2835 / 2836 | 313 / 312 | 0 | 1 | 0 | 90.0% / 90.1% | 138 s / 137 s |
+| andruna-app, JIT | 3149 | 2835 / 2835 | 313 / 313 | 0 | 1 | 0 | 90.0% / 90.0% | 78 s / 75 s |
+
+No crash in any of the four runs, so every test runs (3149, also
+`StandardCharsetsEncoderTest` to its end). Every failure matched an
+expectation; the unexpected passes are the two timing-sensitive `triage`
+tests.
+
 ### Failures by category (andruna-app)
 
 Every failure of both andruna-app runs is listed in
 `tests/libcore/expectations.txt` with its category (314 lines, the union of
-both modes, plus one line for the intermittent crash; counts are the
-first run):
+both modes; counts are the first run). The `art` category of the first
+round, an intermittent crash in compiled JNI stubs, is fixed (finding 2)
+and its wildcard line removed:
 
 | Category | Tests | What |
 | --- | --- | --- |
@@ -106,7 +121,6 @@ first run):
 | `missing-native` | 3 | `libcore.math.NativeBN` (BoringSSL big numbers) is not in the guest `libjavacore.so` |
 | `icu-data` | 3 | Locale fallbacks for unknown locales, a serialized `Locale` resource |
 | `harness` | 3 | Two classes load `libjavacoretests.so` (test JNI library, not built); `LocaleInternalsTest` has no JUnit 3 test methods in this build |
-| `art` | about 8 per run | Intermittent fault in compiled JNI stubs (below); random tests |
 | `triage` | 14 | Not yet explained (below), including two timing-sensitive tests |
 
 ## Findings
@@ -122,16 +136,42 @@ first run):
    window of `SimpleDateFormat` start in 1890: 11 failures in all, all
    expected to pass once the clock is fixed. Owner: andruna-lx or
    andruna-linker.
-2. **Intermittent crash in compiled JNI stubs.** A few random tests per run
-   (8 in each andruna-app run, 2 in the S1 JIT run, none in the S1
-   interpreter run) fault in `artJniMethodStart` or `artJniMethodEnd`
-   reading address 0: the stub passes a null `Thread*`, which suggests the
-   thread register (ADR 0015) is not valid on some entry into compiled
-   code that calls a native method. The S1 interpreter run has no boot image
-   and calls every native method through the generic JNI trampoline, and it
-   never crashes this way. The expectation for it matches the crash
-   signature on any test, so the job does not fail on it; it must be fixed
-   (owner: ART integration).
+2. **Intermittent crash in compiled JNI stubs (fixed).** A few random tests
+   per run (8 in each andruna-app run, 2 in the S1 JIT run, none in the S1
+   interpreter run) faulted in `artJniMethodStart` or `artJniMethodEnd`
+   reading address 0. Two causes, both fixed on branch `phase1-jni-thread`:
+   - ART's `art_jni_method_start`, `art_jni_method_end` and the other
+     `JNI_SAVE_*_TRAMPOLINE` entry points, which a compiled JNI stub calls
+     on its slow path (a suspend or checkpoint request pending), took
+     `Thread::Current()` as the macro argument `gs:THREAD_SELF_OFFSET`.
+     The ADR 0015 patches did not cover these arguments, so on Windows the
+     trampolines passed TEB+0xd8 (0) as the `Thread*`. The S1 interpreter
+     run calls natives through the generic JNI trampoline, which was
+     patched, so it never took this path. Patch `art/0005` passes the TLS
+     slot; the art stage of `build_guest.py` now fails on any `%gs:`
+     access outside nterp.
+   - andruna-lx's `madvise(MADV_DONTNEED)` decommits and recommits pages;
+     a thread touching them in between faults and the fault is retried. The
+     retry gave up after four faults on the same page by one thread, ever,
+     and on a page still decommitted. ART clears its card table this way
+     on every GC while mutators mark cards, so after a few GCs a card mark
+     became a SIGSEGV. The retry now waits for open windows and counts
+     per window.
+   `JniStress` (spike S1 test programs; `andruna-app` tests
+   `jni_stub_slow_paths_*`) reproduces both: native calls on 4 threads
+   for 2 s while the main thread runs the GC and walks their stacks
+   (runs that crashed, with the boot image / interpreter / JIT stubs):
+
+   | ART root | andruna-lx | Boot image | Interpreter | JIT stubs |
+   | --- | --- | --- | --- | --- |
+   | before | before | 10 of 10 (`getpid` only) | | |
+   | with 0005 | before | 17 of 20 | | 2 of 20 |
+   | before | fixed | | 10 of 10 | 9 of 10 |
+   | with 0005 | fixed | 0 of 20 | 0 of 10 | 0 of 20 |
+
+   With the old ART root every crash is `artJniMethodEnd` or
+   `artJniMethodStart` reading address 0; with only patch 0005, the lx
+   retry refused card table faults after four of them.
 3. **Time zone data.** 60 failures need `/apex/com.android.tzdata`
    (`tzdata` and ICU's `icu_tzdata.dat`). The pinned AOSP projects
    (`aosp/aosp.lock`) do not include `system/timezone`, so the ART root has
@@ -145,8 +185,8 @@ first run):
 5. **Linux layer gaps** seen from Java: `pipe2`, sockets, `statvfs`,
    `FIONREAD`, inotify, `/dev/null` and `/dev/zero`, mounts in
    `/proc/mounts`, ENOTTY from `tcgetattr` (26 tests, `lx-syscall`).
-6. Interpreter and JIT give the same results except for the intermittent
-   crash and one timing-sensitive `ForkJoinPool` test. No JIT-only failure
+6. Interpreter and JIT give the same results except for the (fixed)
+   intermittent crash and one timing-sensitive `ForkJoinPool` test. No JIT-only failure
    was found in this subset.
 
 Not yet explained (`triage`, 14): `List.of().contains(null)`,
@@ -191,7 +231,7 @@ test support code are compiled from the fetched AOSP tree, never copied
 
 ## What remains
 
-- Fix the wall clock and the JNI stub crash (findings 1 and 2); then the
+- Fix the wall clock (finding 1); then the
   clock-related expectations should be removed (they will show as
   unexpected passes).
 - Time zone data and Conscrypt in the ART root (findings 3 and 4): about

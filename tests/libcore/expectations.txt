@@ -11,15 +11,6 @@
 # tests/libcore/expect.py, then reviewed: categories and reasons are
 # docs/plan/phase1/libcore-tests.md. The S1 runner has no expectations here.
 
-# --- Intermittent, any test ------------------------------------------------
-
-# A compiled JNI stub (boot image or JIT code) calls artJniMethodStart or
-# artJniMethodEnd with a null Thread* and the VM faults. It hits a few random
-# tests per run: on andruna-app in both modes (the boot image's compiled
-# stubs), on the S1 runner only with the JIT (with -Xint and no boot image
-# every native call goes through the generic JNI trampoline).
-* | art | intermittent fault in a compiled JNI stub (artJniMethodStart/End reads a null Thread*) | | guest fault in artJniMethod
-
 # --- bootclasspath (198) -----------------------------------------------
 libcore.java.io.FilterInputStreamNullSourceTest#testDigestInputStream | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
 libcore.java.io.ObjectOutputStreamTest#testCloseInWriteObject | bootclasspath | fail: java.lang.AssertionError: Unable to configure default providers @ sun.security.jca.Providers.<clinit>(Providers.java:74)
