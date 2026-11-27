@@ -28,10 +28,22 @@ commit = "06356e41c5ed7b12220b24c05ba4fdb873b126a7"
 purpose = "libc headers and the bionic sources (spike S4)"
 
 [[project]]
+name = "platform/external/cpu_features"
+path = "external/cpu_features"
+commit = "76df2471cbea083fd15823ef051bbd85a7cddabb"
+purpose = "CPU feature detection linked into libart (Apache-2.0)"
+
+[[project]]
 name = "platform/external/dlmalloc"
 path = "external/dlmalloc"
 commit = "01a95ac67e502c00c9d546c3ccee2a00313f90ee"
 purpose = "allocator used by ART's dlmalloc space"
+
+[[project]]
+name = "platform/external/expat"
+path = "external/expat"
+commit = "9cc7a1ca765061a58e196f101fc601d23845c89a"
+purpose = "XML parser for libjavacore's ExpatParser natives (MIT)"
 
 [[project]]
 name = "platform/external/fdlibm"

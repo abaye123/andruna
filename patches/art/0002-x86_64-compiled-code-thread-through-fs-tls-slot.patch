@@ -1,0 +1,234 @@
+Reach the Thread from x86_64 compiled code through bionic's TLS slot in the ANDRUNA build.
+
+The optimizing compiler and the JNI compiler emit Thread accesses as
+gs()->insn(Address::Absolute(offset, no_rip)). Under ANDRUNA, gs() loads
+the Thread* from %fs:0x38 (TLS_SLOT_ART_THREAD_SELF) into R11 (TMP, which
+the code generators reserve) and the next instruction's absolute operand
+is encoded as [R11 + offset]. Two JNI sites where R11 is an input of the
+instruction pass another register: StoreStackPointerToThread (RAX) and
+TryToTransitionFromRunnableToNative (a callee-save scratch register).
+Without ANDRUNA, gs() is the GS segment prefix as before.
+
+diff --git a/compiler/utils/x86_64/assembler_x86_64.cc b/compiler/utils/x86_64/assembler_x86_64.cc
+index 46258c9..e69591e 100644
+--- a/compiler/utils/x86_64/assembler_x86_64.cc
++++ b/compiler/utils/x86_64/assembler_x86_64.cc
+@@ -24,6 +24,12 @@
+ namespace art HIDDEN {
+ namespace x86_64 {
+ 
++#if defined(ANDRUNA)
++#define ANDRUNA_THREAD_RELATIVE(name, in) const Operand& name = ThreadRelative(in)
++#else
++#define ANDRUNA_THREAD_RELATIVE(name, in) const Operand& name = in
++#endif
++
+ inline uint8_t GetEncodedVexLen(XmmRegister xmmReg) {
+   return xmmReg.IsYMM() ? SET_VEX_L_256 : SET_VEX_L_128;
+ }
+@@ -4941,12 +4947,49 @@ void X86_64Assembler::mfence() {
+ }
+ 
+ 
++#if defined(ANDRUNA)
++// Andruna (Windows x64): GS is the TEB, so there is no %gs:offset access to
++// the Thread. gs() loads the Thread* from bionic's TLS slot
++// TLS_SLOT_ART_THREAD_SELF (%fs:0x38) into R11 (TMP), or into the register
++// given, and the next instruction's absolute operand [disp32] is emitted as
++// [base + disp32]. The base register must not be an input of that
++// instruction. Flags are not changed.
++X86_64Assembler* X86_64Assembler::gs() {
++  return gs(CpuRegister(R11));
++}
++
++X86_64Assembler* X86_64Assembler::gs(CpuRegister thread_base) {
++  CHECK(!thread_base_pending_);
++  {
++    AssemblerBuffer::EnsureCapacity ensured(&buffer_);
++    EmitUint8(0x64);  // FS
++  }
++  movq(thread_base, Address::Absolute(0x38, /*no_rip=*/ true));
++  thread_base_ = thread_base.AsRegister();
++  thread_base_pending_ = true;
++  return this;
++}
++
++const Operand& X86_64Assembler::ThreadRelative(const Operand& operand) {
++  if (!thread_base_pending_) {
++    return operand;
++  }
++  // Only the absolute form Address::Absolute(disp, /*no_rip=*/ true) follows gs().
++  CHECK_EQ(operand.mod(), 0);
++  CHECK_EQ(operand.rm(), RSP);
++  CHECK_EQ(operand.base(), RBP);
++  CHECK_EQ(operand.rex(), 0);
++  thread_operand_.emplace(CpuRegister(thread_base_), operand.disp32());
++  return *thread_operand_;
++}
++#else
+ X86_64Assembler* X86_64Assembler::gs() {
+   // TODO: gs is a prefix and not an instruction
+   AssemblerBuffer::EnsureCapacity ensured(&buffer_);
+   EmitUint8(0x65);
+   return this;
+ }
++#endif
+ 
+ 
+ void X86_64Assembler::AddImmediate(CpuRegister reg, const Immediate& imm) {
+@@ -5242,7 +5285,13 @@ void X86_64Assembler::Bind(NearLabel* label) {
+ }
+ 
+ 
+-void X86_64Assembler::EmitOperand(uint8_t reg_or_opcode, const Operand& operand) {
++void X86_64Assembler::EmitOperand(uint8_t reg_or_opcode, const Operand& operand_in) {
++#if defined(ANDRUNA)
++  const Operand& operand = ThreadRelative(operand_in);
++  thread_base_pending_ = false;
++#else
++  const Operand& operand = operand_in;
++#endif
+   CHECK_GE(reg_or_opcode, 0);
+   CHECK_LT(reg_or_opcode, 8);
+   const int length = operand.length_;
+@@ -5421,14 +5470,16 @@ void X86_64Assembler::EmitOptionalRex32(XmmRegister dst, CpuRegister src) {
+   EmitOptionalRex(false, false, dst.NeedsRex(), false, src.NeedsRex());
+ }
+ 
+-void X86_64Assembler::EmitOptionalRex32(const Operand& operand) {
++void X86_64Assembler::EmitOptionalRex32(const Operand& operand_in) {
++  ANDRUNA_THREAD_RELATIVE(operand, operand_in);
+   uint8_t rex = operand.rex();
+   if (rex != 0) {
+     EmitUint8(rex);
+   }
+ }
+ 
+-void X86_64Assembler::EmitOptionalRex32(CpuRegister dst, const Operand& operand) {
++void X86_64Assembler::EmitOptionalRex32(CpuRegister dst, const Operand& operand_in) {
++  ANDRUNA_THREAD_RELATIVE(operand, operand_in);
+   uint8_t rex = operand.rex();
+   if (dst.NeedsRex()) {
+     rex |= 0x44;  // REX.0R00
+@@ -5438,7 +5489,8 @@ void X86_64Assembler::EmitOptionalRex32(CpuRegister dst, const Operand& operand)
+   }
+ }
+ 
+-void X86_64Assembler::EmitOptionalRex32(XmmRegister dst, const Operand& operand) {
++void X86_64Assembler::EmitOptionalRex32(XmmRegister dst, const Operand& operand_in) {
++  ANDRUNA_THREAD_RELATIVE(operand, operand_in);
+   uint8_t rex = operand.rex();
+   if (dst.NeedsRex()) {
+     rex |= 0x44;  // REX.0R00
+@@ -5456,7 +5508,8 @@ void X86_64Assembler::EmitRex64(CpuRegister reg) {
+   EmitOptionalRex(false, true, false, false, reg.NeedsRex());
+ }
+ 
+-void X86_64Assembler::EmitRex64(const Operand& operand) {
++void X86_64Assembler::EmitRex64(const Operand& operand_in) {
++  ANDRUNA_THREAD_RELATIVE(operand, operand_in);
+   uint8_t rex = operand.rex();
+   rex |= 0x48;  // REX.W000
+   EmitUint8(rex);
+@@ -5478,7 +5531,8 @@ void X86_64Assembler::EmitRex64(XmmRegister dst, XmmRegister src) {
+   EmitOptionalRex(false, true, dst.NeedsRex(), false, src.NeedsRex());
+ }
+ 
+-void X86_64Assembler::EmitRex64(CpuRegister dst, const Operand& operand) {
++void X86_64Assembler::EmitRex64(CpuRegister dst, const Operand& operand_in) {
++  ANDRUNA_THREAD_RELATIVE(operand, operand_in);
+   uint8_t rex = 0x48 | operand.rex();  // REX.W000
+   if (dst.NeedsRex()) {
+     rex |= 0x44;  // REX.0R00
+@@ -5486,7 +5540,8 @@ void X86_64Assembler::EmitRex64(CpuRegister dst, const Operand& operand) {
+   EmitUint8(rex);
+ }
+ 
+-void X86_64Assembler::EmitRex64(XmmRegister dst, const Operand& operand) {
++void X86_64Assembler::EmitRex64(XmmRegister dst, const Operand& operand_in) {
++  ANDRUNA_THREAD_RELATIVE(operand, operand_in);
+   uint8_t rex = 0x48 | operand.rex();  // REX.W000
+   if (dst.NeedsRex()) {
+     rex |= 0x44;  // REX.0R00
+@@ -5510,7 +5565,9 @@ void X86_64Assembler::EmitOptionalByteRegNormalizingRex32(CpuRegister dst,
+   EmitOptionalRex(force, false, dst.NeedsRex(), false, src.NeedsRex());
+ }
+ 
+-void X86_64Assembler::EmitOptionalByteRegNormalizingRex32(CpuRegister dst, const Operand& operand) {
++void X86_64Assembler::EmitOptionalByteRegNormalizingRex32(CpuRegister dst,
++                                                          const Operand& operand_in) {
++  ANDRUNA_THREAD_RELATIVE(operand, operand_in);
+   uint8_t rex = operand.rex();
+   // For dst, SPL, BPL, SIL, DIL need the rex prefix.
+   bool force = dst.AsRegister() > 3;
+diff --git a/compiler/utils/x86_64/assembler_x86_64.h b/compiler/utils/x86_64/assembler_x86_64.h
+index e3ffe5c..9a8e4f0 100644
+--- a/compiler/utils/x86_64/assembler_x86_64.h
++++ b/compiler/utils/x86_64/assembler_x86_64.h
+@@ -17,6 +17,7 @@
+ #ifndef ART_COMPILER_UTILS_X86_64_ASSEMBLER_X86_64_H_
+ #define ART_COMPILER_UTILS_X86_64_ASSEMBLER_X86_64_H_
+ 
++#include <optional>
+ #include <vector>
+ 
+ #include "arch/x86_64/instruction_set_features_x86_64.h"
+@@ -1011,6 +1012,10 @@ class X86_64Assembler final : public Assembler {
+   void mfence();
+ 
+   X86_64Assembler* gs();
++#if defined(ANDRUNA)
++  // gs() with an explicit register for the Thread* (see gs()).
++  X86_64Assembler* gs(CpuRegister thread_base);
++#endif
+ 
+   void setcc(Condition condition, CpuRegister dst);
+ 
+@@ -1195,6 +1200,14 @@ class X86_64Assembler final : public Assembler {
+   void EmitOperandSizeOverride();
+ 
+   void EmitOperand(uint8_t rm, const Operand& operand);
++#if defined(ANDRUNA)
++  // After gs(): the instruction's absolute operand, rebased on the register
++  // that holds the Thread*.
++  const Operand& ThreadRelative(const Operand& operand);
++  bool thread_base_pending_ = false;
++  Register thread_base_ = R11;
++  std::optional<Address> thread_operand_;
++#endif
+   void EmitImmediate(const Immediate& imm, bool is_16_op = false);
+   void EmitComplex(
+       uint8_t rm, const Operand& operand, const Immediate& immediate, bool is_16_op = false);
+diff --git a/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc b/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc
+index cb64eb0..ef2bdd6 100644
+--- a/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc
++++ b/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc
+@@ -206,7 +206,12 @@ void X86_64JNIMacroAssembler::StoreStackPointerToThread(ThreadOffset64 thr_offs,
+     CpuRegister reg = GetScratchRegister();
+     __ movq(reg, CpuRegister(RSP));
+     __ orq(reg, Immediate(0x2));
++#if defined(ANDRUNA)
++    // The scratch register (R11) is the value stored: RAX holds the Thread*.
++    __ gs(CpuRegister(RAX))->movq(Address::Absolute(thr_offs, true), reg);
++#else
+     __ gs()->movq(Address::Absolute(thr_offs, true), reg);
++#endif
+   } else {
+     __ gs()->movq(Address::Absolute(thr_offs, true), CpuRegister(RSP));
+   }
+@@ -529,8 +534,15 @@ void X86_64JNIMacroAssembler::TryToTransitionFromRunnableToNative(
+   static_assert(kRunnableStateValue == 0u);
+   __ xorl(rax, rax);
+   __ movl(scratch, Immediate(kNativeStateValue));
++#if defined(ANDRUNA)
++  // R11 is the new value: a callee-save scratch register holds the Thread*.
++  __ gs(scratch_regs[0].AsX86_64().AsCpuRegister())
++      ->LockCmpxchgl(Address::Absolute(thread_flags_offset.Uint32Value(), /*no_rip=*/ true),
++                     scratch);
++#else
+   __ gs()->LockCmpxchgl(Address::Absolute(thread_flags_offset.Uint32Value(), /*no_rip=*/ true),
+                         scratch);
++#endif
+   // LOCK CMPXCHG has full barrier semantics, so we don't need barriers here.
+   // If any flags are set, go to the slow path.
+   __ j(kNotZero, X86_64JNIMacroLabel::Cast(label)->AsX86_64());
