@@ -15,7 +15,9 @@
 
 # A compiled JNI stub (boot image or JIT code) calls artJniMethodStart or
 # artJniMethodEnd with a null Thread* and the VM faults. It hits a few random
-# tests per run, in every mode, on both runners.
+# tests per run: on andruna-app in both modes (the boot image's compiled
+# stubs), on the S1 runner only with the JIT (with -Xint and no boot image
+# every native call goes through the generic JNI trampoline).
 * | art | intermittent fault in a compiled JNI stub (artJniMethodStart/End reads a null Thread*) | | guest fault in artJniMethod
 
 # --- bootclasspath (198) -----------------------------------------------
