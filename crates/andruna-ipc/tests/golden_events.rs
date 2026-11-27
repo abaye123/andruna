@@ -1,5 +1,5 @@
 //! Golden payloads of the kinds 0x0010..=0x001F (events, crash reports,
-//! diagnostics, activity starts), in `tests/golden/v1-events.txt`, in the
+//! diagnostics), in `tests/golden/v1-events.txt`, in the
 //! format of `tests/golden.rs`. A separate file, so kinds added by other
 //! components do not touch it. The manager's codec (`ui/`) is tested
 //! against the same file. `ANDRUNA_BLESS=1 cargo test -p andruna-ipc --test
@@ -48,14 +48,6 @@ fn requests() -> Vec<(&'static str, u32, Request)> {
                         calls: 1,
                     },
                 ],
-            },
-        ),
-        (
-            "request.start_activity",
-            14,
-            Request::StartActivity {
-                package: "com.example.app".into(),
-                activity: ".MainActivity".into(),
             },
         ),
     ]

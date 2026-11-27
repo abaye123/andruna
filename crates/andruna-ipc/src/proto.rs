@@ -47,13 +47,14 @@ mod kind {
     pub const START_PACKAGE: u16 = 0x0003;
     pub const FOCUS_WINDOW: u16 = 0x0004;
     pub const LIST_PACKAGES: u16 = 0x0005;
+    /// Defined with the package manager messages (same body there).
+    pub const START_ACTIVITY: u16 = 0x000A;
 
     // 0x0010..=0x001F (responses 0x8010..=0x801F): events, crash reports,
-    // diagnostics and activity starts. See proto/events.rs.
+    // diagnostics. See proto/events.rs.
     pub const WAIT_EVENTS: u16 = 0x0010;
     pub const GET_MISSING_FUNCTIONS: u16 = 0x0011;
     pub const REPORT_MISSING_FUNCTIONS: u16 = 0x0012;
-    pub const START_ACTIVITY: u16 = 0x0013;
 
     pub const PONG: u16 = 0x8001;
     pub const STATUS_REPLY: u16 = 0x8002;
@@ -209,7 +210,7 @@ impl ErrorCode {
             Self::HostStartFailed => 8,
             Self::Busy => 9,
             Self::Internal => 10,
-            Self::NotPermitted => 16,
+            Self::NotPermitted => 32,
             Self::Other(c) => c,
         }
     }
@@ -226,7 +227,7 @@ impl ErrorCode {
             8 => Self::HostStartFailed,
             9 => Self::Busy,
             10 => Self::Internal,
-            16 => Self::NotPermitted,
+            32 => Self::NotPermitted,
             c => Self::Other(c),
         }
     }

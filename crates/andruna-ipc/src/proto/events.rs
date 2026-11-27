@@ -1,5 +1,5 @@
 //! Messages of the kinds 0x0010..=0x001F: the event stream (notifications,
-//! app crashes), the missing-function counters and activity starts.
+//! app crashes) and the missing-function counters.
 //!
 //! The event stream is a long poll: a client sends
 //! [`Request::WaitEvents`](super::Request::WaitEvents) with the sequence

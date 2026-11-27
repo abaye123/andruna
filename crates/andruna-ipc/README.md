@@ -54,12 +54,12 @@ stays open.
 | WaitEvents | 0x0010 | `u64` epoch, `u64` after, `u32` timeout ms | Events (0x8010): `u64` epoch, `u64` next, `bool` missed, `u32` count, events |
 | GetMissingFunctions | 0x0011 | `str` package | MissingFunctions (0x8011): `u64` updated ms, `u32` count, (`str` name, `u64` calls) each, most-called first |
 | ReportMissingFunctions | 0x0012 | `u32` count, (`str` name, `u64` calls) each | Reported (0x8012) |
-| StartActivity | 0x0013 | `str` package, `str` activity | Started (0x8003) |
+| StartActivity | 0x000A | `str` package, `str` activity | Started (0x8003) |
 | (any) | | | Error (0x80FF): `u16` code, `str` message |
 
 Error codes: 1 UnsupportedVersion, 2 Malformed, 3 UnknownRequest,
 4 InvalidPackageName, 5 NotInstalled, 6 NotRunning, 7 NoWindow,
-8 HostStartFailed, 9 Busy, 10 Internal, 16 NotPermitted. Clients treat
+8 HostStartFailed, 9 Busy, 10 Internal, 32 NotPermitted. Clients treat
 unknown codes as failures.
 
 ### Number ranges
@@ -71,10 +71,12 @@ To keep parallel work from colliding:
 | Range | Owner |
 | --- | --- |
 | 0x0001..=0x000F | sysd basics and the package manager (install, uninstall, package details) |
-| 0x0010..=0x001F | events, crash reports, diagnostics, activity starts (manager and launcher) |
+| 0x0010..=0x001F | events, crash reports, diagnostics (manager and launcher) |
 
-Responses use the same number with the high bit set. Error codes 16..=31
-belong to the 0x0010 range.
+Responses use the same number with the high bit set. Error codes 11..=31
+belong to the package manager, 32..=47 to the 0x0010 range. StartActivity
+(0x000A) is defined with the package manager messages; sysd implements it
+with the launcher.
 
 ### Events (0x0010)
 
