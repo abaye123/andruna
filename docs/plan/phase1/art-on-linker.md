@@ -95,6 +95,83 @@ run, machine loaded): libbase_test 307 of 367 (the lx conformance record:
 `pthread_CondWakeupTest.signal_clockwait_monotonic_monotonic`, which timed
 out in the suite but passed 20 of 20 runs of its test case alone.
 
+## Start-up (x64)
+
+**The regression was the machine, not the lx merge.** Measured with the
+two builds interleaved, so that both see the same background load, Hello
+World starts as fast after the andruna-lx merge as before it. The 191 to
+342 ms above were taken while other agents loaded the machine; the 146
+to 158 ms "before" figures on a quieter one.
+
+Method: release builds of andruna-app at commit 4c28486 (the last one
+before the rebase onto the lx merge) and of this branch, the same ART root
+and boot image, Hello World run 8 times per build and mode in an
+interleaved order (`int`, `jit` without boot image; `aot` with it).
+Background load during the runs between 48 and 80% (other agents). Wall
+time of the process, ms:
+
+| Mode | before the lx merge, median (min to max) | after, without vDSO | after, with vDSO |
+| --- | ---: | ---: | ---: |
+| Interpreter | 168 (155 to 304) | 176 (156 to 191) | 177 (151 to 244) |
+| JIT | 172 (154 to 225) | 175 (161 to 216) | 176 (164 to 205) |
+| AOT | 177 (148 to 214) | 170 (148 to 201) | 177 (152 to 215) |
+
+The differences are inside the spread of each column.
+
+Where the time goes (medians of the same runs, ms since Windows created
+the process, from `ANDRUNA_PROFILE`, which this branch adds to the
+loader):
+
+| Part | ms |
+| --- | ---: |
+| Process creation to `main` of andruna-app (Windows; a trivial `whoami.exe` takes 14 ms to run on the same machine) | 16 to 19 |
+| Mounting the guest tree (andruna-lx) | 2 to 3 |
+| Loading, binding and relocating the 26 objects | 12 to 16 |
+| Initializers | under 1 |
+| ART: runtime start, `main`, shutdown | 126 to 138 |
+| Process exit after `exit_group` | about 6 |
+
+Inside ART's part the system calls that take time are (one AOT run;
+times summed over all threads, so blocking waits of other threads count
+too): `mmap` 653 calls, 45 ms (file mappings are private copies filled
+with `pread`, andruna-lx's current design; the boot image alone is 37
+MB), `munmap` 590 calls, 9 ms, `openat` 41 calls and `newfstatat` 48
+calls, about 100 and 70 us each (`CreateFileW` and its file system
+filters), futex and `rt_sigtimedwait` waits. The same numbers before the
+lx merge: `mmap` 39 ms, `munmap` 9 ms, `openat` 90 us, `newfstatat` 68 us.
+
+**System call cost.** A guest program (`crates/andruna-linker/tests/guest/clock_test.c`)
+measures the paths through bionic on the production loader (200 000
+calls each, machine loaded):
+
+| Path | ns per call |
+| --- | ---: |
+| `syscall(SYS_gettid)`: `__andruna_syscall`, switch to the Windows stack, dispatch, lx, lx's pending-signal check | 26 to 33 |
+| `syscall(SYS_clock_gettime)`, `CLOCK_MONOTONIC` | 57 to 80 |
+| `clock_gettime(CLOCK_MONOTONIC)` without the vDSO (the same system call) | 55 to 64 |
+| `clock_gettime(CLOCK_MONOTONIC)` with the vDSO | 30 to 38 |
+| `gettimeofday` with the vDSO | 43 to 65 |
+
+So the entry path and the pending-signal check (one atomic load while
+no signal is queued) are not where start-up goes: an imageless start makes
+17 910 `clock_gettime` calls (ART's class linking timing), which cost
+about 1 ms through the system call path and about 0.6 ms through the
+vDSO. The vDSO is kept because it is how Linux provides these calls and
+it halves their cost, not because it changes start-up measurably.
+
+**The wall clock was wrong.** `System.currentTimeMillis()` and
+`Instant.now()` returned 0 on andruna-app: bionic's `gettimeofday` went to
+the `gettimeofday` system call, which nothing implemented (`ENOSYS`). The
+vDSO's `gettimeofday` and `time`, and the loader's answers to those two
+system calls (same code), fix it; `wall_clock_is_the_system_time` in
+`crates/andruna-app/tests/run.rs` (a Java probe, `spikes/s1/java/src/Clock.java`)
+and `clock_test` check them against the Windows system time.
+
+What would make start-up faster, in order of size: real file mappings
+instead of copies in andruna-lx (`MapViewOfFile3` with placeholders, the
+step lx's documentation names next), fewer and cheaper file opens, and
+the loader's 12 to 16 ms for 26 objects. None is a regression.
+
 ## What the loader gained (andruna-linker)
 
 - **System calls on the Windows stack.** `__andruna_syscall` switches a
