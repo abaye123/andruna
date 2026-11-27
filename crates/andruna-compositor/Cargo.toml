@@ -1,0 +1,55 @@
+[package]
+name = "andruna-compositor"
+description = "What SurfaceFlinger and WindowManager do on a device, on Windows: task windows, DirectComposition surfaces, vsync, input and IME."
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "andruna_compositor"
+path = "src/lib.rs"
+
+# A test host: opens task windows with a test pattern and logs the events
+# the compositor produces (configuration changes, input, IME, vsync).
+[[bin]]
+name = "andruna-compositor-host"
+path = "src/bin/host.rs"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Foundation_Numerics",
+    "Win32_Devices_Display",
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_Xps",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Performance",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_Ime",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input_Pointer",
+    "Win32_UI_TextServices",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[lints]
+workspace = true
