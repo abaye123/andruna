@@ -171,7 +171,8 @@ target_include_directories(libnativebridge PRIVATE "${AOSP}/bionic/libc/platform
 
 # The host variant of libnativeloader (plain dlopen of the library path, no
 # linker namespaces): Andruna's linker has no namespaces yet.
-add_library(libnativeloader STATIC "${_art}/libnativeloader/native_loader.cpp")
+add_library(libnativeloader STATIC "${_art}/libnativeloader/native_loader.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/overlay/art-gen/src/nativeloader_no_namespaces.cpp")
 target_include_directories(libnativeloader PUBLIC "${_art}/libnativeloader/include")
 target_link_libraries(libnativeloader PUBLIC aosp_android libbase liblog
   libnativebridge libnativehelper_headers libmodules_utils_build)

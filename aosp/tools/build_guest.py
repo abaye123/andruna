@@ -16,6 +16,10 @@ Steps (all output in out/guest/<arch>/ of the repository):
   linker-tests  crates/andruna-linker/tests/guest/* (lib<name>.c -> a shared
                 object, anything else a PIE; `// LINK: -lfoo` on the first
                 line adds libraries)
+  art           libart.so, the JNI libraries ART opens at start-up (ICU,
+                libcore), dalvikvm and dex2oat, collected in art/out
+                (aosp/guest/art.cmake; needs the art and libcore patches;
+                not in the default step list)
 
 Usage: python aosp/tools/build_guest.py [--arch x64|arm64] [step...]
 
@@ -202,6 +206,38 @@ def step_linker_tests(arch, out):
           [f"-DANDRUNA_LINKER_TESTS_DIR={ROOT / 'crates' / 'andruna-linker' / 'tests' / 'guest'}"])
 
 
+BOOT_JARS = ("core-oj.jar", "core-libart.jar", "core-icu4j.jar")
+
+
+def step_art(arch, out):
+    """ART, then the ART root andruna-app runs (out/guest/<arch>/art-root):
+    lib64 (bionic, libc++, ART's libraries), bin (dalvikvm, dex2oat),
+    javalib (the boot class path jars from ANDRUNA_BOOT_JARS, default
+    out/s1/java, built by spikes/s1/java/build_boot.py) and icu (ICU's
+    data file)."""
+    b = stage(arch, out, "art")
+    root = out / "art-root"
+    for d in ("lib64", "bin", "javalib", "icu"):
+        (root / d).mkdir(parents=True, exist_ok=True)
+    sysroot_lib = out / "sysroot" / "usr" / "lib"
+    for so in sysroot_lib.glob("*.so*"):
+        if so.name != "libandruna_host.so" and so.is_file():
+            shutil.copy2(so, root / "lib64" / so.name)
+    for f in (b / "out").iterdir():
+        dst = root / ("bin" if f.name in ("dalvikvm", "dex2oat") else "lib64") / f.name
+        shutil.copy2(f, dst)
+    jars = Path(os.environ.get("ANDRUNA_BOOT_JARS", ROOT / "out" / "s1" / "java"))
+    for j in BOOT_JARS:
+        if (jars / j).exists():
+            shutil.copy2(jars / j, root / "javalib" / j)
+        else:
+            print(f"warning: {jars / j} missing (spikes/s1/java/build_boot.py)")
+    dat = next((AOSP / "external" / "icu" / "icu4c" / "source" / "stubdata").glob("icudt*l.dat"), None)
+    if dat:
+        shutil.copy2(dat, root / "icu" / dat.name)
+    print(f"ART root: {root}")
+
+
 def step_builtins(arch, out):
     """compiler-rt builtins for arm64 Android (llvm-mingw ships them for
     x86_64 Linux only): every generic and aarch64 source that compiles, and
@@ -247,13 +283,13 @@ def step_builtins(arch, out):
 
 STEPS = {"sysroot": step_sysroot, "builtins": step_builtins, "bionic": step_bionic,
          "libcxx": step_libcxx, "aosp": step_aosp, "tests": step_tests,
-         "linker-tests": step_linker_tests}
+         "linker-tests": step_linker_tests, "art": step_art}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arch", default="x64", choices=ARCH)
-    ap.add_argument("steps", nargs="*", default=list(STEPS))
+    ap.add_argument("steps", nargs="*", default=[s for s in STEPS if s != "art"])
     args = ap.parse_args()
     out = ROOT / "out" / "guest" / args.arch
     out.mkdir(parents=True, exist_ok=True)

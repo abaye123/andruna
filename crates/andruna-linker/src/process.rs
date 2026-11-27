@@ -91,6 +91,7 @@ pub fn args() -> (i32, *const *const u8, *const *const u8) {
 /// `exit_group`: ends the process.
 pub fn exit_process(code: i32) -> ! {
     use std::io::Write as _;
+    crate::interim::flush_all();
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     std::process::exit(code & 0xff)
@@ -270,6 +271,11 @@ fn start(ctx: MainCtx) -> Result<std::convert::Infallible> {
     });
     let (argc, argv, envp) = (s.argc, s.argv, s.envp);
     let block = s.block;
+    // `startstack` of /proc/self/stat (bionic finds the main stack by it).
+    crate::procfs::set_program(
+        block,
+        program.args.first().map(String::as_str).unwrap_or_default(),
+    );
     let mut l = Linker::new(program.config);
     l.hwcap = hwcap;
     l.hwcap2 = hwcap2;

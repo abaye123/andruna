@@ -5,9 +5,14 @@
 //! and released while guest initializers and finalizers run (they may call
 //! `dlopen` themselves).
 //!
-//! Not supported yet, reported as failures with a `dlerror` message:
-//! linker namespaces (`android_create_namespace` and friends) and
-//! `android_dlopen_ext` options.
+//! Namespaces: the process has one namespace, which sees every object.
+//! `android_get_exported_namespace("default")` returns it and
+//! `android_dlopen_ext` accepts it with `ANDROID_DLEXT_USE_NAMESPACE`
+//! (ART opens oat files that way). Not supported yet, reported as
+//! failures with a `dlerror` message: other namespaces
+//! (`android_create_namespace` and friends) and the other
+//! `android_dlopen_ext` options (callers such as ART then use their own
+//! loading path).
 
 use core::ffi::{CStr, c_char, c_void};
 use std::cell::RefCell;
@@ -272,7 +277,16 @@ gfn! {
     ) -> *mut c_void {
         crate::host::guard(core::ptr::null_mut(), || {
             // SAFETY: a non-NULL extinfo starts with its 64-bit flags.
-            let ext_flags = if ext.is_null() { 0 } else { unsafe { ext.read_unaligned() } };
+            let mut ext_flags = if ext.is_null() { 0 } else { unsafe { ext.read_unaligned() } };
+            if ext_flags & DLEXT_USE_NAMESPACE != 0 {
+                // SAFETY: android_dlextinfo.library_namespace (offset 40).
+                let ns = unsafe { ext.add(5).read_unaligned() };
+                if ns != default_namespace() {
+                    set_error("android_dlopen_ext failed: unknown linker namespace");
+                    return core::ptr::null_mut();
+                }
+                ext_flags &= !DLEXT_USE_NAMESPACE;
+            }
             if ext_flags != 0 {
                 set_error(format!(
                     "android_dlopen_ext failed: extinfo flags {ext_flags:#x} are not supported yet"
@@ -419,6 +433,31 @@ gfn! {
     }
 }
 
+/// `ANDROID_DLEXT_USE_NAMESPACE`.
+const DLEXT_USE_NAMESPACE: u64 = 0x200;
+
+/// The process's one namespace (an opaque handle for guest code).
+static DEFAULT_NAMESPACE: u8 = 0;
+
+fn default_namespace() -> u64 {
+    &DEFAULT_NAMESPACE as *const u8 as u64
+}
+
+gfn! {
+    unsafe fn loader_get_exported_namespace(name: *const c_char) -> *mut c_void {
+        crate::host::guard(core::ptr::null_mut(), || {
+            // SAFETY: guest string argument.
+            match unsafe { str_arg(name) } {
+                Some("default") => default_namespace() as *mut c_void,
+                _ => {
+                    set_error("linker namespaces are not supported yet");
+                    core::ptr::null_mut()
+                }
+            }
+        })
+    }
+}
+
 gfn! {
     unsafe fn loader_namespace_unsupported() -> *mut c_void {
         set_error("linker namespaces are not supported yet");
@@ -518,7 +557,7 @@ pub fn symbols() -> Vec<(&'static str, u64)> {
         ),
         (
             "__loader_android_get_exported_namespace",
-            loader_namespace_unsupported as usize as u64,
+            loader_get_exported_namespace as usize as u64,
         ),
         (
             "__loader_android_init_anonymous_namespace",
@@ -568,6 +607,19 @@ mod tests {
         assert_eq!(id_of(RTLD_DEFAULT), None);
         assert_eq!(id_of(RTLD_NEXT), None);
         assert_eq!(id_of(0x1000), None);
+    }
+
+    #[test]
+    fn only_the_default_namespace_is_exported() {
+        // SAFETY: host functions called as guest code would.
+        unsafe {
+            assert_eq!(
+                loader_get_exported_namespace(c"default".as_ptr()) as u64,
+                default_namespace()
+            );
+            assert!(loader_get_exported_namespace(c"system".as_ptr()).is_null());
+            assert!(!loader_dlerror().is_null());
+        }
     }
 
     #[test]

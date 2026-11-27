@@ -39,3 +39,7 @@ pub mod signal;
 mod sys;
 pub mod time;
 mod util;
+
+/// The user buffer type of [`fd::FileOps`], for file types defined
+/// outside lx.
+pub use util::UserBuf;

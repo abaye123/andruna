@@ -18,7 +18,6 @@ use windows::Win32::System::Diagnostics::Debug::{AddVectoredExceptionHandler, EX
 
 use crate::object::Object;
 
-#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 const EXCEPTION_CONTINUE_EXECUTION: i32 = -1;
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 
@@ -158,6 +157,17 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
                 rec.ExceptionInformation[1]
             );
         }
+        walk(&mut e, fp);
+    } else if fatal && tracing() {
+        // A fault in host code (ANDRUNA_TRACE): the guest frames above it
+        // are still worth seeing.
+        let mut e = std::io::stderr().lock();
+        let addr = rec.ExceptionInformation[1];
+        let _ = writeln!(
+            e,
+            "[andruna-linker] host fault {code:#x} at {pc:#x} (address {addr:#x}) on thread {}",
+            andruna_lx::process::gettid()
+        );
         walk(&mut e, fp);
     }
     EXCEPTION_CONTINUE_SEARCH
