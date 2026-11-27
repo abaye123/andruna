@@ -39,6 +39,7 @@ as an ADR and listed here.
 | Adaptation | Status |
 | --- | --- |
 | Freeform resizable windows with real configuration changes | Decided (spec) |
+| Freeform window details: density from the monitor DPI, caption as a caption bar inset, letterbox for non-resizable apps, input devices, positional key codes with the Windows layout as key character map, Back shortcuts | Proposed ([ADR 0031](../decisions/0031-freeform-window-configuration.md)) |
 | A PC camera not marked as rear is reported as front-facing | Proposed |
 | Camera orientation relative to the display, since Windows delivers upright frames | Proposed |
 | Device identity: the PC's real manufacturer and model; Andruna's own brand, product, device and fingerprint | Proposed |
