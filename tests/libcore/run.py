@@ -34,6 +34,9 @@ import re
 import shutil
 import subprocess
 import sys
+
+# The spike scripts this imports live in the source tree; keep it clean.
+sys.dont_write_bytecode = True
 import tempfile
 import threading
 import time

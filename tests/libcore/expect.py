@@ -15,6 +15,9 @@ import fnmatch
 import importlib.util
 import json
 import sys
+
+# The spike scripts this imports live in the source tree; keep it clean.
+sys.dont_write_bytecode = True
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
