@@ -45,8 +45,9 @@ without Chromium's `build/` directory.
 
 ## Consequences
 - One toolchain for all Windows code, no depot_tools or MSVC on build
-  machines or CI; the DLLs build in about 15 minutes per architecture with
-  4 jobs.
+  machines or CI. A build compiles about 380 files per architecture;
+  arm64 is cross-compiled on x64 hosts. libGLESv2.dll is about 8 MB and
+  libEGL.dll about 1.5 MB.
 - The glue must follow ANGLE's `.gni` files and `BUILD.gn` when the tag
   moves: new source lists or conditional files are added by name, and new
   required defines are found by a failing build or smoke test, not by gn.
