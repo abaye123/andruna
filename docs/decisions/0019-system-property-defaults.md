@@ -1,6 +1,6 @@
 # 0019 - System properties: a read-only area with Andruna defaults
 
-**Status:** proposed, 2026-11-27
+**Status:** accepted, 2026-11-27
 
 ## Context
 bionic reads system properties from a shared memory area it maps from

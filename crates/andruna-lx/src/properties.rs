@@ -1,5 +1,5 @@
 //! System properties as bionic reads them: a read-only property area at
-//! `/dev/__properties__` (ADR 0019, proposed).
+//! `/dev/__properties__` (ADR 0019).
 //!
 //! bionic maps `/dev/__properties__` when it is a regular file (its
 //! "pre-split" layout): a `prop_area` header followed by a trie of

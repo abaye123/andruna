@@ -44,7 +44,7 @@ as an ADR and listed here.
 | Device identity: the PC's real manufacturer and model; Andruna's own brand, product, device and fingerprint | Proposed |
 | microG presented with Google's public signing certificate, only when signed by microG's key | Proposed ([Google services](07-google-services.md)) |
 | Windows accent color as Android's dynamic color source | Proposed |
-| System property defaults (SDK level, ABI, Andruna's brand, product and device) | Proposed ([ADR 0019](../decisions/0019-system-property-defaults.md)) |
+| System property defaults (SDK level, ABI, Andruna's brand, product and device) | Accepted ([ADR 0019](../decisions/0019-system-property-defaults.md)) |
 
 ## Review
 
