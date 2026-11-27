@@ -359,7 +359,7 @@ unsafe fn mmap_file(addr: u64, len: u64, prot: u32, flags: u32, fd: i32, off: i6
     if !matches!(ty, MAP_SHARED | MAP_PRIVATE | MAP_SHARED_VALIDATE) {
         return Some(err(EINVAL));
     }
-    if off < 0 || off as u64 % PAGE != 0 || len == 0 {
+    if off < 0 || !(off as u64).is_multiple_of(PAGE) || len == 0 {
         return Some(err(EINVAL));
     }
     let size = match file_size(fd) {
@@ -568,7 +568,7 @@ unsafe fn futex_requeue(uaddr: u64, op: i32, val: u32, val2: u32, val3: u32) -> 
     if cmd != FUTEX_REQUEUE && cmd != FUTEX_CMP_REQUEUE {
         return None;
     }
-    if uaddr == 0 || uaddr % 4 != 0 {
+    if uaddr == 0 || !uaddr.is_multiple_of(4) {
         return Some(err(if uaddr == 0 { EFAULT } else { EINVAL }));
     }
     if cmd == FUTEX_CMP_REQUEUE {
@@ -694,11 +694,11 @@ fn getrusage(who: i32, buf: *mut u8) -> i64 {
     // SAFETY: the caller's struct rusage (144 bytes).
     unsafe { core::ptr::write_bytes(buf, 0, 144) };
     let ok = match who {
-        // SAFETY: pseudo handles of the current process and thread.
         0 => {
+            // SAFETY: pseudo handle of the current process.
             unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) }.is_ok()
         }
-        // SAFETY: as above.
+        // SAFETY: pseudo handle of the current thread.
         1 => unsafe { GetThreadTimes(GetCurrentThread(), &mut c, &mut e, &mut k, &mut u) }.is_ok(),
         -1 => return 0,
         _ => return err(EINVAL),
@@ -822,7 +822,7 @@ fn cpus() -> usize {
 fn sched_getaffinity(size: usize, mask: *mut u8) -> i64 {
     let n = cpus();
     let bytes = n.div_ceil(64) * 8;
-    if size < bytes || size % 8 != 0 {
+    if size < bytes || !size.is_multiple_of(8) {
         return err(EINVAL);
     }
     if mask.is_null() {
@@ -884,7 +884,7 @@ fn membarrier(cmd: i32) -> i64 {
 
 fn mincore(addr: u64, len: u64, vec: *mut u8) -> i64 {
     use windows::Win32::System::Memory::{MEM_FREE, MEMORY_BASIC_INFORMATION, VirtualQuery};
-    if addr % PAGE != 0 {
+    if !addr.is_multiple_of(PAGE) {
         return err(EINVAL);
     }
     let pages = len.div_ceil(PAGE);

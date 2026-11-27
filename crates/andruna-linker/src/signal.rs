@@ -1118,7 +1118,7 @@ mod tests {
             );
         }
         assert_eq!(old.handler, 0x1234);
-        assert_eq!(old.mask, u64::MAX & !UNBLOCKABLE);
+        assert_eq!(old.mask, !UNBLOCKABLE);
         let dfl = KernelSigaction::default();
         // SAFETY: valid pointer.
         unsafe { call(nr::RT_SIGACTION, [sig, &dfl as *const _ as i64, 0, 8, 0, 0]) };
