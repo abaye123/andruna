@@ -37,6 +37,13 @@ allow-wildcard-paths = true
 [advisories]
 version = 2
 yanked = "deny"
+# andruna-pkg verifies APK signatures: public keys and public data only. Its
+# shipped code never holds a private key, so timing side channels on secret
+# values do not apply (ADR 0028). Test builds sign with throwaway keys.
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "rsa: private-key timing; andruna-pkg only verifies signatures (ADR 0028)" },
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5: timing on secret values; only public-key verification in shipped code (ADR 0028)" },
+]
 
 [sources]
 unknown-registry = "deny"
