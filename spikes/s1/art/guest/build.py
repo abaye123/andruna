@@ -180,6 +180,32 @@ def step_aosp(arch, out):
         "-DANDRUNA_AOSP_RUNTIME=ON",
     ])
     run(["cmake", "--build", b] + (["--", "-k", "0"] if os.environ.get("KEEP_GOING") else []))
+    check_art_symbols(out)
+
+
+def check_art_symbols(out):
+    """Fails if an ART symbol (art:: namespace) is undefined in the guest
+    objects and defined in none of them. The guest links use
+    --unresolved-symbols=ignore-all (libc functions are bound by the loader),
+    so a source missing from a module would otherwise only show at run time,
+    as a call to the loader's ENOSYS stub."""
+    nm = LLVM_MINGW / "bin" / "llvm-nm.exe"
+    b = out / "aosp"
+    objs = sorted(b.glob("*.so")) + [b / "dalvikvm", b / "dex2oat"]
+    libs = (objs + sorted((out / "sysroot" / "usr" / "lib").glob("*.so*"))
+            + sorted((out / "libcxx-install" / "lib").glob("libc++.so*")))
+
+    def names(files, flag):
+        r = subprocess.run([str(nm), "-D", flag] + [str(f) for f in files if f.exists()],
+                           check=True, capture_output=True, text=True)
+        return {line.split()[-1] for line in r.stdout.splitlines()
+                if line.strip() and not line.endswith(":")}
+
+    missing = sorted(s for s in names(objs, "--undefined-only") - names(libs, "--defined-only")
+                     if s.startswith(("_ZN3art", "_ZNK3art", "_ZTVN3art", "_ZTIN3art")))
+    if missing:
+        sys.exit("ART symbols undefined in every guest object:\n  " + "\n  ".join(missing))
+    print("ART symbols: all defined", flush=True)
 
 
 def step_builtins(arch, out):

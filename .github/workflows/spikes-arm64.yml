@@ -9,7 +9,7 @@ name: Spikes ARM64
 on:
   workflow_dispatch:
   push:
-    branches: [spikes-arm64, s1-round4]
+    branches: [spikes-arm64, s1-round4, phase1-arm64-aot]
 
 permissions:
   contents: read
@@ -22,7 +22,7 @@ env:
 jobs:
   probes:
     name: s1 s3 s4 (${{ matrix.arch }})
-    if: github.ref_name != 's1-round4'
+    if: github.ref_name != 's1-round4' && github.ref_name != 'phase1-arm64-aot'
     strategy:
       fail-fast: false
       matrix:
@@ -210,7 +210,7 @@ jobs:
   # arm64 compiler-rt builtins), then the loader runs them.
   s8:
     name: s8 (${{ matrix.arch }})
-    if: github.ref_name != 's1-round4'
+    if: github.ref_name != 's1-round4' && github.ref_name != 'phase1-arm64-aot'
     strategy:
       fail-fast: false
       matrix:
@@ -374,7 +374,7 @@ jobs:
   # Hello World and the benchmark on windows-11-arm.
   s1-art-build:
     name: s1 art guest (arm64, built on x64)
-    if: github.ref_name == 's1-round4' || github.event_name == 'workflow_dispatch'
+    if: github.ref_name == 's1-round4' || github.ref_name == 'phase1-arm64-aot' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 240
     defaults:
@@ -550,8 +550,24 @@ jobs:
           Invoke-Art dex2oat-boot @('--timeout', '1200', 'dex2oat-boot')
           Invoke-Art dex2oat-hello @('dex2oat:Hello')
           Invoke-Art dex2oat-bench @('dex2oat:Bench')
-          Invoke-Art hello-aot @('--mode', 'aot', 'Hello')
-          Invoke-Art bench-aot @('--mode', 'aot', 'Bench')
+          Invoke-Art dex2oat-faults @('dex2oat:Faults')
+          $root = Join-Path ([System.IO.Path]::GetTempPath()) 'andruna-s1-root'
+          Get-ChildItem -Recurse "$root/system/framework/arm64", "$root/data/local/tmp/oat" -ErrorAction SilentlyContinue |
+            Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 300 |
+            Set-Content -Encoding utf8 "$env:OUT\s1art-aot-files.txt"
+          Get-Content "$env:OUT\s1art-aot-files.txt"
+          # The image and the odex must be loaded (no fallback to imageless
+          # start-up or to the interpreter for the app).
+          Invoke-Art hello-aot-verbose @('--mode', 'aot', '--extra=-verbose:image,oat', 'Hello')
+          foreach ($i in 1, 2, 3) {
+            Invoke-Art "hello-aot$i" @('--mode', 'aot', 'Hello')
+            Invoke-Art "bench-aot$i" @('--mode', 'aot', 'Bench')
+          }
+          Invoke-Art faults-aot @('--mode', 'aot', 'Faults')
+          foreach ($i in 2, 3) {
+            Invoke-Art "bench-int$i" @('--mode', 'int', 'Bench')
+            Invoke-Art "bench-jit$i" @('--mode', 'jit', 'Bench')
+          }
 
       - name: Summary
         if: always()

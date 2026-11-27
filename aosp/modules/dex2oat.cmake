@@ -32,7 +32,10 @@ if(ANDRUNA_ARCH STREQUAL "x64")
     linker/x86/relative_patcher_x86_base.cc
     linker/x86_64/relative_patcher_x86_64.cc)
 else()
+  # The arm64 patcher derives from ArmBaseRelativePatcher, which Soong
+  # compiles under the arm codegen (always present next to arm64 there).
   aosp_sources(libart_dex2oat "${_d}"
+    linker/arm/relative_patcher_arm_base.cc
     linker/arm64/relative_patcher_arm64.cc)
 endif()
 art_operator_out(libart_dex2oat art/dex2oat art/dex2oat/linker/image_writer.h)
