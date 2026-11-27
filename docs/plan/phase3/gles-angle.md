@@ -42,7 +42,7 @@ into DirectComposition. Decisions: [ADR 0029](../../decisions/0029-angle-build-c
 | Per-thread current context | `tests/host.rs` | passes |
 | Row order of the texture client buffer (the window surface mechanism) | `tests/host.rs`: memory row 0 holds OpenGL's bottom row | passes: the compositor flips |
 | Windowed demo with the guest bionic | `gles_demo` in a harness window | runs, 120 fps on a 120 Hz panel |
-| CI | `.github/workflows/gles.yml`: ANGLE build, guest build and the tests with `ANDRUNA_REQUIRE_GLES=1`, x64 and arm64 runners | see the branch's runs |
+| CI | `.github/workflows/gles.yml`: ANGLE build, guest build and the tests with `ANDRUNA_REQUIRE_GLES=1`, x64 and arm64 runners | passes on both (run 46019196947); on the arm64 runner the guest test runs natively; ANGLE builds in 312 s (x64) and 218 s (arm64) on hosted runners |
 
 Not verified: the picture on screen. The measurements below were taken
 while the machine was locked: frames were presented and paced by the
@@ -79,10 +79,11 @@ one triangle per frame), 600 frames.
   is there for a photodiode or camera measurement.
 - **Call cost.** `glGetError` with a current context: 17.5 ns through the
   guest binding (x64 thunk), 18.9 ns calling ANGLE's export directly
-  (`tests/host.rs`, noise of the same order); from guest code 21 ns for
-  `glGetError` and 17 ns for `glUniform1f` (`gles_demo --calls`). The
-  thunk adds no measurable cost; ANGLE's entry (context lookup, locks)
-  dominates.
+  (`tests/host.rs`, noise of the same order). On the shared CI runners:
+  x64 28.8 ns direct and 36.6 ns through the thunk, arm64 24.9 ns and
+  24.8 ns (direct binding). From guest code: 21 ns for `glGetError` and
+  17 ns for `glUniform1f` (`gles_demo --calls`). The thunk costs at most
+  a few nanoseconds; ANGLE's entry (context lookup, locks) dominates.
 - **Swap overhead.** About 0.2 ms CPU per `eglSwapBuffers` without vsync
   (flush, `Present`, latency wait), interval 0 headless.
 
