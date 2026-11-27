@@ -1,0 +1,367 @@
+# Runs the spike probes and benchmarks (S1, S3, S4, S8) on the hosted
+# Windows ARM64 runner, with the x64 runner for comparison. Spike code is not
+# product code: this workflow only collects measurements. Every probe runs
+# with a time limit, a crash or a timeout is recorded as a result, and all
+# outputs are uploaded as artifacts and printed in the job summary.
+
+name: Spikes ARM64
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [spikes-arm64]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  ANDRUNA_LLVM_MINGW: C:\tools\llvm-mingw
+
+jobs:
+  probes:
+    name: s1 s3 s4 (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-gnullvm
+            triple: x86_64-w64-mingw32
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-gnullvm
+            triple: aarch64-w64-mingw32
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      OUT: ${{ github.workspace }}\out\spikes\${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+            Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe" -OutFile rustup-init.exe
+            ./rustup-init.exe -y --default-toolchain none --profile minimal
+            Remove-Item rustup-init.exe
+            "$env:USERPROFILE\.cargo\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+          }
+          rustup show active-toolchain
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+            spikes/s1/target
+            spikes/s3/target
+            spikes/s4/target
+          key: spikes-${{ matrix.target }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'spikes/*/Cargo.lock') }}
+          restore-keys: spikes-${{ matrix.target }}-
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: |
+          cargo xtask toolchain
+          # libunwind.dll and libc++.dll for the gnullvm executables.
+          "$env:ANDRUNA_LLVM_MINGW\${{ matrix.triple }}\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Timed runner helper
+        run: |
+          New-Item -ItemType Directory -Force $env:OUT | Out-Null
+          @'
+          # Invoke-Timed <name> <seconds> <exe> <args...>: runs a probe with a
+          # time limit, saves stdout, stderr and the exit status to
+          # $env:OUT\<name>.txt and prints them.
+          function Invoke-Timed {
+            param([string]$Name, [int]$Seconds, [string]$Exe, [string[]]$ArgList = @())
+            $psi = [System.Diagnostics.ProcessStartInfo]::new((Resolve-Path $Exe).Path)
+            foreach ($a in $ArgList) { $psi.ArgumentList.Add($a) }
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.UseShellExecute = $false
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $p = [System.Diagnostics.Process]::Start($psi)
+            $so = $p.StandardOutput.ReadToEndAsync()
+            $se = $p.StandardError.ReadToEndAsync()
+            $done = $p.WaitForExit($Seconds * 1000)
+            if (-not $done) { $p.Kill($true); $p.WaitForExit() }
+            $status = if ($done) { 'exit code 0x{0:x8} after {1:n1} s' -f $p.ExitCode, $sw.Elapsed.TotalSeconds } else { "TIMEOUT after $Seconds s (killed)" }
+            $text = "### $Name`n> $Exe $($ArgList -join ' ')`n" + $so.Result + $se.Result + "`n[$Name] $status`n"
+            Set-Content -Encoding utf8 (Join-Path $env:OUT "$Name.txt") $text
+            Write-Output $text
+          }
+          '@ | Set-Content -Encoding utf8 "$env:RUNNER_TEMP\timed.ps1"
+
+      - name: Machine
+        continue-on-error: true
+        run: |
+          $cpu = Get-CimInstance Win32_Processor
+          $cs = Get-CimInstance Win32_ComputerSystem
+          $os = Get-CimInstance Win32_OperatingSystem
+          # Get-ItemProperty fails on some x64 images (a binary value), so
+          # read the values one by one.
+          $cpk = Get-Item 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0'
+          $reg = @{ ProcessorNameString = $cpk.GetValue('ProcessorNameString'); Identifier = $cpk.GetValue('Identifier'); VendorIdentifier = $cpk.GetValue('VendorIdentifier'); '~MHz' = $cpk.GetValue('~MHz') }
+          $ntk = Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+          $nt = @{ CurrentBuild = $ntk.GetValue('CurrentBuild'); UBR = $ntk.GetValue('UBR'); DisplayVersion = $ntk.GetValue('DisplayVersion') }
+          $dg = try { Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop } catch { $null }
+          $lines = @(
+            "cpu name (WMI): $($cpu.Name)",
+            "cpu name (registry): $($reg.ProcessorNameString)",
+            "cpu identifier: $($reg.Identifier), vendor $($reg.VendorIdentifier), ~MHz $($reg.'~MHz')",
+            "cores: $($cpu.NumberOfCores), logical: $($cpu.NumberOfLogicalProcessors), max clock: $($cpu.MaxClockSpeed) MHz",
+            "system: $($cs.Manufacturer) $($cs.Model), hypervisor present: $($cs.HypervisorPresent)",
+            "memory: $([math]::Round($cs.TotalPhysicalMemory / 1GB, 1)) GB",
+            "os: $($os.Caption) $($os.Version) build $($nt.CurrentBuild).$($nt.UBR) ($($nt.DisplayVersion))",
+            "vbs status: $($dg.VirtualizationBasedSecurityStatus), services running: $($dg.SecurityServicesRunning -join ',')",
+            "rustc: $(rustc --version)",
+            "clang: $((& "$env:ANDRUNA_LLVM_MINGW\bin\clang.exe" --version)[0])"
+          )
+          $lines | Set-Content -Encoding utf8 "$env:OUT\machine.txt"
+          $lines
+
+      - name: Build spikes
+        run: |
+          foreach ($s in 's1', 's3', 's4') {
+            cargo build --release --target ${{ matrix.target }} --manifest-path spikes/$s/Cargo.toml
+            if ($LASTEXITCODE -ne 0) { throw "build of $s failed" }
+          }
+
+      - name: S4 probe
+        continue-on-error: true
+        run: |
+          . "$env:RUNNER_TEMP\timed.ps1"
+          $exe = "spikes/s4/target/${{ matrix.target }}/release/andruna-spike-s4.exe"
+          Invoke-Timed s4-probe 300 $exe probe
+          Invoke-Timed s4-bench 300 $exe bench
+          if ('${{ matrix.arch }}' -eq 'arm64') {
+            Invoke-Timed s4-x18-clobber 300 $exe x18-clobber
+          }
+
+      - name: S1 probes
+        continue-on-error: true
+        run: |
+          . "$env:RUNNER_TEMP\timed.ps1"
+          $exe = "spikes/s1/target/${{ matrix.target }}/release/andruna-spike-s1.exe"
+          foreach ($part in 'faults', 'unwind', 'abi') {
+            Invoke-Timed "s1-$part" 300 $exe "--only=$part"
+          }
+          if ('${{ matrix.arch }}' -eq 'arm64') {
+            # ART's arm64 overflow gap is 8 KiB; measure larger gaps too.
+            foreach ($gap in 12288, 16384) {
+              $env:S1_SO_GAP = "$gap"
+              Invoke-Timed "s1-faults-gap$gap" 300 $exe '--only=faults'
+            }
+            Remove-Item Env:S1_SO_GAP
+          }
+          Invoke-Timed s1-suspend 900 $exe '--only=suspend', '--quick'
+
+      # Hosted runners have 2 vCPUs; S3's spinning modes with a broker and
+      # two clients oversubscribe them, so iterations are reduced and the
+      # step is capped.
+      - name: S3 transport
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          . "$env:RUNNER_TEMP\timed.ps1"
+          $exe = "spikes/s3/target/${{ matrix.target }}/release/s3.exe"
+          Invoke-Timed s3-probe 120 $exe probe
+          Invoke-Timed s3-run1 420 $exe '--iters', '5000'
+          Invoke-Timed s3-appcontainer 300 $exe '--appcontainer', '--iters', '2000'
+
+      - name: Summary
+        if: always()
+        run: |
+          "## Spikes on ${{ matrix.arch }}" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          foreach ($f in Get-ChildItem $env:OUT -Filter *.txt | Sort-Object Name) {
+            Write-Output "===== $($f.Name)"
+            Get-Content $f.FullName
+            "`n<details><summary>$($f.Name)</summary>`n`n``````text" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            Get-Content $f.FullName | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            "```````n</details>`n" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spikes-${{ matrix.arch }}
+          path: out/spikes/${{ matrix.arch }}
+
+  # S8: the guest objects (Android ELF) are built on the runner itself from
+  # the AOSP checkout and a sparse llvm-project checkout (libc++ and the
+  # arm64 compiler-rt builtins), then the loader runs them.
+  s8:
+    name: s8 (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-gnullvm
+            triple: x86_64-w64-mingw32
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-gnullvm
+            triple: aarch64-w64-mingw32
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      OUT: ${{ github.workspace }}\out\spikes\${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+            Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe" -OutFile rustup-init.exe
+            ./rustup-init.exe -y --default-toolchain none --profile minimal
+            Remove-Item rustup-init.exe
+            "$env:USERPROFILE\.cargo\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+          }
+          rustup show active-toolchain
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+            spikes/s8/target
+          key: spikes-s8-${{ matrix.target }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'spikes/s8/Cargo.lock') }}
+          restore-keys: spikes-s8-${{ matrix.target }}-
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: |
+          cargo xtask toolchain
+          "$env:ANDRUNA_LLVM_MINGW\${{ matrix.triple }}\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: CMake and Ninja
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { python -m pip install ninja }
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { python -m pip install cmake }
+          cmake --version
+          ninja --version
+
+      # Same key and project list as ci.yml, so the cache is shared.
+      - name: Cache AOSP sources
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp/aosp.lock') }}
+
+      - name: Fetch AOSP
+        run: >
+          cargo xtask fetch
+          --project art --project bionic --project external/fmtlib
+          --project external/googletest --project external/lz4
+          --project external/tinyxml2 --project external/zlib
+          --project frameworks/libs/modules-utils --project libnativehelper
+          --project system/core --project system/libbase
+          --project system/libziparchive --project system/logging
+
+      - name: Cache llvm-project
+        uses: actions/cache@v4
+        with:
+          path: out/s8/llvm-project
+          key: s8-llvm-project-llvmorg-23.1.6-v1
+
+      - name: Fetch llvm-project
+        run: |
+          if (-not (Test-Path out/s8/llvm-project/runtimes)) {
+            git config --global core.longpaths true
+            git clone --depth 1 --filter=blob:none --sparse --branch llvmorg-23.1.6 https://github.com/llvm/llvm-project out/s8/llvm-project
+            if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+            git -C out/s8/llvm-project sparse-checkout set libcxx libcxxabi libunwind runtimes cmake llvm/cmake llvm/utils/llvm-lit compiler-rt/lib/builtins libc
+            if ($LASTEXITCODE -ne 0) { throw "sparse checkout failed" }
+          }
+
+      - name: Cache guest objects
+        id: guest-cache
+        uses: actions/cache@v4
+        with:
+          path: out/s8/${{ matrix.arch }}
+          key: s8-guest-${{ matrix.arch }}-${{ hashFiles('aosp/aosp.lock', 'aosp/**/*.cmake', 'aosp/**/CMakeLists.txt', 'spikes/s8/guest/**', 'xtask/src/toolchain.rs') }}
+
+      - name: Build guest objects
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        run: |
+          python spikes/s8/guest/build.py --arch ${{ matrix.arch }}
+          if ($LASTEXITCODE -ne 0) { throw "guest build failed" }
+
+      - name: Build loader
+        run: |
+          cargo build --release --target ${{ matrix.target }} --manifest-path spikes/s8/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw "loader build failed" }
+
+      - name: Run S8
+        continue-on-error: true
+        run: |
+          New-Item -ItemType Directory -Force $env:OUT | Out-Null
+          $cpu = (Get-Item 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0').GetValue('ProcessorNameString')
+          "cpu: $cpu, logical processors: $env:NUMBER_OF_PROCESSORS" | Set-Content -Encoding utf8 "$env:OUT\s8-machine.txt"
+          $exe = "spikes/s8/target/${{ matrix.target }}/release/andruna-spike-s8.exe"
+          function Invoke-S8([string]$Name, [int]$Seconds, [string[]]$ArgList) {
+            $job = Start-Job -ScriptBlock { param($e, $a) & $e @a 2>&1 | Out-String; "exit code: $LASTEXITCODE" } -ArgumentList (Resolve-Path $exe).Path, $ArgList
+            if (Wait-Job $job -Timeout $Seconds) { $text = Receive-Job $job } else { Stop-Job $job; Get-Process andruna-spike-s8 -ErrorAction SilentlyContinue | Stop-Process -Force; $text = "TIMEOUT after $Seconds s" }
+            $text = "### s8 $($ArgList -join ' ')`n$text"
+            Set-Content -Encoding utf8 "$env:OUT\s8-$Name.txt" $text
+            Write-Output $text
+          }
+          Invoke-S8 check 120 @('check')
+          foreach ($i in 1, 2, 3) { Invoke-S8 "load$i" 300 @('load', 'libbase_test') }
+          foreach ($i in 1, 2, 3) { Invoke-S8 "bench$i" 300 @('bench') }
+          if ('${{ matrix.arch }}' -eq 'x64') { Invoke-S8 unwind 300 @('unwind') }
+          $job = Start-Job -ScriptBlock { param($e, $a, $d) Set-Location $d; python spikes/s8/run_tests.py --exe $e --arch $a 2>&1 | Out-String } -ArgumentList (Resolve-Path $exe).Path, '${{ matrix.arch }}', $PWD.Path
+          if (Wait-Job $job -Timeout 2400) { $t = Receive-Job $job } else { Stop-Job $job; $t = 'TIMEOUT' }
+          "### run_tests.py`n$t" | Set-Content -Encoding utf8 "$env:OUT\s8-libbase-tests.txt"
+          $t
+          Copy-Item out/s8/${{ matrix.arch }}/libbase_test-results.* $env:OUT -ErrorAction SilentlyContinue
+
+      - name: Summary
+        if: always()
+        run: |
+          "## S8 on ${{ matrix.arch }}" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          foreach ($f in Get-ChildItem $env:OUT -Filter s8-*.txt -ErrorAction SilentlyContinue | Sort-Object Name) {
+            Write-Output "===== $($f.Name)"
+            Get-Content $f.FullName
+            "`n<details><summary>$($f.Name)</summary>`n`n``````text" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            Get-Content $f.FullName | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            "```````n</details>`n" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spikes-s8-${{ matrix.arch }}
+          path: out/spikes/${{ matrix.arch }}

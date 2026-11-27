@@ -3,6 +3,14 @@
 # small libraries it pulls in.
 
 # --- art_defaults ---------------------------------------------------------
+# Windows ARM64's exception dispatcher uses about 7.1 KiB of the faulting
+# stack (S1.md), more than Android's 8 KiB arm64 gap leaves: 16 KiB there.
+# Only the arm64 build reads this value.
+if(ANDRUNA_ARCH STREQUAL "arm64")
+  set(_art_gap_arm64 16384)
+else()
+  set(_art_gap_arm64 8192)
+endif()
 add_library(art_defaults INTERFACE)
 target_compile_options(art_defaults INTERFACE
   "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include andruna/libcxx_compat.h>"
@@ -15,9 +23,13 @@ target_compile_definitions(art_defaults INTERFACE
   ART_TARGET ART_TARGET_ANDROID
   ART_DEFAULT_GC_TYPE_IS_CMC
   ART_USE_GENERATIONAL_GC=1
+  # ADR 0014: Baker read barriers, so that without userfaultfd the runtime
+  # selects concurrent copying (art.go's flags when ART_USE_READ_BARRIER is on).
+  ART_USE_READ_BARRIER=1
+  ART_READ_BARRIER_TYPE_IS_BAKER=1
   ART_USE_TLAB=1
   ART_STACK_OVERFLOW_GAP_arm=8192
-  ART_STACK_OVERFLOW_GAP_arm64=8192
+  ART_STACK_OVERFLOW_GAP_arm64=${_art_gap_arm64}
   ART_STACK_OVERFLOW_GAP_riscv64=8192
   ART_STACK_OVERFLOW_GAP_x86=8192
   ART_STACK_OVERFLOW_GAP_x86_64=8192

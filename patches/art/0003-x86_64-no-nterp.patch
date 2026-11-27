@@ -1,0 +1,28 @@
+Do not use nterp on x86_64 in the ANDRUNA build.
+
+The x86_64 nterp assembly reads the Thread as rSELF:offset with
+rSELF = %gs, which is the TEB on Windows. Until nterp is ported to the
+FS-slot access of patches 0001 and 0002, IsNterpSupported() is false on
+x86_64 under ANDRUNA and the runtime uses the switch interpreter (with or
+without the JIT), as it does for -Xint.
+
+diff --git a/runtime/interpreter/mterp/nterp.cc b/runtime/interpreter/mterp/nterp.cc
+index c4f80dc..89cd4e1 100644
+--- a/runtime/interpreter/mterp/nterp.cc
++++ b/runtime/interpreter/mterp/nterp.cc
+@@ -49,8 +49,15 @@ bool IsNterpSupported() {
+     case InstructionSet::kRiscv64:
+       return true;
+     case InstructionSet::kX86:
++      return !kUseTableLookupReadBarrier;
+     case InstructionSet::kX86_64:
++#if defined(ANDRUNA)
++      // x86_64 nterp still reads the Thread through %gs (the GS base is the
++      // TEB on Windows): use the switch interpreter until nterp is ported.
++      return false;
++#else
+       return !kUseTableLookupReadBarrier;
++#endif
+     default:
+       return false;
+   }
