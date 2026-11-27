@@ -33,6 +33,9 @@ use crate::syscall::lx_raw;
 #[cfg(target_arch = "x86_64")]
 mod nr {
     pub const OPEN: i64 = 2;
+    pub const SOCKET: i64 = 41;
+    pub const CONNECT: i64 = 42;
+    pub const SENDMSG: i64 = 46;
     pub const OPENAT: i64 = 257;
     pub const MMAP: i64 = 9;
     pub const MUNMAP: i64 = 11;
@@ -88,6 +91,9 @@ mod nr {
 #[cfg(target_arch = "aarch64")]
 mod nr {
     pub const OPEN: i64 = -8;
+    pub const SOCKET: i64 = 198;
+    pub const CONNECT: i64 = 203;
+    pub const SENDMSG: i64 = 211;
     pub const OPENAT: i64 = 56;
     pub const MMAP: i64 = 222;
     pub const MUNMAP: i64 = 215;
@@ -156,6 +162,9 @@ pub unsafe fn before(n: i64, a: [i64; 6]) -> Option<i64> {
     if n == nr::MUNMAP {
         write_back(a[0] as u64, a[1] as u64, true);
     }
+    if n == nr::CLOSE {
+        crate::logd::closed(a[0] as i32);
+    }
     None
 }
 
@@ -220,6 +229,9 @@ pub unsafe fn after_enosys(n: i64, a: [i64; 6]) -> Option<i64> {
                 return futex_requeue(ptr(0), int(1), a[2] as u32, a[3] as u32, a[5] as u32);
             }
             nr::FTRUNCATE => ftruncate(int(0), a[1]),
+            nr::SOCKET => return socket(int(0), int(1)),
+            nr::CONNECT => return connect(int(0), ptr(1), ptr(2) as usize),
+            nr::SENDMSG => return sendmsg(int(0), ptr(1)),
             nr::FSYNC | nr::FDATASYNC => check_fd(int(0)),
             nr::UNAME => uname(ptr(0) as *mut u8),
             nr::GETRLIMIT => prlimit(0, int(0), 0, ptr(1)),
@@ -483,6 +495,57 @@ fn ftruncate(fd: i32, len: i64) -> i64 {
         )
     };
     if r < 0 { r } else { 0 }
+}
+
+// ---------------------------------------------------------------------------
+// Sockets: only liblog's logd socket ([`crate::logd`])
+// ---------------------------------------------------------------------------
+
+const AF_UNIX: i32 = 1;
+const SOCK_DGRAM: i32 = 2;
+const SOCK_CLOEXEC: i32 = 0x80000;
+
+fn socket(domain: i32, ty: i32) -> Option<i64> {
+    if domain == AF_UNIX && ty & 0xf == SOCK_DGRAM {
+        Some(crate::logd::socket(ty & SOCK_CLOEXEC != 0))
+    } else {
+        None
+    }
+}
+
+/// # Safety
+///
+/// `addr` is a readable `sockaddr` of `len` bytes.
+unsafe fn connect(fd: i32, addr: u64, len: usize) -> Option<i64> {
+    if !crate::logd::is_socket(fd) {
+        return None;
+    }
+    if addr == 0 || !(2..=110).contains(&len) {
+        return Some(err(EINVAL));
+    }
+    // SAFETY: the function's contract.
+    let b = unsafe { core::slice::from_raw_parts(addr as *const u8, len) };
+    let path = &b[2..];
+    let path = &path[..path.iter().position(|&c| c == 0).unwrap_or(path.len())];
+    Some(crate::logd::connect(fd, path))
+}
+
+/// # Safety
+///
+/// `msg` is a readable `struct msghdr` with valid buffers.
+unsafe fn sendmsg(fd: i32, msg: u64) -> Option<i64> {
+    if !crate::logd::is_socket(fd) {
+        return None;
+    }
+    if msg == 0 {
+        return Some(err(EFAULT));
+    }
+    // SAFETY: msghdr: name, namelen, iov, iovlen (contract).
+    let (iov, n) = unsafe { (*((msg + 16) as *const u64), *((msg + 24) as *const u64)) };
+    // SAFETY: as above.
+    let d = unsafe { crate::logd::gather(iov as *const [u64; 2], n as usize) };
+    crate::logd::record(&d);
+    Some(d.len() as i64)
 }
 
 // ---------------------------------------------------------------------------

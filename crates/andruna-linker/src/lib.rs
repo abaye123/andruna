@@ -61,6 +61,7 @@ pub mod icu;
 pub mod image;
 pub mod interim;
 pub mod linker;
+pub mod logd;
 pub mod object;
 pub mod process;
 pub mod procfs;

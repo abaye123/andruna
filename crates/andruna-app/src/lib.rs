@@ -107,7 +107,8 @@ options:
                        this executable
   --data <dir>         Windows directory mounted as the guest /; default
                        %TEMP%\\andruna-app
-  -X<option>           passed to ART";
+  -X<option>, -D<name>=<value>, -verbose:<what>
+                       passed to ART";
 
 fn split_classpath(s: &str) -> Vec<PathBuf> {
     s.split(';')
@@ -192,7 +193,9 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                     },
                 });
             }
-            x if x.starts_with("-X") => art_options.push(x.to_string()),
+            x if x.starts_with("-X") || x.starts_with("-D") || x.starts_with("-verbose:") => {
+                art_options.push(x.to_string())
+            }
             x => return Err(format!("unknown argument '{x}'")),
         }
         i += 1;

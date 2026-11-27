@@ -151,6 +151,12 @@ unsafe fn dispatch_inner(n: i64, a: [i64; 6]) -> i64 {
         nr::GETUID | nr::GETEUID => i64::from(andruna_lx::process::uid()),
         nr::GETGID | nr::GETEGID => i64::from(andruna_lx::process::gid()),
         nr::GETRANDOM => getrandom(a[0] as *mut u8, a[1] as usize, a[2]),
+        nr::WRITEV if crate::logd::is_socket(a[0] as i32) && a[2] >= 0 => {
+            // SAFETY: the caller's iovec array (contract).
+            let d = unsafe { crate::logd::gather(a[1] as *const [u64; 2], a[2] as usize) };
+            crate::logd::record(&d);
+            d.len() as i64
+        }
         // SAFETY: forwarded from this function's contract.
         nr::WRITEV => unsafe { iov(a[0] as i32, a[1] as *const [u64; 2], a[2] as i32, true) },
         // SAFETY: as above.

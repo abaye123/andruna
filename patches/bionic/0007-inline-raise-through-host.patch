@@ -1,0 +1,25 @@
+Raise signals through the host in the ANDRUNA build.
+
+inline_raise (used by abort and fdsan, among others) executes the
+rt_tgsigqueueinfo system call with an inline syscall / svc instruction.
+Andruna's guest bionic runs in a Windows process, where system calls are
+made by calling the host's __andruna_syscall (aosp/bionic/README.md); the
+instruction would enter the Windows kernel instead. Under ANDRUNA the
+function uses syscall(), which goes through the host, as 32-bit x86 does.
+
+diff --git a/libc/private/bionic_inline_raise.h b/libc/private/bionic_inline_raise.h
+--- a/libc/private/bionic_inline_raise.h
++++ b/libc/private/bionic_inline_raise.h
+@@ -48,7 +48,11 @@
+   info.si_value.sival_ptr = value;
+ 
+   long result;
+-#if defined(__arm__)
++#if defined(ANDRUNA)
++  // System calls go through the host; syscall() sets errno itself.
++  (void)result;
++  return syscall(__NR_rt_tgsigqueueinfo, pid, tid, sig, &info);
++#elif defined(__arm__)
+   register long r0 __asm__("r0") = pid;
+   register long r1 __asm__("r1") = tid;
+   register long r2 __asm__("r2") = sig;
