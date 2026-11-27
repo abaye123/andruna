@@ -52,7 +52,10 @@ const KIND_FINISHED: u16 = 0x81;
 /// A message on the channel.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
-    Event { seq: u32, event: InputEvent },
+    Event {
+        seq: u32,
+        event: InputEvent,
+    },
     /// The app finished handling event `seq`.
     Finished {
         seq: u32,

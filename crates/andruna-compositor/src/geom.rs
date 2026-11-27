@@ -45,7 +45,12 @@ impl Rect {
     }
 
     pub const fn offset(&self, dx: i32, dy: i32) -> Self {
-        Self::new(self.left + dx, self.top + dy, self.right + dx, self.bottom + dy)
+        Self::new(
+            self.left + dx,
+            self.top + dy,
+            self.right + dx,
+            self.bottom + dy,
+        )
     }
 
     /// `self` with `inset` removed from each side.

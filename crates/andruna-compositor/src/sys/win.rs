@@ -16,9 +16,8 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Dwm::{
     DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMWA_CAPTION_BUTTON_BOUNDS, DWMWA_CAPTION_COLOR,
-    DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWINDOWATTRIBUTE,
-    DwmDefWindowProc, DwmExtendFrameIntoClientArea, DwmGetWindowAttribute,
-    DwmSetWindowAttribute,
+    DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWINDOWATTRIBUTE, DwmDefWindowProc,
+    DwmExtendFrameIntoClientArea, DwmGetWindowAttribute, DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
@@ -29,8 +28,8 @@ use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegG
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::HiDpi::{
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow,
-    GetSystemMetricsForDpi, SetThreadDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, GetSystemMetricsForDpi,
+    SetThreadDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CAPITAL, VK_NUMLOCK, VK_SCROLL};
 use windows::Win32::UI::Input::Pointer::EnableMouseInPointer;
@@ -97,10 +96,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         lparam: lparam.0,
     };
     // A panic must not unwind into Windows.
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        handler.and_then(|h| h(m))
-    }))
-    .unwrap_or(None);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.and_then(|h| h(m))))
+        .unwrap_or(None);
     match r {
         Some(v) => LRESULT(v),
         // SAFETY: forwarding the message as received.
@@ -174,19 +171,28 @@ pub fn create_window(title: &str, client: Size, dpi: u32) -> io::Result<Hwnd> {
 /// The resize border height at `dpi` (frame plus padding).
 pub fn frame_y(dpi: u32) -> i32 {
     // SAFETY: no pointers.
-    unsafe { GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) }
+    unsafe {
+        GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
+    }
 }
 
 /// The resize border width at `dpi`.
 pub fn frame_x(dpi: u32) -> i32 {
     // SAFETY: no pointers.
-    unsafe { GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) }
+    unsafe {
+        GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
+    }
 }
 
 fn set_attr<T>(h: Hwnd, attr: DWMWINDOWATTRIBUTE, v: &T) {
     // SAFETY: `v` points to a value of the size passed.
     unsafe {
-        let _ = DwmSetWindowAttribute(h.raw(), attr, v as *const T as *const c_void, size_of::<T>() as u32);
+        let _ = DwmSetWindowAttribute(
+            h.raw(),
+            attr,
+            v as *const T as *const c_void,
+            size_of::<T>() as u32,
+        );
     }
 }
 
@@ -240,7 +246,13 @@ pub fn dwm_def_window_proc(m: Msg) -> Option<isize> {
     let mut r = LRESULT(0);
     // SAFETY: forwarding a message as received; `r` is a valid out pointer.
     let handled = unsafe {
-        DwmDefWindowProc(m.hwnd.raw(), m.msg, WPARAM(m.wparam), LPARAM(m.lparam), &mut r)
+        DwmDefWindowProc(
+            m.hwnd.raw(),
+            m.msg,
+            WPARAM(m.wparam),
+            LPARAM(m.lparam),
+            &mut r,
+        )
     };
     handled.as_bool().then_some(r.0)
 }
@@ -523,7 +535,11 @@ pub fn set_resizable(h: Hwnd, resizable: bool) {
     unsafe {
         let style = GetWindowLongPtrW(h.raw(), GWL_STYLE);
         let thick = WS_THICKFRAME.0 as isize;
-        let new = if resizable { style | thick } else { style & !thick };
+        let new = if resizable {
+            style | thick
+        } else {
+            style & !thick
+        };
         SetWindowLongPtrW(h.raw(), GWL_STYLE, new);
         let _ = SetWindowPos(
             h.raw(),
@@ -540,6 +556,23 @@ pub fn set_resizable(h: Hwnd, resizable: bool) {
 pub fn is_resizable(h: Hwnd) -> bool {
     // SAFETY: no pointers.
     unsafe { GetWindowLongPtrW(h.raw(), GWL_STYLE) & WS_THICKFRAME.0 as isize != 0 }
+}
+
+/// Keeps the window above others (screen captures in tests).
+pub fn set_topmost(h: Hwnd, on: bool) {
+    let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
+    // SAFETY: no pointers.
+    unsafe {
+        let _ = SetWindowPos(
+            h.raw(),
+            Some(after),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
 }
 
 pub fn set_timer(h: Hwnd, id: usize, ms: u32) {

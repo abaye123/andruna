@@ -229,7 +229,9 @@ impl PointerTracker {
     }
 
     fn free_id(&self) -> i32 {
-        (0..).find(|i| self.active.iter().all(|a| a.id != *i)).unwrap()
+        (0..)
+            .find(|i| self.active.iter().all(|a| a.id != *i))
+            .unwrap()
     }
 
     fn button_key(&self, button: i32, down: bool, time: i64, meta: i32) -> Option<KeyEvent> {
@@ -282,8 +284,7 @@ impl PointerTracker {
 
         let old_buttons = self.buttons;
         let new_buttons = f.pointers.iter().fold(0, |b, s| b | s.buttons);
-        let contacts: Vec<&PointerSample> =
-            f.pointers.iter().filter(|s| self.contact(s)).collect();
+        let contacts: Vec<&PointerSample> = f.pointers.iter().filter(|s| self.contact(s)).collect();
 
         // Hover exit before the first contact.
         if !contacts.is_empty()
@@ -460,7 +461,10 @@ impl PointerTracker {
 
     /// The pointer a button event is about: the down pointers, or the
     /// hovering mouse.
-    fn current_or_hover_pointer(&self, f: &PointerFrame) -> Vec<(PointerProperties, PointerCoords)> {
+    fn current_or_hover_pointer(
+        &self,
+        f: &PointerFrame,
+    ) -> Vec<(PointerProperties, PointerCoords)> {
         if self.is_down() {
             return self.active_pointers();
         }
@@ -772,10 +776,13 @@ mod tests {
             frame(5, vec![mouse(3.0, BUTTON_PRIMARY | BUTTON_SECONDARY)]),
             frame(6, vec![mouse(3.0, BUTTON_SECONDARY)]),
             frame(7, vec![mouse(3.0, 0)]),
-            frame(8, vec![PointerSample {
-                in_range: false,
-                ..mouse(3.0, 0)
-            }]),
+            frame(
+                8,
+                vec![PointerSample {
+                    in_range: false,
+                    ..mouse(3.0, 0)
+                }],
+            ),
         ];
         let ev = t.process(&frames, 0);
         let p = BUTTON_PRIMARY;
@@ -913,7 +920,8 @@ mod tests {
             let (a, b) = tilt_orientation(tx, ty);
             assert!((a.to_degrees() - tilt).abs() < 1e-3, "{tx} {ty}");
             assert!(
-                (b.to_degrees() - o).abs() < 1e-3 || (b.to_degrees().abs() - 180.0).abs() < 1e-3 && o == 180.0,
+                (b.to_degrees() - o).abs() < 1e-3
+                    || (b.to_degrees().abs() - 180.0).abs() < 1e-3 && o == 180.0,
                 "{tx} {ty}: {}",
                 b.to_degrees()
             );

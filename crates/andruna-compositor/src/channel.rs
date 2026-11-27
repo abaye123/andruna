@@ -137,7 +137,8 @@ impl Ring<'_> {
             return Err(ChannelError::Corrupted);
         }
         let bytes = self.s.bytes();
-        let at = |i: usize| bytes[self.data + ((r as usize + i) % self.cap)].load(Ordering::Relaxed);
+        let at =
+            |i: usize| bytes[self.data + ((r as usize + i) % self.cap)].load(Ordering::Relaxed);
         let len = u32::from_le_bytes([at(0), at(1), at(2), at(3)]) as usize;
         if len < wire::HEADER_LEN || len as u64 > avail || len > self.cap / 2 {
             return Err(ChannelError::Corrupted);
@@ -364,8 +365,8 @@ impl InputPublisher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::{ImeEvent, InputEvent};
     use crate::input::keys::system_back;
+    use crate::input::{ImeEvent, InputEvent};
 
     fn key(i: i64) -> InputEvent {
         let [mut k, _] = system_back(i);
@@ -458,7 +459,9 @@ mod tests {
     fn corrupted_positions_are_errors() {
         let (c, a) = InputChannel::pair(1024).unwrap();
         // The app (untrusted) moves the compositor's read position.
-        c.section.word(128 + 128).store(u64::MAX - 5, Ordering::Release);
+        c.section
+            .word(128 + 128)
+            .store(u64::MAX - 5, Ordering::Release);
         // Ring 1 is app to compositor; its read position is at 256.
         assert!(matches!(c.try_recv(), Err(ChannelError::Corrupted)));
         // A bogus length in the data.

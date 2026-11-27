@@ -179,5 +179,7 @@ pub enum InputEvent {
     Key(KeyEvent),
     Ime(ImeEvent),
     /// The window gained or lost input focus.
-    Focus { has_focus: bool },
+    Focus {
+        has_focus: bool,
+    },
 }

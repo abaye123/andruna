@@ -126,6 +126,7 @@ fn main() {
             std::process::exit(2);
         }
     };
+    andruna_compositor::sys::win::init_thread();
     let (c, rx) = match Compositor::start() {
         Ok(x) => x,
         Err(e) => {
@@ -162,7 +163,9 @@ fn main() {
     let mut color = args.color;
     let mut presses = 0u32;
     let started = Instant::now();
-    let vs = args.vsync.then(|| vsync::VsyncSource::start().expect("vsync"));
+    let vs = args
+        .vsync
+        .then(|| vsync::VsyncSource::start().expect("vsync"));
     let vrx = vs.as_ref().map(|v| v.subscribe());
     let mut shot_due = args.screenshot.clone();
     let mut latencies: Vec<i64> = Vec::new();
@@ -235,7 +238,22 @@ fn main() {
                 }
                 if let Some(p) = shot_due.take() {
                     std::thread::sleep(Duration::from_millis(300));
-                    match c.screenshot(w).and_then(|i| save_bmp(&p, &i)) {
+                    // `--screenshot x.bmp` takes the window as composed
+                    // (PrintWindow); a path ending in `.screen.bmp` takes
+                    // the screen, with DWM's frame and caption buttons.
+                    let shot = if p.ends_with(".screen.bmp") {
+                        c.native_window(w).and_then(|h| {
+                            let h = andruna_compositor::sys::win::Hwnd(h.unwrap_or(0));
+                            andruna_compositor::sys::win::set_topmost(h, true);
+                            std::thread::sleep(Duration::from_millis(300));
+                            andruna_compositor::sys::capture::screen(
+                                andruna_compositor::sys::win::window_rect(h),
+                            )
+                        })
+                    } else {
+                        c.screenshot(w)
+                    };
+                    match shot.and_then(|i| save_bmp(&p, &i)) {
                         Ok(()) => println!("event=screenshot path={p}"),
                         Err(e) => println!("event=screenshot_failed error=\"{e}\""),
                     }
@@ -245,58 +263,58 @@ fn main() {
                 event,
                 delivered_ns,
                 ..
-            } => {
-                match &event {
-                    InputEvent::Motion(m) => {
-                        let lat = delivered_ns - m.event_time_ns();
-                        latencies.push(lat);
-                        let p = &m.current()[0];
-                        println!(
-                            "event=motion action={:#x} source={:#x} pointers={} x={:.1} y={:.1} buttons={:#x} samples={} latency_us={}",
-                            m.action,
-                            m.source,
-                            m.pointers.len(),
-                            p.x(),
-                            p.y(),
-                            m.button_state,
-                            m.samples.len(),
-                            lat / 1000
-                        );
-                        if m.action_masked() == andruna_compositor::android::motion::ACTION_DOWN {
-                            presses += 1;
-                            color = [0x2E7D32, 0x1565C0, 0xC62828, 0x6A1B9A][presses as usize % 4];
-                            if let Some(s) = &surface {
-                                s.clear(rgba(color)).unwrap();
-                                s.present(0).unwrap();
-                            }
+            } => match &event {
+                InputEvent::Motion(m) => {
+                    let lat = delivered_ns - m.event_time_ns();
+                    latencies.push(lat);
+                    let p = &m.current()[0];
+                    println!(
+                        "event=motion action={:#x} source={:#x} pointers={} x={:.1} y={:.1} buttons={:#x} samples={} latency_us={}",
+                        m.action,
+                        m.source,
+                        m.pointers.len(),
+                        p.x(),
+                        p.y(),
+                        m.button_state,
+                        m.samples.len(),
+                        lat / 1000
+                    );
+                    if m.action_masked() == andruna_compositor::android::motion::ACTION_DOWN {
+                        presses += 1;
+                        color = [0x2E7D32, 0x1565C0, 0xC62828, 0x6A1B9A][presses as usize % 4];
+                        if let Some(s) = &surface {
+                            s.clear(rgba(color)).unwrap();
+                            s.present(0).unwrap();
                         }
                     }
-                    InputEvent::Key(k) => {
-                        let lat = delivered_ns - k.event_time_ns;
-                        latencies.push(lat);
-                        println!(
-                            "event=key action={} code={} scan={} meta={:#x} repeat={} flags={:#x} latency_us={}",
-                            k.action,
-                            k.key_code,
-                            k.scan_code,
-                            k.meta_state,
-                            k.repeat_count,
-                            k.flags,
-                            lat / 1000
-                        );
-                    }
-                    InputEvent::Ime(ImeEvent::Commit { text }) => {
-                        println!("event=ime_commit text={text:?}")
-                    }
-                    InputEvent::Ime(ImeEvent::Composing {
-                        text,
-                        cursor,
-                        target,
-                    }) => println!("event=ime_composing text={text:?} cursor={cursor} target={target:?}"),
-                    InputEvent::Ime(ImeEvent::FinishComposing) => println!("event=ime_finish"),
-                    InputEvent::Focus { has_focus } => println!("event=focus has_focus={has_focus}"),
                 }
-            }
+                InputEvent::Key(k) => {
+                    let lat = delivered_ns - k.event_time_ns;
+                    latencies.push(lat);
+                    println!(
+                        "event=key action={} code={} scan={} meta={:#x} repeat={} flags={:#x} latency_us={}",
+                        k.action,
+                        k.key_code,
+                        k.scan_code,
+                        k.meta_state,
+                        k.repeat_count,
+                        k.flags,
+                        lat / 1000
+                    );
+                }
+                InputEvent::Ime(ImeEvent::Commit { text }) => {
+                    println!("event=ime_commit text={text:?}")
+                }
+                InputEvent::Ime(ImeEvent::Composing {
+                    text,
+                    cursor,
+                    target,
+                }) => {
+                    println!("event=ime_composing text={text:?} cursor={cursor} target={target:?}")
+                }
+                InputEvent::Ime(ImeEvent::FinishComposing) => println!("event=ime_finish"),
+                InputEvent::Focus { has_focus } => println!("event=focus has_focus={has_focus}"),
+            },
             Event::KeyboardLayout { layout, kcm } => {
                 println!(
                     "event=keyboard_layout hkl={layout:#x} kcm_keys={}",

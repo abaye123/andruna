@@ -261,8 +261,7 @@ pub fn fixed_content_dp(spec: &ActivitySpec, work_area: Size, dpi: u32) -> Size 
     let density = density_dpi(dpi);
     let caption = dip_to_px(CAPTION_HEIGHT_DIP, dpi);
     let avail_w = px_to_dp(work_area.width, density) as f32 * INITIAL_WORK_AREA_FRACTION;
-    let avail_h =
-        px_to_dp(work_area.height - caption, density) as f32 * INITIAL_WORK_AREA_FRACTION;
+    let avail_h = px_to_dp(work_area.height - caption, density) as f32 * INITIAL_WORK_AREA_FRACTION;
     let aspect = fixed_aspect(spec);
     let landscape = spec.orientation == RequestedOrientation::Landscape;
     let (w, h) = if landscape {
@@ -558,12 +557,48 @@ mod tests {
         // (client w, h, dpi, target sdk) ->
         // (density, w dp, h dp, smallest, orientation, caption px)
         let table = [
-            (800, 600, 96, 35, (160, 800, 600, 600, ORIENTATION_LANDSCAPE, 32)),
-            (800, 600, 96, 33, (160, 800, 568, 568, ORIENTATION_LANDSCAPE, 32)),
-            (600, 900, 144, 36, (240, 400, 600, 400, ORIENTATION_PORTRAIT, 48)),
-            (600, 900, 144, 30, (240, 400, 568, 400, ORIENTATION_PORTRAIT, 48)),
-            (1000, 1000, 120, 35, (200, 800, 800, 800, ORIENTATION_PORTRAIT, 40)),
-            (2560, 1528, 192, 35, (320, 1280, 764, 764, ORIENTATION_LANDSCAPE, 64)),
+            (
+                800,
+                600,
+                96,
+                35,
+                (160, 800, 600, 600, ORIENTATION_LANDSCAPE, 32),
+            ),
+            (
+                800,
+                600,
+                96,
+                33,
+                (160, 800, 568, 568, ORIENTATION_LANDSCAPE, 32),
+            ),
+            (
+                600,
+                900,
+                144,
+                36,
+                (240, 400, 600, 400, ORIENTATION_PORTRAIT, 48),
+            ),
+            (
+                600,
+                900,
+                144,
+                30,
+                (240, 400, 568, 400, ORIENTATION_PORTRAIT, 48),
+            ),
+            (
+                1000,
+                1000,
+                120,
+                35,
+                (200, 800, 800, 800, ORIENTATION_PORTRAIT, 40),
+            ),
+            (
+                2560,
+                1528,
+                192,
+                35,
+                (320, 1280, 764, 764, ORIENTATION_LANDSCAPE, 64),
+            ),
         ];
         let traits = DeviceTraits::default();
         for (w, h, dpi, sdk, want) in table {
@@ -642,10 +677,7 @@ mod tests {
         // Moved to a 150% monitor with the same dp size: density and
         // window bounds change, sizes in dp do not.
         let c = compute(&metrics(1200, 900, 144), &spec, None, &t).config;
-        assert_eq!(
-            diff(&a, &c),
-            CONFIG_DENSITY | CONFIG_WINDOW_CONFIGURATION
-        );
+        assert_eq!(diff(&a, &c), CONFIG_DENSITY | CONFIG_WINDOW_CONFIGURATION);
         // Only moved: window configuration only.
         let mut m = metrics(800, 600, 96);
         m.client = m.client.offset(30, 0);
@@ -670,7 +702,12 @@ mod tests {
         // Window sized to the content: no letterbox.
         let init = initial_client_size(&spec, Some(fixed), Size::new(1920, 1040), 96);
         assert_eq!(init, Size::new(425, 756 + 32));
-        let l = compute(&metrics(init.width, init.height, 96), &spec, Some(fixed), &t);
+        let l = compute(
+            &metrics(init.width, init.height, 96),
+            &spec,
+            Some(fixed),
+            &t,
+        );
         assert!(!l.letterboxed);
         assert_eq!(l.content, Rect::new(0, 32, 425, 788));
         assert_eq!(l.caption_insets, Insets::NONE);
@@ -687,10 +724,7 @@ mod tests {
         assert_eq!(big.scale, 1.0);
         assert_eq!(big.content, Rect::new(747, 158, 1172, 914));
         assert_eq!(big.config.window.bounds, Rect::new(847, 208, 1272, 964));
-        assert_eq!(
-            diff(&l.config, &big.config),
-            CONFIG_WINDOW_CONFIGURATION
-        );
+        assert_eq!(diff(&l.config, &big.config), CONFIG_WINDOW_CONFIGURATION);
 
         // Moved to a 150% monitor of the same pixel size: the content keeps
         // its dp size (638x1134 px), which no longer fits below the 48 px

@@ -26,8 +26,8 @@ use crate::config::{
     self, ActivitySpec, CAPTION_HEIGHT_DIP, DeviceTraits, WindowLayout, WindowMetrics,
 };
 use crate::geom::{Rect, Size};
-use crate::input::keys::{self, KeyTracker, SCAN_PAUSE, system_back};
 use crate::input::kcm::{self, Mods};
+use crate::input::keys::{self, KeyTracker, SCAN_PAUSE, system_back};
 use crate::input::pointer::{PointerFrame, PointerKind, PointerSample, PointerTracker};
 use crate::input::{ImeEvent, InputEvent};
 use crate::sys::gfx::{Caption, Gfx, Image, Rgb, SurfaceVisual, WindowTree};
@@ -92,10 +92,17 @@ pub enum Event {
         delivered_ns: i64,
     },
     /// The keyboard layout changed: Android key character map overlay.
-    KeyboardLayout { layout: isize, kcm: String },
+    KeyboardLayout {
+        layout: isize,
+        kcm: String,
+    },
     /// The user asked to close the window (Android decides what happens).
-    CloseRequested { window: WindowId },
-    Destroyed { window: WindowId },
+    CloseRequested {
+        window: WindowId,
+    },
+    Destroyed {
+        window: WindowId,
+    },
 }
 
 enum Cmd {
@@ -555,7 +562,10 @@ fn screenshot(h: Hwnd) -> io::Result<Image> {
     let full = capture::window(h, outer.width(), outer.height())?;
     let (ox, oy) = win::client_origin(h);
     let size = win::client_size(h);
-    let (dx, dy) = ((ox - outer.left).max(0) as u32, (oy - outer.top).max(0) as u32);
+    let (dx, dy) = (
+        (ox - outer.left).max(0) as u32,
+        (oy - outer.top).max(0) as u32,
+    );
     let w = (size.width as u32).min(full.width.saturating_sub(dx));
     let ht = (size.height as u32).min(full.height.saturating_sub(dy));
     let mut bgra = Vec::with_capacity((w * ht * 4) as usize);
@@ -706,10 +716,14 @@ fn relayout(h: Hwnd) {
             caption_px,
         };
         let layout = config::compute(&m, &w.spec.activity, w.fixed_dp, &s.traits);
-        let changes = w.layout.map(|old| config::diff(&old.config, &layout.config));
+        let changes = w
+            .layout
+            .map(|old| config::diff(&old.config, &layout.config));
         w.origin = (ox, oy);
         if w.layout != Some(layout) {
-            let _ = w.tree.set_content(layout.content, layout.scale);
+            let _ = w
+                .tree
+                .set_content(layout.content, layout.scale, Some(caption_px));
             let raw = (
                 (m.client.left + layout.content.left) as f32,
                 (m.client.top + layout.content.top) as f32,
@@ -823,7 +837,10 @@ fn hi_i16(v: usize) -> i16 {
 }
 
 fn point_lparam(l: isize) -> (i32, i32) {
-    ((l & 0xFFFF) as u16 as i16 as i32, ((l >> 16) & 0xFFFF) as u16 as i16 as i32)
+    (
+        (l & 0xFFFF) as u16 as i16 as i32,
+        ((l >> 16) & 0xFFFF) as u16 as i16 as i32,
+    )
 }
 
 /// Hit testing of the custom caption, without state.
@@ -926,7 +943,11 @@ fn handle_message(m: Msg) -> Option<isize> {
                     .values_mut()
                     .map(|w| {
                         w.caption = None;
-                        (w.hwnd, frame_dark(&s.traits, w.spec.caption_color), w.spec.caption_color)
+                        (
+                            w.hwnd,
+                            frame_dark(&s.traits, w.spec.caption_color),
+                            w.spec.caption_color,
+                        )
                     })
                     .collect::<Vec<_>>()
             })
@@ -1028,7 +1049,9 @@ fn pointer_message(m: Msg) -> Option<isize> {
     let r = with_state(|s| {
         let mut w = s.wins.remove(&m.hwnd.0)?;
         let (ox, oy) = w.origin;
-        let (content, scale) = w.layout.map_or((Rect::default(), 1.0), |l| (l.content, l.scale));
+        let (content, scale) = w
+            .layout
+            .map_or((Rect::default(), 1.0), |l| (l.content, l.scale));
         let map = move |sx: i32, sy: i32| {
             (
                 ((sx - ox - content.left) as f32) / scale,
@@ -1081,9 +1104,7 @@ fn pointer_message(m: Msg) -> Option<isize> {
             PointerKind::Touch => w.touch.is_down(),
             PointerKind::Pen => w.pen.is_down(),
         };
-        if !tracker_down
-            && let Some(last) = frames.last()
-        {
+        if !tracker_down && let Some(last) = frames.last() {
             let over = in_back(last) && m.msg != wm::WM_POINTERLEAVE;
             let pressed = last
                 .pointers
@@ -1149,7 +1170,9 @@ fn wheel(m: Msg) -> Option<isize> {
     with_state(|s| {
         let mut w = s.wins.remove(&m.hwnd.0)?;
         let (ox, oy) = w.origin;
-        let (content, scale) = w.layout.map_or((Rect::default(), 1.0), |l| (l.content, l.scale));
+        let (content, scale) = w
+            .layout
+            .map_or((Rect::default(), 1.0), |l| (l.content, l.scale));
         let x = (sx - ox - content.left) as f32 / scale;
         let y = (sy - oy - content.top) as f32 / scale;
         let meta = w.keys.meta_state(win::locks());

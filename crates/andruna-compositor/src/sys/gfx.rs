@@ -25,11 +25,11 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::DirectWrite::*;
+use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
 };
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
-use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::core::{IUnknown, Interface, w};
 use windows_numerics::Matrix3x2;
 
@@ -144,13 +144,18 @@ impl Gfx {
             let root = self.dcomp.CreateVisual().map_err(to_io)?;
             let content = self.dcomp.CreateVisual().map_err(to_io)?;
             let caption = self.dcomp.CreateVisual().map_err(to_io)?;
-            root.AddVisual(&content, true, None).map_err(to_io)?;
-            root.AddVisual(&caption, true, None).map_err(to_io)?;
+            // With no reference visual, `insertabove == false` puts the
+            // new visual on top of its siblings.
+            root.AddVisual(&content, false, None).map_err(to_io)?;
+            root.AddVisual(&caption, false, None).map_err(to_io)?;
             target.SetRoot(&root).map_err(to_io)?;
+            let clip = self.dcomp.CreateRectangleClip().map_err(to_io)?;
+            content.SetClip(&clip).map_err(to_io)?;
             Ok(WindowTree {
                 _target: target,
                 root,
                 content,
+                clip,
                 caption,
                 caption_surface: None,
                 splash: None,
@@ -189,7 +194,11 @@ impl Gfx {
         }
     }
 
-    fn text_format(&self, family: windows::core::PCWSTR, size: f32) -> io::Result<IDWriteTextFormat> {
+    fn text_format(
+        &self,
+        family: windows::core::PCWSTR,
+        size: f32,
+    ) -> io::Result<IDWriteTextFormat> {
         // SAFETY: COM calls with valid strings.
         unsafe {
             let f = self
@@ -338,7 +347,9 @@ impl Gfx {
                 .map(Some)
             };
             self.draw(&surface, |dc| {
-                dc.Clear(Some(&background.map_or(D2D1_COLOR_F::default(), |b| b.f(1.0))));
+                dc.Clear(Some(
+                    &background.map_or(D2D1_COLOR_F::default(), |b| b.f(1.0)),
+                ));
                 if let Some(b) = bitmap(dc)? {
                     let r = Rect::new(0, 0, area.width(), area.height())
                         .center(Size::new(icon_px, icon_px));
@@ -408,7 +419,7 @@ impl Gfx {
                 (COMPOSITIONOBJECT_READ | COMPOSITIONOBJECT_WRITE) as u32,
                 None,
             )
-                .map_err(to_io)?;
+            .map_err(to_io)?;
             let handle = Handle::from_raw(h.0 as usize);
             let content: IUnknown = self.dcomp.CreateSurfaceFromHandle(h).map_err(to_io)?;
             let visual = self.dcomp.CreateVisual().map_err(to_io)?;
@@ -426,7 +437,10 @@ impl Gfx {
 /// is true for WARP.
 pub fn create_d3d() -> io::Result<(ID3D11Device, bool)> {
     let mut last = None;
-    for (driver, warp) in [(D3D_DRIVER_TYPE_HARDWARE, false), (D3D_DRIVER_TYPE_WARP, true)] {
+    for (driver, warp) in [
+        (D3D_DRIVER_TYPE_HARDWARE, false),
+        (D3D_DRIVER_TYPE_WARP, true),
+    ] {
         let mut d = None;
         // SAFETY: valid out pointer; no adapter or software module.
         let r = unsafe {
@@ -471,6 +485,7 @@ pub struct WindowTree {
     _target: IDCompositionTarget,
     root: IDCompositionVisual2,
     content: IDCompositionVisual2,
+    clip: IDCompositionRectangleClip,
     caption: IDCompositionVisual2,
     caption_surface: Option<(IDCompositionSurface, Size)>,
     splash: Option<(IDCompositionVisual2, IDCompositionEffectGroup, bool)>,
@@ -478,7 +493,11 @@ pub struct WindowTree {
 
 impl WindowTree {
     /// Places the app's area: offset in the client, scale of app pixels.
-    pub fn set_content(&self, rect: Rect, scale: f32) -> io::Result<()> {
+    /// The app's pixels under the caption (client rows above
+    /// `caption_px`) are hidden: the caption is opaque, like Android's
+    /// caption bar, unless the app asks for a transparent one (`None`).
+    pub fn set_content(&self, rect: Rect, scale: f32, caption_px: Option<i32>) -> io::Result<()> {
+        let top = caption_px.map_or(-1e6, |c| (c - rect.top) as f32 / scale);
         let m = Matrix3x2 {
             M11: scale,
             M12: 0.0,
@@ -490,6 +509,10 @@ impl WindowTree {
         // SAFETY: COM calls with valid arguments.
         unsafe {
             self.content.SetTransform2(&m).map_err(to_io)?;
+            self.clip.SetLeft2(-1e6).map_err(to_io)?;
+            self.clip.SetRight2(1e6).map_err(to_io)?;
+            self.clip.SetBottom2(1e6).map_err(to_io)?;
+            self.clip.SetTop2(top).map_err(to_io)?;
             self.content
                 .SetBitmapInterpolationMode(if scale == 1.0 {
                     DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR
@@ -507,7 +530,10 @@ impl WindowTree {
         unsafe {
             self.content.RemoveAllVisuals().map_err(to_io)?;
             for s in surfaces {
-                self.content.AddVisual(&s.visual, true, None).map_err(to_io)?;
+                // On top of the ones added before.
+                self.content
+                    .AddVisual(&s.visual, false, None)
+                    .map_err(to_io)?;
             }
         }
         Ok(())

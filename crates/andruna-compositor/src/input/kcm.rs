@@ -35,12 +35,54 @@ pub enum KeyOutput {
 /// The modifier states and their `.kcm` property names, in the order they
 /// are written (Android tries later properties first).
 const STATES: [(&str, Mods); 6] = [
-    ("base", Mods { shift: false, caps: false, altgr: false }),
-    ("shift", Mods { shift: true, caps: false, altgr: false }),
-    ("capslock", Mods { shift: false, caps: true, altgr: false }),
-    ("shift+capslock", Mods { shift: true, caps: true, altgr: false }),
-    ("ralt", Mods { shift: false, caps: false, altgr: true }),
-    ("shift+ralt", Mods { shift: true, caps: false, altgr: true }),
+    (
+        "base",
+        Mods {
+            shift: false,
+            caps: false,
+            altgr: false,
+        },
+    ),
+    (
+        "shift",
+        Mods {
+            shift: true,
+            caps: false,
+            altgr: false,
+        },
+    ),
+    (
+        "capslock",
+        Mods {
+            shift: false,
+            caps: true,
+            altgr: false,
+        },
+    ),
+    (
+        "shift+capslock",
+        Mods {
+            shift: true,
+            caps: true,
+            altgr: false,
+        },
+    ),
+    (
+        "ralt",
+        Mods {
+            shift: false,
+            caps: false,
+            altgr: true,
+        },
+    ),
+    (
+        "shift+ralt",
+        Mods {
+            shift: true,
+            caps: false,
+            altgr: true,
+        },
+    ),
 ];
 
 /// The combining accent Android uses as the dead key for a spacing
@@ -170,8 +212,15 @@ mod tests {
         assert!(kcm.contains("type OVERLAY\n"));
         let a = "\nkey A {\n    label: 'A'\n    base: '\\u05e9'\n    shift: 'A'\n    capslock: 'a'\n    shift+capslock: 'A'\n}\n";
         assert!(kcm.contains(a), "{kcm}");
-        assert!(kcm.contains("key COMMA {\n    label: '\\u05ea'\n    base: '\\u05ea'\n    shift: '>'\n"));
-        assert!(kcm.contains("key SPACE {\n    label: ' '\n    base: ' '\n"), "{kcm}");
+        assert!(
+            kcm.contains(
+                "key COMMA {\n    label: '\\u05ea'\n    base: '\\u05ea'\n    shift: '>'\n"
+            )
+        );
+        assert!(
+            kcm.contains("key SPACE {\n    label: ' '\n    base: ' '\n"),
+            "{kcm}"
+        );
         assert!(kcm.contains("key 1 {\n    label: '1'\n    base: '1'\n    shift: '!'\n"));
         // Keys the layout does not type are left to the base map.
         assert!(!kcm.contains("key Z "));
@@ -190,7 +239,10 @@ mod tests {
             _ => None,
         });
         assert!(kcm.contains("    ralt: '\\u20ac'\n"), "{kcm}");
-        assert!(kcm.contains("key LEFT_BRACKET {\n    base: '\\u0302'\n    capslock: '\\u0302'\n}"), "{kcm}");
+        assert!(
+            kcm.contains("key LEFT_BRACKET {\n    base: '\\u0302'\n    capslock: '\\u0302'\n}"),
+            "{kcm}"
+        );
     }
 
     #[test]
@@ -206,7 +258,14 @@ mod tests {
     #[test]
     fn character_keys_cover_the_main_block() {
         let keys: Vec<_> = character_keys().map(|k| k.1).collect();
-        for k in [keycode::A, keycode::Z, keycode::NUM_0, keycode::SPACE, keycode::SLASH, keycode::GRAVE] {
+        for k in [
+            keycode::A,
+            keycode::Z,
+            keycode::NUM_0,
+            keycode::SPACE,
+            keycode::SLASH,
+            keycode::GRAVE,
+        ] {
             assert!(keys.contains(&k));
         }
         assert!(!keys.contains(&keycode::ENTER));

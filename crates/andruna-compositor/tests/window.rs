@@ -122,8 +122,13 @@ fn draws_resizes_and_reports_configuration_changes() {
 
     // Resize to portrait: screen size, orientation and window bounds
     // change.
+    let t0 = Instant::now();
     c.set_client_size(w, Size::new(400, 600)).unwrap();
     let (l, changes) = config_of(&rx, w).expect("configuration change");
+    eprintln!(
+        "resize: request to configuration event {:.2} ms",
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
     assert_eq!(l.config.window.bounds.size(), Size::new(400, 600));
     assert_eq!(l.config.orientation, ORIENTATION_PORTRAIT);
     for bit in [
@@ -141,10 +146,15 @@ fn draws_resizes_and_reports_configuration_changes() {
     );
 
     // The producer follows with a new buffer size and color.
+    let t1 = Instant::now();
     s.resize(400, 600).unwrap();
     s.clear([0.0, 1.0, 0.0, 1.0]).unwrap();
     s.present(0).unwrap();
     let got = wait_for_color(&c, w, (200, 400), (0, 255, 0));
+    eprintln!(
+        "resize: producer resize and present to new pixels in a screenshot {:.2} ms",
+        t1.elapsed().as_secs_f64() * 1000.0
+    );
     assert!(close(got, (0, 255, 0)), "center is {got:?}, want green");
     let shot = c.screenshot(w).unwrap();
     assert_eq!((shot.width, shot.height), (400, 600));
@@ -153,7 +163,10 @@ fn draws_resizes_and_reports_configuration_changes() {
     c.set_client_size(w, Size::new(50, 50)).unwrap();
     let (l, _) = config_of(&rx, w).expect("configuration at minimum");
     let density = config::density_dpi(dpi);
-    assert_eq!(l.config.window.bounds.width(), config::dp_to_px(220, density));
+    assert_eq!(
+        l.config.window.bounds.width(),
+        config::dp_to_px(220, density)
+    );
     assert_eq!(
         l.config.window.bounds.height(),
         config::dp_to_px(220, density) + config::dip_to_px(32, dpi)
@@ -161,7 +174,10 @@ fn draws_resizes_and_reports_configuration_changes() {
 
     c.close(w).unwrap();
     assert!(
-        wait_for(&rx, Duration::from_secs(5), |e| matches!(e, Event::Destroyed { window } if *window == w).then_some(())).is_some()
+        wait_for(&rx, Duration::from_secs(5), |e| {
+            matches!(e, Event::Destroyed { window } if *window == w).then_some(())
+        })
+        .is_some()
     );
 }
 
@@ -185,12 +201,22 @@ fn non_resizable_app_is_letterboxed_when_maximized() {
     assert!(!normal.letterboxed);
     assert_eq!(normal.config.orientation, ORIENTATION_PORTRAIT);
     let (_sid, handle) = c
-        .create_surface(w, 0, Rect::from_size(0, 0, normal.config.window.bounds.size()))
+        .create_surface(
+            w,
+            0,
+            Rect::from_size(0, 0, normal.config.window.bounds.size()),
+        )
         .unwrap();
     let device = create_device().unwrap();
     let s = NativeSurface::open(&device, &handle, BufferFormat::Rgbx8888).unwrap();
     s.clear([0.0, 0.0, 1.0, 1.0]).unwrap();
     s.present(0).unwrap();
+
+    // The caption has the app's color (DWM draws its buttons on the
+    // same color).
+    let caption = c.screenshot(w).unwrap();
+    let px = pixel(&caption, 6, (normal.content.top - 4).max(0) as u32);
+    assert!(close(px, (0xC0, 0x65, 0x15)), "caption is {px:?}");
 
     c.maximize(w, true).unwrap();
     let (max, changes) = config_of(&rx, w).expect("maximized configuration");
@@ -203,7 +229,11 @@ fn non_resizable_app_is_letterboxed_when_maximized() {
     let hwnd = win::Hwnd(c.native_window(w).unwrap().unwrap());
     let client = win::client_size(hwnd);
     let mid = max.content.left + max.content.width() / 2;
-    assert!((mid - client.width / 2).abs() <= 1, "{:?} in {client:?}", max.content);
+    assert!(
+        (mid - client.width / 2).abs() <= 1,
+        "{:?} in {client:?}",
+        max.content
+    );
     // The content is blue, the side is not.
     let center = (
         (max.content.left + max.content.width() / 2) as u32,
@@ -214,7 +244,10 @@ fn non_resizable_app_is_letterboxed_when_maximized() {
     if max.content.left > 4 {
         let img = c.screenshot(w).unwrap();
         let side = pixel(&img, 2, center.1);
-        assert!(!close(side, (255, 0, 0)), "letterbox is {side:?}, stretched?");
+        assert!(
+            !close(side, (255, 0, 0)),
+            "letterbox is {side:?}, stretched?"
+        );
     }
     c.maximize(w, false).unwrap();
     let (back, _) = config_of(&rx, w).expect("restored");
@@ -265,21 +298,40 @@ fn injected_input_reaches_the_app_with_android_semantics() {
     const WM_SYSKEYDOWN: u32 = 0x104;
     const WM_SYSKEYUP: u32 = 0x105;
     let post = |m: u32, wp: usize, lp: isize| inject::post(hwnd, m, wp, lp).unwrap();
+    let posted = clock::uptime_ns();
     post(WM_KEYDOWN, 0x41, inject::key_lparam(0x1E, true));
 
     post(WM_KEYUP, 0x41, inject::key_lparam(0x1E, false));
     post(WM_CHAR, 0xD83D, 1);
     post(WM_CHAR, 0xDE00, 1);
     // Alt+Left is Back.
-    post(WM_SYSKEYDOWN, 0x12, inject::key_lparam(0x38, true) | 1 << 29);
-    post(WM_SYSKEYDOWN, 0x25, inject::key_lparam(0xE04B, true) | 1 << 29);
-    post(WM_SYSKEYUP, 0x25, inject::key_lparam(0xE04B, false) | 1 << 29);
+    post(
+        WM_SYSKEYDOWN,
+        0x12,
+        inject::key_lparam(0x38, true) | 1 << 29,
+    );
+    post(
+        WM_SYSKEYDOWN,
+        0x25,
+        inject::key_lparam(0xE04B, true) | 1 << 29,
+    );
+    post(
+        WM_SYSKEYUP,
+        0x25,
+        inject::key_lparam(0xE04B, false) | 1 << 29,
+    );
     post(WM_KEYUP, 0x12, inject::key_lparam(0x38, false));
     let mut got = Vec::new();
+    let mut first_delivery = None;
     wait_for(&rx, Duration::from_secs(3), |e| {
-        if let Event::Input { event, .. } = e
+        if let Event::Input {
+            event,
+            delivered_ns,
+            ..
+        } = e
             && !matches!(event, InputEvent::Focus { .. })
         {
+            first_delivery.get_or_insert(*delivered_ns);
             got.push(event.clone());
         }
         (got.len() >= 7).then_some(())
@@ -309,6 +361,10 @@ fn injected_input_reaches_the_app_with_android_semantics() {
     if let InputEvent::Key(k) = &got[4] {
         assert_eq!(k.flags & key::FLAG_FROM_SYSTEM, key::FLAG_FROM_SYSTEM);
     }
+    eprintln!(
+        "keyboard (posted): post to compositor event {:.3} ms",
+        (first_delivery.unwrap() - posted) as f64 / 1e6
+    );
 
     // Through Windows' input stack: only when Windows lets the window take
     // the foreground (an interactive desktop where the test owns input).
@@ -364,11 +420,20 @@ fn injected_input_reaches_the_app_with_android_semantics() {
                 assert_eq!(actions.first(), Some(&motion::ACTION_DOWN), "{actions:?}");
                 assert_eq!(actions.last(), Some(&motion::ACTION_UP), "{actions:?}");
                 let down = &ev[0].0;
-                assert_eq!(down.source, andruna_compositor::android::source::TOUCHSCREEN);
+                assert_eq!(
+                    down.source,
+                    andruna_compositor::android::source::TOUCHSCREEN
+                );
                 assert_eq!(down.pointers[0].tool_type, motion::TOOL_TYPE_FINGER);
                 let p = &down.current()[0];
-                assert!((p.x() - (250 - layout.content.left) as f32).abs() <= 1.0, "{p:?}");
-                assert!((p.y() - (200 - layout.content.top) as f32).abs() <= 1.0, "{p:?}");
+                assert!(
+                    (p.x() - (250 - layout.content.left) as f32).abs() <= 1.0,
+                    "{p:?}"
+                );
+                assert!(
+                    (p.y() - (200 - layout.content.top) as f32).abs() <= 1.0,
+                    "{p:?}"
+                );
                 assert!((p.get(motion::AXIS_PRESSURE) - 0.5).abs() < 0.01);
                 eprintln!(
                     "touch: injection to compositor event {:.2} ms; event time to delivery {:.2} ms",
@@ -397,11 +462,17 @@ fn vsync_follows_the_compositor_clock() {
             // Between 30 Hz and 500 Hz.
             assert!((2.0..34.0).contains(&ms), "{ms}");
             assert!(events.windows(2).all(|p| p[1].frame_id > p[0].frame_id));
-            assert!(events.windows(2).all(|p| p[1].timestamp_ns > p[0].timestamp_ns));
+            assert!(
+                events
+                    .windows(2)
+                    .all(|p| p[1].timestamp_ns > p[0].timestamp_ns)
+            );
             let now = clock::uptime_ns();
             let last = events.last().unwrap().timestamp_ns;
-            assert!((now - last).abs() < 1_000_000_000, "timestamps on the uptime clock");
+            assert!(
+                (now - last).abs() < 1_000_000_000,
+                "timestamps on the uptime clock"
+            );
         }
     }
 }
-

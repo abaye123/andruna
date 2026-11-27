@@ -255,7 +255,8 @@ impl KeyTracker {
                 None => {
                     let alt_only = {
                         let m = self.meta_state(Locks::default());
-                        m & META_ALT_ON != 0 && m & (META_CTRL_ON | META_META_ON | META_SHIFT_ON) == 0
+                        m & META_ALT_ON != 0
+                            && m & (META_CTRL_ON | META_META_ON | META_SHIFT_ON) == 0
                     };
                     let system = code == kc::DPAD_LEFT && alt_only;
                     let h = Held {
@@ -399,7 +400,10 @@ mod tests {
         assert_eq!(a[0].scan_code, 30);
         assert_eq!(a[0].source, source::KEYBOARD);
         let up = t.key(40, 0x1E, false, l).unwrap();
-        assert_eq!((up.action, up.repeat_count, up.down_time_ns), (ACTION_UP, 0, 10));
+        assert_eq!(
+            (up.action, up.repeat_count, up.down_time_ns),
+            (ACTION_UP, 0, 10)
+        );
     }
 
     #[test]
@@ -408,9 +412,15 @@ mod tests {
         for (held, meta) in [
             (&[0x2A][..], META_SHIFT_ON | META_SHIFT_LEFT_ON),
             (&[0x36], META_SHIFT_ON | META_SHIFT_RIGHT_ON),
-            (&[0x2A, 0x36], META_SHIFT_ON | META_SHIFT_LEFT_ON | META_SHIFT_RIGHT_ON),
+            (
+                &[0x2A, 0x36],
+                META_SHIFT_ON | META_SHIFT_LEFT_ON | META_SHIFT_RIGHT_ON,
+            ),
             (&[0xE038], META_ALT_ON | META_ALT_RIGHT_ON),
-            (&[0xE01D, 0x38], META_CTRL_ON | META_CTRL_RIGHT_ON | META_ALT_ON | META_ALT_LEFT_ON),
+            (
+                &[0xE01D, 0x38],
+                META_CTRL_ON | META_CTRL_RIGHT_ON | META_ALT_ON | META_ALT_LEFT_ON,
+            ),
             (&[0xE05C], META_META_ON | META_META_RIGHT_ON),
         ] {
             let mut t = KeyTracker::new();
@@ -459,7 +469,10 @@ mod tests {
         t.key(1, 0x1E, true, Locks::default());
         let c = t.cancel_all(5, Locks::default());
         assert_eq!(c.len(), 2);
-        assert!(c.iter().all(|e| e.action == ACTION_UP && e.flags & FLAG_CANCELED != 0));
+        assert!(
+            c.iter()
+                .all(|e| e.action == ACTION_UP && e.flags & FLAG_CANCELED != 0)
+        );
         assert_eq!(t.meta_state(Locks::default()), 0);
     }
 

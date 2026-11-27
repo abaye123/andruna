@@ -7,14 +7,17 @@ use std::io;
 
 use windows::Win32::Foundation::{POINT, RECT};
 use windows::Win32::UI::Controls::{
-    CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, HSYNTHETICPOINTERDEVICE, POINTER_FEEDBACK_NONE, POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
+    CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, HSYNTHETICPOINTERDEVICE,
+    POINTER_FEEDBACK_NONE, POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
     KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, SendInput,
 };
 use windows::Win32::UI::Input::Pointer::*;
-use windows::Win32::UI::WindowsAndMessaging::{PT_TOUCH, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE};
+use windows::Win32::UI::WindowsAndMessaging::{
+    PT_TOUCH, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE,
+};
 
 /// Sends a key by scan code (`0xE0xx` for extended keys).
 pub fn key(scan: u16, down: bool) -> io::Result<()> {
@@ -88,8 +91,9 @@ pub struct Touch(HSYNTHETICPOINTERDEVICE);
 impl Touch {
     pub fn new(max_contacts: u32) -> io::Result<Touch> {
         // SAFETY: no pointers; destroyed in Drop.
-        let d = unsafe { CreateSyntheticPointerDevice(PT_TOUCH, max_contacts, POINTER_FEEDBACK_NONE) }
-            .map_err(io::Error::other)?;
+        let d =
+            unsafe { CreateSyntheticPointerDevice(PT_TOUCH, max_contacts, POINTER_FEEDBACK_NONE) }
+                .map_err(io::Error::other)?;
         Ok(Touch(d))
     }
 
@@ -99,7 +103,9 @@ impl Touch {
             .iter()
             .map(|&(id, x, y, phase)| {
                 let flags = match phase {
-                    Phase::Down => POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+                    Phase::Down => {
+                        POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT
+                    }
                     Phase::Move => {
                         POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT
                     }

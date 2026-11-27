@@ -43,7 +43,8 @@ impl Ctx {
                 return Vec::new();
             }
             let mut buf = vec![0u8; n as usize];
-            let n = ImmGetCompositionStringW(self.1, kind, Some(buf.as_mut_ptr() as *mut _), n as u32);
+            let n =
+                ImmGetCompositionStringW(self.1, kind, Some(buf.as_mut_ptr() as *mut _), n as u32);
             buf.truncate(n.max(0) as usize);
             buf
         }
@@ -82,11 +83,15 @@ pub fn composition(h: Hwnd, flags: u32) -> Composition {
         let attrs = c.string(GCS_COMPATTR);
         let target = attrs
             .iter()
-            .position(|a| *a as u32 == ATTR_TARGET_CONVERTED || *a as u32 == ATTR_TARGET_NOTCONVERTED)
+            .position(|a| {
+                *a as u32 == ATTR_TARGET_CONVERTED || *a as u32 == ATTR_TARGET_NOTCONVERTED
+            })
             .map(|s| {
                 let e = attrs[s..]
                     .iter()
-                    .position(|a| *a as u32 != ATTR_TARGET_CONVERTED && *a as u32 != ATTR_TARGET_NOTCONVERTED)
+                    .position(|a| {
+                        *a as u32 != ATTR_TARGET_CONVERTED && *a as u32 != ATTR_TARGET_NOTCONVERTED
+                    })
                     .map_or(attrs.len(), |n| s + n);
                 (s as i32, e as i32)
             });
@@ -193,9 +198,7 @@ pub fn key_output(layout: isize, scan: u16, mods: Mods) -> Option<KeyOutput> {
     let n = unsafe { ToUnicodeEx(vk, scan as u32, &state, &mut buf, 0x4, Some(hkl)) };
     let first = || char::decode_utf16(buf.iter().copied()).next()?.ok();
     match n {
-        1 => first()
-            .filter(|c| !c.is_control())
-            .map(KeyOutput::Char),
+        1 => first().filter(|c| !c.is_control()).map(KeyOutput::Char),
         -1 => first().map(KeyOutput::Dead),
         _ => None,
     }

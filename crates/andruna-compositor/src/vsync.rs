@@ -179,7 +179,10 @@ mod tests {
         // Last frame started at 1000 with an 8.33 ms (83 333 ticks) period.
         let p = 83_333;
         assert_eq!(extrapolate(1000, 1000 + p, p, 1000), (1000, 1000 + p, 0));
-        assert_eq!(extrapolate(1000, 1000 + p, p, 1000 + p + 5), (1000 + p, 1000 + 2 * p, 1));
+        assert_eq!(
+            extrapolate(1000, 1000 + p, p, 1000 + p + 5),
+            (1000 + p, 1000 + 2 * p, 1)
+        );
         assert_eq!(
             extrapolate(1000, 1000 + p, p, 1000 + 10 * p - 1),
             (1000 + 10 * p, 1000 + 11 * p, 10)
