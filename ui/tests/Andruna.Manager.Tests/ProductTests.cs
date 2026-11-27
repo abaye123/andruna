@@ -284,7 +284,7 @@ public class InstallViewModelTests
         Assert.True(vm.CanInstall);
         Assert.Equal("Example", vm.Label);
         Assert.Equal("InstallVersionNew:\u20661.2\u2069|7", vm.VersionText);
-        Assert.StartsWith("InstallSigner:ABAB ABAB", vm.SignerText, StringComparison.Ordinal);
+        Assert.StartsWith("InstallSigner:⁦ABAB ABAB", vm.SignerText, StringComparison.Ordinal);
         Assert.Equal("InstallActionInstall", vm.ActionText);
 
         // The sensitive permission first, then the known one, then the app's own.

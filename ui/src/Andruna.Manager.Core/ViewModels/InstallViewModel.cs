@@ -103,7 +103,7 @@ public sealed class InstallViewModel : ObservableObject
 
     /// <summary>The signing certificate's SHA-256 in groups of four, so it can be compared by eye.</summary>
     public string SignerText => Details is { SignerSha256.Length: > 0 } d
-        ? _strings.Format("InstallSigner", FormatFingerprint(d.SignerSha256), d.SignatureScheme == 31 ? "3.1" : d.SignatureScheme.ToString(System.Globalization.CultureInfo.InvariantCulture))
+        ? _strings.Format("InstallSigner", Ltr(FormatFingerprint(d.SignerSha256)), d.SignatureScheme == 31 ? "3.1" : d.SignatureScheme.ToString(System.Globalization.CultureInfo.InvariantCulture))
         : string.Empty;
 
     public string IconPath => Details?.IconPngPath ?? string.Empty;
