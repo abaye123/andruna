@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Andruna.Manager.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:l="using:Andruna.Manager.Localization">
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid x:Name="Root">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid x:Name="AppTitleBar" Height="48" Padding="16,0,0,0">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <Image Source="ms-appx:///Assets/Andruna.ico" Width="16" Height="16" />
+                <TextBlock Text="{l:Str Key=AppTitle}" Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center" />
+                <Border Background="{ThemeResource SubtleFillColorSecondaryBrush}" CornerRadius="4" Padding="6,1">
+                    <TextBlock Text="{l:Str Key=TitleBarPreview}" Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </Border>
+            </StackPanel>
+        </Grid>
+
+        <NavigationView
+            x:Name="Nav"
+            Grid.Row="1"
+            IsSettingsVisible="False"
+            IsBackButtonVisible="Auto"
+            IsBackEnabled="{x:Bind ContentFrame.CanGoBack, Mode=OneWay}"
+            IsPaneToggleButtonVisible="True"
+            IsTitleBarAutoPaddingEnabled="False"
+            PaneDisplayMode="Left"
+            OpenPaneLength="260"
+            SelectionChanged="OnNavSelectionChanged"
+            BackRequested="OnNavBackRequested">
+            <NavigationView.MenuItems>
+                <NavigationViewItem x:Name="LibraryItem" Tag="library" Content="{l:Str Key=NavLibrary}">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8F1;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem x:Name="SettingsItem" Tag="settings" Content="{l:Str Key=NavSettings}">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE713;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.FooterMenuItems>
+            <Frame x:Name="ContentFrame" Navigated="OnFrameNavigated" />
+        </NavigationView>
+    </Grid>
+</Window>

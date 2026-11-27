@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Andruna.Manager.Core/Andruna.Manager.Core.csproj" />
+    <Project Path="src/Andruna.Manager/Andruna.Manager.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Andruna.Manager.Tests/Andruna.Manager.Tests.csproj" />
+  </Folder>
+</Solution>

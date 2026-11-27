@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    UI-independent part of the management app: the sysd client, settings and
+    view models. It has no WinUI dependency so that it can be unit tested.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Andruna.Manager.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Andruna.Manager.Tests" />
+  </ItemGroup>
+</Project>

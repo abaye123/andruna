@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="AppTitle" xml:space="preserve">
+    <value>Andruna</value>
+  </data>
+  <data name="TitleBarPreview" xml:space="preserve">
+    <value>תצוגה מקדימה</value>
+  </data>
+  <data name="NavLibrary" xml:space="preserve">
+    <value>ספרייה</value>
+  </data>
+  <data name="NavSettings" xml:space="preserve">
+    <value>הגדרות</value>
+  </data>
+  <data name="LibraryTitle" xml:space="preserve">
+    <value>ספרייה</value>
+  </data>
+  <data name="LibraryRefresh" xml:space="preserve">
+    <value>רענון</value>
+  </data>
+  <data name="InstallApkButton" xml:space="preserve">
+    <value>התקנת APK</value>
+  </data>
+  <data name="LibraryEmptyTitle" xml:space="preserve">
+    <value>עדיין אין אפליקציות</value>
+  </data>
+  <data name="LibraryEmptyMessage" xml:space="preserve">
+    <value>התקינו אפליקציית Android מקובץ APK, או גררו את הקובץ לכאן.</value>
+  </data>
+  <data name="LibraryNoServiceTitle" xml:space="preserve">
+    <value>לא ניתן להציג את האפליקציות כרגע</value>
+  </data>
+  <data name="LibraryNoServiceMessage" xml:space="preserve">
+    <value>רשימת האפליקציות המותקנות מגיעה מהשירות של Andruna, שאינו זמין כרגע.</value>
+  </data>
+  <data name="LibraryLoading" xml:space="preserve">
+    <value>מתחבר לשירות של Andruna...</value>
+  </data>
+  <data name="ServiceNotInstalledTitle" xml:space="preserve">
+    <value>השירות של Andruna אינו מותקן</value>
+  </data>
+  <data name="ServiceNotInstalledMessage" xml:space="preserve">
+    <value>גרסת התצוגה המקדימה הזו עדיין לא כוללת את השירות שמריץ אפליקציות Android ‏(andruna-sysd.exe). עד שיתווסף, אי אפשר להתקין או לפתוח אפליקציות.</value>
+  </data>
+  <data name="ServiceNotRunningTitle" xml:space="preserve">
+    <value>השירות של Andruna אינו פועל</value>
+  </data>
+  <data name="ServiceNotRunningMessage" xml:space="preserve">
+    <value>Andruna לא הצליחה להתחבר לשירות שלה. בחרו "נסו שוב". אם זה חוזר על עצמו, הפעילו מחדש את המחשב.</value>
+  </data>
+  <data name="ServiceFaultedTitle" xml:space="preserve">
+    <value>השירות של Andruna לא הגיב כמצופה</value>
+  </data>
+  <data name="ServiceFaultedMessage" xml:space="preserve">
+    <value>ייתכן שהשירות והאפליקציה הזו הם מגרסאות שונות. התקנה מחדש של Andruna בדרך כלל פותרת את זה. פרטים: {0}</value>
+  </data>
+  <data name="RetryButton" xml:space="preserve">
+    <value>נסו שוב</value>
+  </data>
+  <data name="InstallUnavailableTitle" xml:space="preserve">
+    <value>התקנת אפליקציות עדיין אינה זמינה</value>
+  </data>
+  <data name="InstallUnavailableMessage" xml:space="preserve">
+    <value>גרסת התצוגה המקדימה הזו של Andruna עדיין לא יכולה להתקין אפליקציות. שום דבר לא הותקן, והקובץ "{0}" לא שונה.</value>
+  </data>
+  <data name="InstallPickerFileTypes" xml:space="preserve">
+    <value>חבילות של אפליקציות Android</value>
+  </data>
+  <data name="DialogClose" xml:space="preserve">
+    <value>סגירה</value>
+  </data>
+  <data name="PackageVersionFormat" xml:space="preserve">
+    <value>גרסה {0}</value>
+  </data>
+  <data name="AppVersionUnknown" xml:space="preserve">
+    <value>גרסה לא ידועה</value>
+  </data>
+  <data name="AppNotFoundTitle" xml:space="preserve">
+    <value>האפליקציה לא נמצאה</value>
+  </data>
+  <data name="AppNotFoundMessage" xml:space="preserve">
+    <value>אין אפליקציה מותקנת עם שם החבילה {0}. ייתכן שהיא הוסרה.</value>
+  </data>
+  <data name="AppSectionPermissions" xml:space="preserve">
+    <value>הרשאות</value>
+  </data>
+  <data name="AppSectionPermissionsDescription" xml:space="preserve">
+    <value>למה האפליקציה רשאית לגשת, למשל המצלמה או המיקום שלכם</value>
+  </data>
+  <data name="AppSectionStorage" xml:space="preserve">
+    <value>אחסון</value>
+  </data>
+  <data name="AppSectionStorageDescription" xml:space="preserve">
+    <value>המקום שתופסים האפליקציה, הנתונים שלה והמטמון שלה</value>
+  </data>
+  <data name="AppClearCache" xml:space="preserve">
+    <value>ניקוי מטמון</value>
+  </data>
+  <data name="AppClearData" xml:space="preserve">
+    <value>מחיקת נתונים</value>
+  </data>
+  <data name="AppSectionWindow" xml:space="preserve">
+    <value>גודל חלון</value>
+  </data>
+  <data name="AppSectionWindowDescription" xml:space="preserve">
+    <value>גודל החלון כשהאפליקציה נפתחת</value>
+  </data>
+  <data name="AppSectionGpu" xml:space="preserve">
+    <value>מעבד גרפי</value>
+  </data>
+  <data name="AppSectionGpuDescription" xml:space="preserve">
+    <value>באיזה מעבד גרפי האפליקציה משתמשת</value>
+  </data>
+  <data name="AppSectionStartup" xml:space="preserve">
+    <value>הפעלה עם Windows</value>
+  </data>
+  <data name="AppSectionStartupDescription" xml:space="preserve">
+    <value>פתיחת האפליקציה כשנכנסים ל-Windows</value>
+  </data>
+  <data name="AppSectionUninstall" xml:space="preserve">
+    <value>הסרת התקנה</value>
+  </data>
+  <data name="AppSectionUninstallDescription" xml:space="preserve">
+    <value>הסרת האפליקציה מהמחשב. תישאלו אם לשמור את הנתונים שלה.</value>
+  </data>
+  <data name="AppUninstallButton" xml:space="preserve">
+    <value>הסרה</value>
+  </data>
+  <data name="AppNotAvailableYet" xml:space="preserve">
+    <value>עדיין לא זמין בתצוגה המקדימה</value>
+  </data>
+  <data name="SettingsTitle" xml:space="preserve">
+    <value>הגדרות</value>
+  </data>
+  <data name="SettingsLanguageHeader" xml:space="preserve">
+    <value>שפה</value>
+  </data>
+  <data name="SettingsLanguageDescription" xml:space="preserve">
+    <value>השפה של החלונות וההודעות של Andruna</value>
+  </data>
+  <data name="LanguageSystem" xml:space="preserve">
+    <value>כמו ב-Windows</value>
+  </data>
+  <data name="LanguageHebrew" xml:space="preserve">
+    <value>עברית</value>
+  </data>
+  <data name="LanguageEnglish" xml:space="preserve">
+    <value>English</value>
+  </data>
+  <data name="SettingsRestartMessage" xml:space="preserve">
+    <value>כדי להשתמש בשפה החדשה יש להפעיל מחדש את Andruna.</value>
+  </data>
+  <data name="SettingsRestartButton" xml:space="preserve">
+    <value>הפעלה מחדש עכשיו</value>
+  </data>
+  <data name="SettingsThemeHeader" xml:space="preserve">
+    <value>ערכת נושא</value>
+  </data>
+  <data name="SettingsThemeDescription" xml:space="preserve">
+    <value>בהירה, כהה או כמו ב-Windows</value>
+  </data>
+  <data name="ThemeSystem" xml:space="preserve">
+    <value>כמו ב-Windows</value>
+  </data>
+  <data name="ThemeLight" xml:space="preserve">
+    <value>בהירה</value>
+  </data>
+  <data name="ThemeDark" xml:space="preserve">
+    <value>כהה</value>
+  </data>
+  <data name="SettingsSaveFailed" xml:space="preserve">
+    <value>Andruna לא הצליחה לשמור את ההגדרות. בדקו שהכונן אינו מלא ונסו שוב.</value>
+  </data>
+  <data name="SettingsAboutHeader" xml:space="preserve">
+    <value>אודות</value>
+  </data>
+  <data name="AboutDescription" xml:space="preserve">
+    <value>Andruna מריצה אפליקציות Android ב-Windows 11.</value>
+  </data>
+  <data name="AboutVersionFormat" xml:space="preserve">
+    <value>גרסה {0} ({1})</value>
+  </data>
+  <data name="AboutServiceChecking" xml:space="preserve">
+    <value>בודק את השירות של Andruna...</value>
+  </data>
+  <data name="AboutServiceRunningFormat" xml:space="preserve">
+    <value>השירות של Andruna בגרסה {0} פועל</value>
+  </data>
+  <data name="AboutNoticesButton" xml:space="preserve">
+    <value>הודעות צד שלישי</value>
+  </data>
+</root>
