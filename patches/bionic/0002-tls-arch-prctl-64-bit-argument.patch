@@ -2,7 +2,8 @@ Pass the x86_64 thread pointer to arch_prctl as a 64-bit value in the ANDRUNA Wi
 
 Andruna compiles AOSP code for a Windows target, where `unsigned long` is
 32 bits (LLP64), so the upstream cast truncates the pointer and does not
-compile. Under ANDRUNA on _WIN32 the declaration and the cast use
+compile. Under ANDRUNA where `long` is 32 bits (`__SIZEOF_LONG__ == 4`;
+the build undefines `_WIN32`) the declaration and the cast use
 `unsigned long long`, the width of the kernel argument. The Android ELF
 build (ADR 0013), which also defines ANDRUNA, keeps the upstream code.
 
@@ -14,7 +15,7 @@ index 3e0ef53..7f4f793 100644
  #include <asm/prctl.h>
  // This syscall stub is generated but it's not declared in any header.
  __BEGIN_DECLS
-+#if defined(ANDRUNA) && defined(_WIN32)
++#if defined(ANDRUNA) && __SIZEOF_LONG__ == 4
 +// LLP64: `unsigned long` is 32 bits; the kernel argument is 64 bits.
 +int arch_prctl(int, unsigned long long);
 +#else
@@ -23,7 +24,7 @@ index 3e0ef53..7f4f793 100644
  __END_DECLS
  
  static inline int __set_tls(void* tls) {
-+#if defined(ANDRUNA) && defined(_WIN32)
++#if defined(ANDRUNA) && __SIZEOF_LONG__ == 4
 +  return arch_prctl(ARCH_SET_FS, reinterpret_cast<unsigned long long>(tls));
 +#else
    return arch_prctl(ARCH_SET_FS, reinterpret_cast<unsigned long>(tls));
