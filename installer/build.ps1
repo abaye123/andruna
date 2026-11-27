@@ -44,7 +44,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $Repo = Split-Path -Parent $PSScriptRoot
-if (-not $OutDir) { $OutDir = Join-Path $Repo 'target\installer' }
+if (-not $OutDir) { $OutDir = Join-Path $Repo 'out\installer' }
 
 # Pinned NSIS release (zlib/libpng license; see ADR 0017).
 $NsisVersion = '3.11'

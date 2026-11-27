@@ -18,7 +18,7 @@ powershell -ExecutionPolicy Bypass -File installer\build.ps1 -Arch x64  # one ar
 powershell -ExecutionPolicy Bypass -File installer\build.ps1 -Unsigned  # local development only
 ```
 
-Output: `target\installer\Andruna-<version>-setup-<arches>.exe`. The version
+Output: `out\installer\Andruna-<version>-setup-<arches>.exe`. The version
 is the `Version` in `ui\Directory.Build.props`.
 
 NSIS 3.11 is downloaded once into `.cache\nsis-3.11` and checked against its

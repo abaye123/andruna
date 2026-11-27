@@ -238,7 +238,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: installer-unsigned
-          path: target/installer/Andruna-*-setup-*.exe
+          path: out/installer/Andruna-*-setup-*.exe
           if-no-files-found: error
 
   deny:
