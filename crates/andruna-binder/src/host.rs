@@ -143,6 +143,19 @@ impl Server {
         }
     }
 
+    /// Serves a private channel for a process sysd starts (ADR 0036: an
+    /// AppContainer process gets its sysd connections as inherited
+    /// handles, it does not open named pipes): `server_end` from
+    /// [`sys::create_channel`], whose client end process `pid` inherits
+    /// (and names in [`HANDLE_ENV`]).
+    pub fn attach(self: &Arc<Self>, server_end: OwnedHandle, pid: u32, uid: u32) -> io::Result<()> {
+        let s = self.clone();
+        std::thread::Builder::new()
+            .name("binder-client".into())
+            .spawn(move || s.serve_as(server_end, pid, uid))?;
+        Ok(())
+    }
+
     fn serve(&self, pipe: OwnedHandle) {
         let Ok(pid) = sys::pipe_client_pid(&pipe) else {
             return;
@@ -150,6 +163,10 @@ impl Server {
         let Some(uid) = (self.identity)(pid) else {
             return;
         };
+        self.serve_as(pipe, pid, uid);
+    }
+
+    fn serve_as(&self, pipe: OwnedHandle, pid: u32, uid: u32) {
         let Ok(process) = sys::open_process(pid, sys::PROCESS_DUP_HANDLE) else {
             return;
         };

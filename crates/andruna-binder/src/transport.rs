@@ -21,6 +21,10 @@ use std::time::{Duration, Instant};
 /// [`PIPE_ENV`] (set by sysd for the processes it starts).
 pub const PIPE_ENV: &str = "ANDRUNA_BINDER_PIPE";
 
+/// Instead of [`PIPE_ENV`]: the value of an inherited handle to the client
+/// end of a private channel (see `host::Server::attach`).
+pub const HANDLE_ENV: &str = "ANDRUNA_BINDER_HANDLE";
+
 /// Control requests.
 pub mod op {
     /// `a`: protocol version. Reply: `x` the broker's process handle

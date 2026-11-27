@@ -36,9 +36,25 @@ pub fn register() {
     andruna_lx::fs::dev::register(b"binder", open);
 }
 
-fn open(_flags: u32) -> SysResult<Box<dyn FileOps>> {
+/// The inherited channel of [`HANDLE_ENV`] serves one open.
+static CHANNEL_TAKEN: AtomicBool = AtomicBool::new(false);
+
+fn connect() -> SysResult<OwnedHandle> {
+    if let Some(v) = std::env::var(HANDLE_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        && !CHANNEL_TAKEN.swap(true, Ordering::SeqCst)
+    {
+        // SAFETY: sysd made this handle inheritable for this process and
+        // named it here; only this open takes it.
+        return Ok(unsafe { sys::own(v) });
+    }
     let name = std::env::var(PIPE_ENV).map_err(|_| Errno::ENOENT)?;
-    let pipe = sys::open_pipe(&sys::wide(&name)).map_err(|_| Errno::ENOENT)?;
+    sys::open_pipe(&sys::wide(&name)).map_err(|_| Errno::ENOENT)
+}
+
+fn open(_flags: u32) -> SysResult<Box<dyn FileOps>> {
+    let pipe = connect()?;
     let r = call(
         &pipe,
         Msg {

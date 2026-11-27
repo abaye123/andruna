@@ -204,6 +204,49 @@ pub fn write_msg(h: &OwnedHandle, buf: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+/// A private channel: the server end, and an inheritable client end in
+/// message mode, for a child process.
+pub fn create_channel() -> io::Result<(OwnedHandle, OwnedHandle)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use windows::Win32::Foundation::{HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation};
+    use windows::Win32::Storage::FileSystem::FILE_FLAG_FIRST_PIPE_INSTANCE;
+    static N: AtomicU64 = AtomicU64::new(0);
+    let name = wide(&format!(
+        r"\\.\pipe\andruna-binder-channel-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    // SAFETY: `name` is NUL-terminated; one instance only, so nothing else
+    // can take the name; the handle is checked and owned.
+    let server = unsafe {
+        let h = CreateNamedPipeW(
+            PCWSTR(name.as_ptr()),
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            1,
+            4096,
+            4096,
+            0,
+            None,
+        );
+        if h == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        OwnedHandle::from_raw_handle(h.0)
+    };
+    let client = open_pipe(&name)?;
+    // SAFETY: a handle owned by `client`.
+    unsafe {
+        SetHandleInformation(
+            raw(&client),
+            HANDLE_FLAG_INHERIT.0,
+            HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
+        )
+        .map_err(to_io)?
+    };
+    Ok((server, client))
+}
+
 /// Opens the client end of the pipe `name` in message mode, waiting up to
 /// five seconds for a free instance.
 pub fn open_pipe(name: &[u16]) -> io::Result<OwnedHandle> {

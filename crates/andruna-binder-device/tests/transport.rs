@@ -12,7 +12,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use andruna_binder::host::Server;
-use andruna_binder::transport::PIPE_ENV;
+use std::os::windows::io::AsRawHandle;
+
+use andruna_binder::transport::{HANDLE_ENV, PIPE_ENV};
 use andruna_binder::uapi::*;
 use andruna_lx::UserBuf;
 use andruna_lx::fd::FDS;
@@ -322,8 +324,21 @@ fn two_processes_through_the_broker() {
     }
     // Spawned processes are only accepted once their pid is known; the
     // client connects only after it starts, which is after this push.
-    let client = spawn("client");
-    roles.lock().unwrap().push((client.id(), CLIENT_UID));
+    // The client gets a private channel as an inherited handle (the way
+    // AppContainer processes connect, ADR 0036), not the named pipe.
+    let (server_end, client_end) = andruna_binder::sys::create_channel().unwrap();
+    let client = Command::new(&exe)
+        .args(["child_role", "--exact", "--nocapture", "--test-threads=1"])
+        .env(ROLE, "client")
+        .env(
+            HANDLE_ENV,
+            (client_end.as_raw_handle() as usize).to_string(),
+        )
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(client_end);
+    server.attach(server_end, client.id(), CLIENT_UID).unwrap();
     let out = client.wait_with_output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     println!("{text}");
