@@ -6,14 +6,14 @@
 //! - [`transport`]: the control pipe and the shared-memory lanes between a
 //!   guest thread and its broker thread.
 //! - [`host`]: the broker's server in sysd.
-//! - `device` (feature `device`): `/dev/binder` for andruna-lx in guest
-//!   processes.
+//! - [`sys`]: the Windows calls of both sides.
+//!
+//! `/dev/binder` in guest processes is the crate `andruna-binder-device`,
+//! kept apart so that sysd does not link andruna-lx.
 
 pub mod broker;
-#[cfg(feature = "device")]
-pub mod device;
 pub mod host;
 pub mod pack;
-mod sys;
+pub mod sys;
 pub mod transport;
 pub mod uapi;

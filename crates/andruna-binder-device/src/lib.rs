@@ -1,5 +1,5 @@
 //! `/dev/binder` in a guest process: an andruna-lx device that forwards
-//! the binder ioctls to the broker in sysd (see [`crate::transport`]).
+//! the binder ioctls to the broker in sysd (see `andruna_binder::transport`).
 //!
 //! The host process calls [`register`] before guest code runs.
 //!
@@ -26,10 +26,10 @@ use andruna_lx::fs::file::RegularFile;
 use andruna_lx::linux::fcntl::O_RDWR;
 use andruna_lx::linux::stat::{S_IFCHR, StatData};
 
-use crate::sys;
-use crate::transport::*;
-use crate::uapi::*;
-use crate::{pack, uapi};
+use andruna_binder::sys;
+use andruna_binder::transport::*;
+use andruna_binder::uapi::*;
+use andruna_binder::{pack, uapi};
 
 /// Registers `/dev/binder` with andruna-lx.
 pub fn register() {

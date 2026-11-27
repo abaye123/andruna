@@ -7,18 +7,6 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-[features]
-# The /dev/binder device for guest processes (links andruna-lx, whose C
-# exports must not end up in sysd).
-device = ["dep:andruna-lx"]
-
-[[test]]
-name = "transport"
-required-features = ["device"]
-
-[dependencies]
-andruna-lx = { path = "../andruna-lx", optional = true }
-
 [dependencies.windows]
 version = "0.62"
 features = [

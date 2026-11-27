@@ -34,7 +34,7 @@ struct Dev {
 
 impl Dev {
     fn open() -> Self {
-        andruna_binder::device::register();
+        andruna_binder_device::register();
         let fd = andruna_lx::fs::openat(AT_FDCWD, b"/dev/binder", O_RDWR | O_CLOEXEC, 0).unwrap();
         let mut v = 0i32;
         ioctl(fd, BINDER_VERSION, &mut v as *mut i32 as usize);

@@ -14,6 +14,14 @@ dependencies = [
 name = "andruna-binder"
 version = "0.1.0"
 dependencies = [
+ "windows",
+]
+
+[[package]]
+name = "andruna-binder-device"
+version = "0.1.0"
+dependencies = [
+ "andruna-binder",
  "andruna-lx",
  "windows",
 ]
