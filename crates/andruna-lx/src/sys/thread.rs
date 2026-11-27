@@ -73,31 +73,12 @@ pub fn set_affinity(tid: u32, mask: u64) -> SysResult<()> {
     Ok(())
 }
 
-/// The thread ids of this process.
+/// The thread ids of this process (Linux numbering).
 pub fn threads() -> Vec<u32> {
-    use windows::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    let mut out: Vec<u32> = match super::procinfo::thread_ids() {
+        Ok(v) => v.into_iter().map(crate::process::linux_tid).collect(),
+        Err(_) => vec![crate::process::linux_tid(current_thread_id())],
     };
-    let pid = current_process_id();
-    // SAFETY: creates a snapshot handle that `owned` closes.
-    let Ok(h) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) }) else {
-        return vec![current_thread_id()];
-    };
-    let owned = OwnedHandle::from_raw(h);
-    let mut e = THREADENTRY32 {
-        dwSize: core::mem::size_of::<THREADENTRY32>() as u32,
-        ..Default::default()
-    };
-    let mut out = Vec::new();
-    // SAFETY: `e` is a valid THREADENTRY32 with its size set.
-    let mut ok = unsafe { Thread32First(owned.raw(), &mut e) }.is_ok();
-    while ok {
-        if e.th32OwnerProcessID == pid {
-            out.push(crate::process::linux_tid(e.th32ThreadID));
-        }
-        // SAFETY: as above.
-        ok = unsafe { Thread32Next(owned.raw(), &mut e) }.is_ok();
-    }
     out.sort_unstable();
     out
 }

@@ -308,18 +308,14 @@ const USER_HZ: u64 = 100;
 /// the whole process for the main thread and of the thread itself for the
 /// others; memory counters of the process.
 fn stat_line(pid: u32, tid: u32) -> SysResult<Vec<u8>> {
-    let info = procinfo::current_process()?;
     let w = crate::process::windows_tid(tid);
-    let me = info
-        .threads
-        .iter()
-        .find(|t| t.tid == w && t.state != procinfo::STATE_TERMINATED)
-        .ok_or(Errno::ENOENT)?;
+    let me = procinfo::thread(w).map_err(|_| Errno::ENOENT)?;
     let ticks = |v: u64| v / (10_000_000 / USER_HZ);
     let (user, kernel) = if tid == pid {
-        info.threads
-            .iter()
-            .fold((0, 0), |(u, k), t| (u + t.user, k + t.kernel))
+        // The whole process, including threads that ended, as Linux
+        // reports for the thread group.
+        let t = crate::sys::thread::process_times()?;
+        (t.user, t.kernel)
     } else {
         (me.user, me.kernel)
     };
@@ -330,11 +326,8 @@ fn stat_line(pid: u32, tid: u32) -> SysResult<Vec<u8>> {
     let start = ticks(created.saturating_sub(boot).max(0) as u64);
     let policy = crate::sched::getscheduler(tid as i32).unwrap_or(0);
     let name = thread_name(tid);
-    let threads = info
-        .threads
-        .iter()
-        .filter(|t| t.state != procinfo::STATE_TERMINATED)
-        .count();
+    let threads = crate::sys::thread::threads().len();
+    let memory = procinfo::memory()?;
     // Fields Linux hides from other users or that Windows does not track
     // (fault counts, code addresses, wait channel) are 0, as Linux shows
     // them to readers without access. `startstack` is the main thread's
@@ -343,7 +336,7 @@ fn stat_line(pid: u32, tid: u32) -> SysResult<Vec<u8>> {
     let mut f: Vec<String> = vec!["0".into(); 52];
     f[0] = tid.to_string();
     f[1] = format!("({})", String::from_utf8_lossy(&name));
-    f[2] = (state_letter(me) as char).to_string();
+    f[2] = (state_letter(&me) as char).to_string();
     f[4] = pid.to_string(); // pgrp
     f[5] = pid.to_string(); // session
     f[7] = "-1".into(); // tpgid
@@ -352,8 +345,8 @@ fn stat_line(pid: u32, tid: u32) -> SysResult<Vec<u8>> {
     f[17] = "20".into(); // priority
     f[19] = threads.to_string();
     f[21] = start.to_string();
-    f[22] = info.virtual_size.to_string();
-    f[23] = (info.working_set / 4096).to_string();
+    f[22] = memory.virtual_size.to_string();
+    f[23] = (memory.working_set / 4096).to_string();
     f[24] = u64::MAX.to_string(); // rsslim
     f[27] = crate::process::main_stack().0.to_string(); // startstack
     f[37] = "17".into(); // exit_signal
