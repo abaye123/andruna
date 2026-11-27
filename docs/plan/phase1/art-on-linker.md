@@ -1,13 +1,14 @@
 # Phase 1: ART on the production loader
 
-**Status:** 2026-11-27, x64. ART (libart, the boot image, Hello World and
+**Status:** 2026-11-27, x64 and arm64. ART (libart, the boot image, Hello World and
 the S1 benchmark) runs on `crates/andruna-linker` with the real guest
 bionic (ADR 0016), started by the new `crates/andruna-app`, in the
 interpreter, with the JIT and with AOT code from dex2oat. The spike runner
 of S1 and its libc shim are not involved. Signals, `/proc`, file mappings,
 futex requeue and scheduling come from andruna-lx (phase 1 merge, ADR
-0019). arm64 builds (Rust, cross); nothing was run on arm64, and the arm64
-ART root was not built.
+0019). The same runs pass on Windows ARM64 (see [ARM64](#arm64)): the
+interpreter, the JIT and AOT code from dex2oat running on arm64, through
+andruna-app, in CI (`.github/workflows/art-arm64.yml`, run 46010734840).
 
 ```
 cargo xtask fetch && cargo xtask patch
@@ -35,7 +36,9 @@ andruna-app --art-root ... --compile app\bench.dex   # app odex (dex2oat)
 
 `cargo test -p andruna-app` runs all of these (except the benchmark) in
 child processes; with `ANDRUNA_REQUIRE_GUEST=1` and the ART root built, 6
-of 6 pass in debug and release builds, plus 6 unit tests.
+of 6 passed in debug and release builds; with the wall-clock probe added
+by the clock fix below, 7 of 7 pass in release builds on x64 and on
+arm64 (CI), plus 6 unit tests.
 
 ## Numbers
 
@@ -97,11 +100,19 @@ out in the suite but passed 20 of 20 runs of its test case alone.
 
 ## Start-up (x64)
 
-**The regression was the machine, not the lx merge.** Measured with the
-two builds interleaved, so that both see the same background load, Hello
-World starts as fast after the andruna-lx merge as before it. The 191 to
-342 ms above were taken while other agents loaded the machine; the 146
-to 158 ms "before" figures on a quieter one.
+**The first lx merge did not slow start-up; the machine did. lx round 2
+did, by opening `/proc/self/stat`.** Measured with the builds interleaved,
+so that all see the same background load, Hello World started as fast
+after the first andruna-lx merge as before it: the 191 to 342 ms above
+were taken while other agents loaded the machine, the 146 to 158 ms
+"before" figures on a quieter one. After andruna-lx round 2 (main
+80048e4) the ART part became 25 to 35 ms slower; `ANDRUNA_PROFILE` showed
+`openat` going from 6 ms in total to 24 to 43 ms, all of it in the two
+opens of `/proc/self/stat` (bionic reads it to find the main thread's
+stack in `pthread_getattr_np`, which ART calls at start-up). Round 2
+builds that file from `NtQuerySystemInformation(SystemProcessInformation)`,
+a snapshot of every process and thread of the system; each open took 11
+to 21 ms on this machine.
 
 Method: release builds of andruna-app at commit 4c28486 (the last one
 before the rebase onto the lx merge) and of this branch, the same ART root
@@ -117,6 +128,29 @@ time of the process, ms:
 | AOT | 177 (148 to 214) | 170 (148 to 201) | 177 (152 to 215) |
 
 The differences are inside the spread of each column.
+
+After merging lx round 2 (same method, 8 interleaved runs; load 100%
+during the runs, so all numbers are higher):
+
+| Mode | before the lx merge | lx round 2, this branch | of which the two `/proc/self/stat` opens |
+| --- | ---: | ---: | ---: |
+| Interpreter | 209 (199 to 408) | 234 (208 to 335) | about 15 |
+| JIT | 197 (187 to 235) | 234 (209 to 245) | about 15 |
+| AOT | 186 (172 to 219) | 214 (193 to 239) | about 15 |
+
+What this branch changed there (`crates/andruna-lx/src/sys/procinfo.rs`,
+the only lx edit): the query buffer started at 512 KiB and, when Windows
+asked for more, was reallocated at 16 times its size (8 MiB), so every
+open queried twice and touched 8 MiB; it now starts at 2 MiB or the size
+the last call needed and grows by an eighth over what Windows asks for.
+One open now costs one query, 6.5 to 7.5 ms here (loaded desktop, a few
+hundred processes) and about 1.3 ms on the CI runner. The rest of the
+difference is that query itself. Making it per process (the threads lx
+already knows, `NtQueryInformationThread` with
+`ThreadSystemThreadInformation` for state and times, `GetProcessMemoryInfo`
+for the memory fields) is for andruna-lx's owner, since it changes how
+`/proc/<pid>/stat` and `status` are produced. The other system calls cost
+what they did before round 2.
 
 Where the time goes (medians of the same runs, ms since Windows created
 the process, from `ANDRUNA_PROFILE`, which this branch adds to the
@@ -161,16 +195,95 @@ it halves their cost, not because it changes start-up measurably.
 
 **The wall clock was wrong.** `System.currentTimeMillis()` and
 `Instant.now()` returned 0 on andruna-app: bionic's `gettimeofday` went to
-the `gettimeofday` system call, which nothing implemented (`ENOSYS`). The
-vDSO's `gettimeofday` and `time`, and the loader's answers to those two
-system calls (same code), fix it; `wall_clock_is_the_system_time` in
+the `gettimeofday` system call, which nothing implemented then (`ENOSYS`).
+The vDSO's `gettimeofday` and `time` fix it (lx round 2 now also answers
+the two system calls, for code that makes them directly);
+`wall_clock_is_the_system_time` in
 `crates/andruna-app/tests/run.rs` (a Java probe, `spikes/s1/java/src/Clock.java`)
 and `clock_test` check them against the Windows system time.
 
 What would make start-up faster, in order of size: real file mappings
 instead of copies in andruna-lx (`MapViewOfFile3` with placeholders, the
-step lx's documentation names next), fewer and cheaper file opens, and
-the loader's 12 to 16 ms for 26 objects. None is a regression.
+step lx's documentation names next), a per-process `/proc/self/stat`
+(above), fewer and cheaper file opens, and the loader's 12 to 16 ms for
+26 objects.
+
+`ANDRUNA_PROFILE=1` prints, at exit: phase marks in ms since Windows
+created the process, system call counts and dispatcher time per number,
+the slowest calls with their path argument, and exception counts (lazy
+FS-base restores, emulated instructions, delivered signals).
+
+## ARM64
+
+andruna-app runs ART on Windows ARM64 through andruna-linker with the
+real bionic: Hello World, the S1 benchmark, the fault test and the
+wall-clock probe in the interpreter, with the JIT (default thresholds and
+`-Xjitthreshold:0`) and as AOT code, with dex2oat running on arm64 for the
+boot image and the app odex files. The guest tests of andruna-linker
+(bionic, C++ exceptions, `dlopen`, the vDSO) and the andruna-app tests
+pass there too.
+
+CI: `.github/workflows/art-arm64.yml` (branch `phase1-arm64-app`). The
+arm64 guest userland and ART root are cross-built on the x64 runner
+(`build_guest.py --arch arm64 sysroot builtins bionic libcxx aosp art`,
+cached, plus `linker-tests`); andruna-app is built natively on the
+`windows-11-arm` runner (hosted VM, 4 logical processors), which runs
+`crates/andruna-app/tools/runs.py` (three runs per case), an
+`ANDRUNA_PROFILE` start-up profile and the tests. Passing run:
+46010734840.
+
+Results (run 46010734840, ms):
+
+| Mode | Hello World, wall | Bench total | int loop | fib(27) | string build | array sort | Bench, wall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Interpreter (nterp), no boot image | 140 to 146 | 780 to 782 | 301 to 302 | 76 | 256 to 257 | 143 | 921 to 925 |
+| JIT, no boot image | 147 to 151 | 66 | 27 to 28 | 2 | 17 to 18 | 14 to 15 | 210 to 215 |
+| JIT, `-Xjitthreshold:0` | 256 to 264 | 141 to 142 | 33 to 34 | 2 | 23 to 24 | 19 | 329 to 338 |
+| AOT (boot image and odex) | 128 to 132 | 26 | 12 | 0 | 3 to 4 | 9 | 152 to 160 |
+
+- dex2oat on arm64: boot image 2.1 s wall, hello, bench and faults 0.14
+  to 0.15 s each.
+- Faults: 2000 `NullPointerException`s from implicit null checks and
+  `StackOverflowError` caught, with `-Xjitthreshold:0` (depth 1 536 613)
+  and in AOT code (depth 2 614 140): the implicit checks reach ART's
+  handler through lx's signal delivery on arm64.
+- The S1 runner on the same kind of runner (round 5): Hello 0.13 to 0.16
+  s; Bench totals 742 to 799 (interpreter), 69 to 70 (JIT), 149 (JIT at
+  first call), 25 (AOT). andruna-app matches them.
+- Start-up (`ANDRUNA_PROFILE`, Hello World): process creation to `main`
+  12 to 13 ms, loading the 26 objects 9 to 11 ms, ART 93 to 118 ms.
+- System call paths (`clock_test`, ns per call): `syscall(SYS_gettid)`
+  49; `clock_gettime` 85 without the vDSO and 46 with it; `gettimeofday`
+  128 without and 49 with.
+
+What arm64 needed:
+
+1. **scudo without Top-Byte Ignore** (`aosp/modules/bionic_libc.cmake`).
+   On arm64 Linux scudo writes each chunk header through a pointer with a
+   tag in the top byte, relying on the kernel's TBI. Windows does not
+   enable TBI for user mode, so the first `malloc` faulted (a write to
+   `0x0200...`). Built with scudo's own `SCUDO_DISABLE_TBI`; no patch.
+2. **TEB stack bounds of guest threads** (andruna-linker, `thread.rs`).
+   The bounds a guest thread got covered only the top page of its stack
+   (`VirtualQuery`'s `BaseAddress` is the queried page, not the region's
+   start). Windows ARM64 checks the stack pointer against them whenever a
+   vectored handler resumes a thread (`RtlGuardRestoreContext`, fail-fast
+   `FAST_FAIL_INVALID_SET_OF_CONTEXT`, exit code 0xC0000409); x64 does not.
+   With `-Xjitthreshold:0` the first emulated cache instruction on a JIT
+   thread ended the process, and the stack overflow test did too. The
+   limit is now the start of the stack's allocation. Found with cdb on
+   the runner (the workflow's diagnose step).
+3. **`mrs ctr_el0`** traps at EL0 on Windows (S1 round 4); the loader's
+   first vectored handler now emulates it (and `dc cvau`/`ic ivau`,
+   should they trap) for compiler-rt's `__clear_cache`, which the JIT
+   calls.
+4. The libunwindstack stand-in defines `RegsArm64::GetVgFromLocal`, which
+   libart references on arm64.
+
+Everything else came from earlier work: TPIDR_EL0 for the thread
+pointer, x18 kept as the TEB (no shadow call stack, bionic patches 0004
+and 0006), ART's 16 KiB stack overflow gap on arm64, the arm relative
+patcher source in dex2oat (S1 round 5), and lx's arm64 signal frames.
 
 ## What the loader gained (andruna-linker)
 
@@ -221,10 +334,12 @@ the loader's 12 to 16 ms for 26 objects. None is a regression.
 
 ## Not done, not verified
 
-- arm64: the Rust side builds (`cargo clippy`/`cargo build --target
-  aarch64-pc-windows-gnullvm`); no arm64 ART root was built or run here;
-  AOT on arm64 is another task.
-- The start-up regression after the lx merge (above).
+- arm64 numbers come from one hosted VM (three runs per case); the
+  arm64 bionic and libbase gtest suites were not run through the loader
+  (only the loader's own guest tests).
+- `/proc/self/stat` still costs one system-wide process query per open
+  (above); start-up after lx round 2 is 10 to 30 ms slower than before it
+  on a loaded desktop.
 - nterp on x86_64 is still off (ART patch 0003): the interpreter numbers
   are the switch interpreter's.
 - The boot jars and test dex files were the S1 build's outputs at the same
