@@ -3,6 +3,7 @@
 //! crate's tests and andruna-sysd's tests enable; shipped code never uses
 //! it.
 
+pub mod apk;
 pub mod arscw;
 pub mod axmlw;
 pub mod sign;
