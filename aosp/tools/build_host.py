@@ -5,12 +5,17 @@ with llvm-mingw (aosp/host, ADR 0023): aidl.
 Usage: python aosp/tools/build_host.py [--arch x64|arm64] [target...]
 
 Output: out/host/<arch>/bin/<tool>.exe. The architecture defaults to the
-machine's. Build-only tools are fetched into out/tools (never shipped,
-ADR 0006 amendment on build tools):
+machine's. Other builds that need a host tool (libbinder and servicemanager
+need aidl for their C++ interfaces) run this script and use
+out/host/<arch>/bin, or set ANDRUNA_AIDL.
 
-  win_flex_bison 2.5.25   bison 3.8.2 (GPL-3.0-or-later with the Bison
-                          exception for generated parsers) and flex 2.6.4
-                          (BSD-2-Clause), Windows builds of both
+bison and flex (build-only tools, never shipped; ADR 0006 amendment on
+build tools): bison is GPL-3.0-or-later with the Bison exception for the
+parsers it generates, flex is BSD-2-Clause. They are taken from, in order:
+ANDRUNA_BISON / ANDRUNA_FLEX, PATH, MSYS2 (C:/msys64/usr/bin, whose
+directory also provides m4), and only where none is found, the
+win_flex_bison 2.5.25 release (bison 3.8.2, flex 2.6.4), downloaded into
+out/tools and checked against its SHA-256.
 """
 
 import argparse
@@ -92,6 +97,22 @@ def fetch_zip(url, digest, dest):
     tmp.rename(dest)
 
 
+MSYS2_BIN = Path("C:/msys64/usr/bin")
+
+
+def bison_flex():
+    """(bison, flex, directory to add to PATH or None)."""
+    bison = os.environ.get("ANDRUNA_BISON") or shutil.which("bison")
+    flex = os.environ.get("ANDRUNA_FLEX") or shutil.which("flex")
+    if bison and flex:
+        return bison, flex, str(Path(bison).parent)
+    if (MSYS2_BIN / "bison.exe").is_file() and (MSYS2_BIN / "flex.exe").is_file():
+        # MSYS2's bison runs m4 from the same directory.
+        return str(MSYS2_BIN / "bison.exe"), str(MSYS2_BIN / "flex.exe"), str(MSYS2_BIN)
+    fetch_zip(FLEX_BISON_URL, FLEX_BISON_SHA256, FLEX_BISON_DIR)
+    return str(FLEX_BISON_DIR / "win_bison.exe"), str(FLEX_BISON_DIR / "win_flex.exe"), None
+
+
 def host_arch():
     m = platform.machine().lower()
     return "arm64" if m in ("arm64", "aarch64") else "x64"
@@ -103,7 +124,10 @@ def main():
     ap.add_argument("targets", nargs="*", default=list(TOOLS_BUILT))
     args = ap.parse_args()
 
-    fetch_zip(FLEX_BISON_URL, FLEX_BISON_SHA256, FLEX_BISON_DIR)
+    bison, flex, extra_path = bison_flex()
+    env = dict(os.environ)
+    if extra_path:
+        env["PATH"] = extra_path + os.pathsep + env.get("PATH", "")
     out = ROOT / "out" / "host" / args.arch
     b = out / "build"
     run([CMAKE, "-S", ROOT / "aosp" / "host", "-B", b, "-G", "Ninja",
@@ -112,11 +136,11 @@ def main():
          f"-DANDRUNA_ARCH={args.arch}",
          f"-DANDRUNA_LLVM_MINGW={LLVM_MINGW}",
          f"-DANDRUNA_AOSP_DIR={AOSP}",
-         f"-DANDRUNA_BISON={FLEX_BISON_DIR / 'win_bison.exe'}",
-         f"-DANDRUNA_FLEX={FLEX_BISON_DIR / 'win_flex.exe'}",
-         "-DCMAKE_BUILD_TYPE=Release"])
+         f"-DANDRUNA_BISON={bison}",
+         f"-DANDRUNA_FLEX={flex}",
+         "-DCMAKE_BUILD_TYPE=Release"], env=env)
     jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "4")
-    run([CMAKE, "--build", b, "-j", jobs, "--target"] + args.targets)
+    run([CMAKE, "--build", b, "-j", jobs, "--target"] + args.targets, env=env)
     (out / "bin").mkdir(parents=True, exist_ok=True)
     for t in args.targets:
         shutil.copy2(b / f"{t}.exe", out / "bin" / f"{t}.exe")

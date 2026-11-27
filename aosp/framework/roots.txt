@@ -1,0 +1,24 @@
+# Classes framework.jar is built from (aosp/framework/build.py): each class
+# and the transitive closure of what it references. One fully qualified
+# class name per line.
+
+# Process start-up: app_process runs RuntimeInit, which calls main().
+com.android.internal.os.RuntimeInit
+
+# Phase 2 step 1: an app-process Java main with the framework basics.
+android.os.Looper
+android.os.Handler
+android.os.HandlerThread
+android.os.Message
+android.os.MessageQueue
+android.os.SystemClock
+android.os.SystemProperties
+android.os.Process
+android.os.Trace
+android.util.Log
+android.util.EventLog
+android.content.res.Resources
+android.content.res.AssetManager
+android.content.res.ApkAssets
+android.content.res.Configuration
+android.util.DisplayMetrics
