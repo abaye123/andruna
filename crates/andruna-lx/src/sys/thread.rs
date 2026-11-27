@@ -167,6 +167,80 @@ pub fn yield_now() {
     let _ = unsafe { SwitchToThread() };
 }
 
+fn open_process(pid: u32) -> Option<OwnedHandle> {
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: opens a new handle that the result owns.
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    Some(OwnedHandle::from_raw(h))
+}
+
+/// Whether process `pid` exists (and may be queried).
+pub fn process_exists(pid: u32) -> bool {
+    let Some(h) = open_process(pid) else {
+        return false;
+    };
+    let mut code = 0u32;
+    // SAFETY: a live process handle and a valid out pointer.
+    unsafe { windows::Win32::System::Threading::GetExitCodeProcess(h.raw(), &mut code) }.is_ok()
+        && code == 259
+}
+
+/// CPU times of another process.
+pub fn process_times_of(pid: u32) -> SysResult<CpuTimes> {
+    let h = open_process(pid).ok_or(Errno::EINVAL)?;
+    let (mut c, mut e, mut k, mut u) = Default::default();
+    // SAFETY: a live process handle; all out pointers are valid.
+    unsafe { GetProcessTimes(h.raw(), &mut c, &mut e, &mut k, &mut u) }.map_err(Errno::from)?;
+    Ok(times(k, u))
+}
+
+fn creation_time(h: &OwnedHandle) -> Option<u64> {
+    let (mut c, mut e, mut k, mut u) = Default::default();
+    // SAFETY: a live process handle; all out pointers are valid.
+    unsafe { GetProcessTimes(h.raw(), &mut c, &mut e, &mut k, &mut u) }.ok()?;
+    Some(filetime_to_u64(c))
+}
+
+/// The id of the process that started this one, or 0 when it has ended
+/// (its id may then belong to a newer process).
+pub fn parent_process_id() -> u32 {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    let me = current_process_id();
+    // SAFETY: creates a snapshot handle that `owned` closes.
+    let Ok(h) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
+        return 0;
+    };
+    let owned = OwnedHandle::from_raw(h);
+    let mut e = PROCESSENTRY32W {
+        dwSize: core::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut parent = 0;
+    // SAFETY: `e` is a valid PROCESSENTRY32W with its size set.
+    let mut ok = unsafe { Process32FirstW(owned.raw(), &mut e) }.is_ok();
+    while ok {
+        if e.th32ProcessID == me {
+            parent = e.th32ParentProcessID;
+            break;
+        }
+        // SAFETY: as above.
+        ok = unsafe { Process32NextW(owned.raw(), &mut e) }.is_ok();
+    }
+    if parent == 0 || !process_exists(parent) {
+        return 0;
+    }
+    // A process started after this one only reuses the parent's id.
+    let mine = open_process(me).and_then(|h| creation_time(&h));
+    let theirs = open_process(parent).and_then(|h| creation_time(&h));
+    match (mine, theirs) {
+        (Some(m), Some(t)) if t <= m => parent,
+        _ => 0,
+    }
+}
+
 /// User and kernel CPU time, in 100 ns units.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CpuTimes {
@@ -215,5 +289,24 @@ fn times(kernel: FILETIME, user: FILETIME) -> CpuTimes {
     CpuTimes {
         user: filetime_to_u64(user),
         kernel: filetime_to_u64(kernel),
+    }
+}
+
+/// The stack reserve of the executable's image, which Windows gives the
+/// process's main thread.
+pub fn main_stack_size() -> u64 {
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    // SAFETY: NULL names the executable's module, which stays loaded.
+    let Ok(m) = (unsafe { GetModuleHandleW(None) }) else {
+        return 1 << 20;
+    };
+    let base = m.0 as *const u8;
+    // SAFETY: a loaded image starts with its DOS header, whose `e_lfanew`
+    // (offset 0x3c) locates the NT headers inside the image; in a PE32+
+    // optional header (after the 4-byte signature and the 20-byte file
+    // header) `SizeOfStackReserve` is at offset 72.
+    unsafe {
+        let nt = base.add(base.add(0x3c).cast::<u32>().read_unaligned() as usize);
+        nt.add(4 + 20 + 72).cast::<u64>().read_unaligned()
     }
 }

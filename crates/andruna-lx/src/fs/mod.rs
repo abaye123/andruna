@@ -10,16 +10,20 @@
 //! - `..` is resolved lexically ([`path::normalize`]).
 //! - `*at` calls relative to a directory descriptor use the directory's
 //!   path at open time; a directory renamed while open is not followed.
-//! - `O_DIRECT` is accepted and ignored (I/O stays buffered); `O_TMPFILE`
-//!   fails with `EOPNOTSUPP`, as on file systems without support for it.
+//! - `O_DIRECT` is accepted and ignored (I/O stays buffered).
+//! - `O_TMPFILE` files exist under a hidden name for an instant before the
+//!   name is removed, and cannot be given a name later (`linkat`).
 
+mod dev;
 pub mod file;
+pub mod modes;
 pub mod mount;
 mod names;
 pub mod path;
 pub mod proc;
 pub mod stream;
 
+pub use modes::{fchmod, fchmodat, fchown, fchownat, umask};
 pub use names::*;
 
 use std::sync::{Arc, RwLock};
@@ -31,8 +35,8 @@ use windows::Win32::Foundation::{
 use windows::Win32::Storage::FileSystem::{
     CREATE_NEW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_CREATION_DISPOSITION,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_WRITE_THROUGH,
-    FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ATTRIBUTES, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
-    SYNCHRONIZE,
+    FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ATTRIBUTES, FILE_READ_EA, FILE_WRITE_DATA, FILE_WRITE_EA,
+    OPEN_EXISTING, SYNCHRONIZE,
 };
 
 use self::file::{Directory, RegularFile, is_symlink_tag, stat_from_info};
@@ -166,6 +170,9 @@ fn proc_lookup(
 /// Opens a `/proc` node.
 fn proc_open(dirfd: i32, path: &[u8], flags: u32) -> SysResult<Option<i32>> {
     let nofollow = flags & O_NOFOLLOW != 0;
+    if !nofollow && let Some(fd) = reopen_fd(dirfd, path, flags)? {
+        return Ok(Some(fd));
+    }
     let Some((linux, node)) = proc_lookup(dirfd, path, nofollow)? else {
         return Ok(None);
     };
@@ -182,6 +189,15 @@ fn proc_open(dirfd: i32, path: &[u8], flags: u32) -> SysResult<Option<i32>> {
             }
             Box::new(proc::ProcDir::new(linux.to_bytes(), e))
         }
+        proc::Node::Device(d) => {
+            if flags & O_DIRECTORY != 0 {
+                return Err(Errno::ENOTDIR);
+            }
+            if flags & (O_CREAT | O_EXCL) == O_CREAT | O_EXCL {
+                return Err(Errno::EEXIST);
+            }
+            Box::new(dev::DevFile(d))
+        }
         proc::Node::Props => {
             if flags & O_ACCMODE != O_RDONLY {
                 return Err(Errno::EACCES);
@@ -197,6 +213,68 @@ fn proc_open(dirfd: i32, path: &[u8], flags: u32) -> SysResult<Option<i32>> {
             }
             Box::new(proc::ProcFile::new(content, comm_of))
         }
+    };
+    let file = Arc::new(OpenFile::new(ops, flags));
+    FDS.insert(file, flags & O_CLOEXEC != 0, 0).map(Some)
+}
+
+/// Opening `/proc/self/fd/N` (or `/proc/<pid>/fd/N`) of a file or
+/// directory opens that same file again, as Linux does, also when its name
+/// was removed or now names another file. `None` for other paths.
+fn reopen_fd(dirfd: i32, path: &[u8], flags: u32) -> SysResult<Option<i32>> {
+    let linux = linux_at(dirfd, path)?;
+    let c = &linux.components;
+    let pid = crate::process::getpid().to_string();
+    if c.len() != 4 || c[0] != b"proc" || c[2] != b"fd" {
+        return Ok(None);
+    }
+    if c[1] != b"self" && c[1] != pid.as_bytes() {
+        return Ok(None);
+    }
+    let Some(n) = std::str::from_utf8(&c[3])
+        .ok()
+        .and_then(|s| s.parse::<i32>().ok())
+    else {
+        return Ok(None);
+    };
+    let Ok(f) = FDS.get(n) else {
+        return Ok(None);
+    };
+    let (h, path, dir) = if let Some(r) = f.downcast::<RegularFile>() {
+        (r.raw_handle(), f.ops().path().unwrap_or_default(), false)
+    } else if let Some(d) = f.downcast::<Directory>() {
+        (
+            d.raw_handle(),
+            f.ops().dir_path().unwrap_or_default().to_vec(),
+            true,
+        )
+    } else {
+        return Ok(None);
+    };
+    let path: Vec<u8> = path.strip_suffix(b" (deleted)").unwrap_or(&path).to_vec();
+    let acc = flags & O_ACCMODE;
+    if dir && flags & O_PATH == 0 && (acc != O_RDONLY || flags & O_TRUNC != 0) {
+        return Err(Errno::EISDIR);
+    }
+    if !dir && flags & O_DIRECTORY != 0 {
+        return Err(Errno::ENOTDIR);
+    }
+    let mut access = FILE_READ_ATTRIBUTES.0 | FILE_READ_EA.0 | SYNCHRONIZE.0;
+    if flags & O_PATH == 0 {
+        access |= match acc {
+            O_RDONLY => GENERIC_READ.0,
+            O_WRONLY => GENERIC_WRITE.0,
+            _ => GENERIC_READ.0 | GENERIC_WRITE.0,
+        };
+    }
+    let nh = os::reopen(h, access)?;
+    if !dir && flags & O_TRUNC != 0 && flags & O_PATH == 0 && acc != O_RDONLY {
+        os::set_len(nh.raw(), 0)?;
+    }
+    let ops: Box<dyn crate::fd::FileOps> = if dir {
+        Box::new(Directory::new(nh, path))
+    } else {
+        Box::new(RegularFile::with_path(nh, path))
     };
     let file = Arc::new(OpenFile::new(ops, flags));
     FDS.insert(file, flags & O_CLOEXEC != 0, 0).map(Some)
@@ -262,13 +340,9 @@ fn open_handle(
 }
 
 /// `openat`. Returns the new descriptor.
-pub fn openat(dirfd: i32, path: &[u8], flags: u32, _mode: u32) -> SysResult<i32> {
+pub fn openat(dirfd: i32, path: &[u8], flags: u32, mode: u32) -> SysResult<i32> {
     if flags & __O_TMPFILE != 0 {
-        return Err(if flags & O_TMPFILE == O_TMPFILE {
-            Errno::EOPNOTSUPP
-        } else {
-            Errno::EINVAL
-        });
+        return open_tmpfile(dirfd, path, flags, mode);
     }
     let path_only = flags & O_PATH != 0;
     // O_PATH ignores every flag except these.
@@ -295,24 +369,39 @@ pub fn openat(dirfd: i32, path: &[u8], flags: u32, _mode: u32) -> SysResult<i32>
     if !path_only {
         access |= match acc {
             O_RDONLY => GENERIC_READ.0,
-            O_WRONLY => GENERIC_WRITE.0,
+            // FILE_READ_EA lets `fstat` see the stored mode.
+            O_WRONLY => GENERIC_WRITE.0 | FILE_READ_EA.0,
             _ => GENERIC_READ.0 | GENERIC_WRITE.0,
         };
         if trunc {
             access |= FILE_WRITE_DATA.0;
         }
     }
-    let disposition = match (creat, flags & O_EXCL != 0) {
-        (true, true) => CREATE_NEW,
-        (true, false) => OPEN_ALWAYS,
-        (false, _) => OPEN_EXISTING,
-    };
     let mut attrs = FILE_ATTRIBUTE_NORMAL;
     if flags & (O_SYNC | O_DSYNC) != 0 {
         attrs |= FILE_FLAG_WRITE_THROUGH;
     }
     let nofollow = flags & O_NOFOLLOW != 0;
-    let (h, info) = open_handle(&r, access, disposition, attrs, nofollow)?;
+    // Creation is tried first so that lx knows whether it created the file
+    // (and records its mode); without O_EXCL an existing file is opened.
+    let (h, mut info, created) = if creat {
+        match open_handle(&r, access | FILE_WRITE_EA.0, CREATE_NEW, attrs, nofollow) {
+            Ok((h, i)) => (h, i, true),
+            Err(e) if e == Errno::EEXIST && flags & O_EXCL == 0 => {
+                let (h, i) = open_handle(&r, access, OPEN_EXISTING, attrs, nofollow)?;
+                (h, i, false)
+            }
+            Err(e) => return Err(e),
+        }
+    } else {
+        let (h, i) = open_handle(&r, access, OPEN_EXISTING, attrs, nofollow)?;
+        (h, i, false)
+    };
+    if created && !info.directory {
+        let m = modes::creation_mode(crate::linux::stat::S_IFREG, mode);
+        modes::set_created(&h, m);
+        info.mode = Some(m);
+    }
 
     if is_symlink_tag(info.reparse_tag) && nofollow && !path_only {
         return Err(Errno::ELOOP);
@@ -335,6 +424,44 @@ pub fn openat(dirfd: i32, path: &[u8], flags: u32, _mode: u32) -> SysResult<i32>
     FDS.insert(file, flags & O_CLOEXEC != 0, 0)
 }
 
+/// `O_TMPFILE`: an unnamed file in directory `path`. lx creates it under a
+/// unique name and removes the name at once, so the file lives until its
+/// last descriptor is closed (`/proc/self/fd` shows it as deleted).
+fn open_tmpfile(dirfd: i32, path: &[u8], flags: u32, mode: u32) -> SysResult<i32> {
+    if flags & O_TMPFILE != O_TMPFILE || flags & O_ACCMODE == O_RDONLY || flags & O_CREAT != 0 {
+        return Err(Errno::EINVAL);
+    }
+    let dir = linux_at(dirfd, path)?;
+    let st = fstatat(AT_FDCWD, &dir.to_bytes(), 0)?;
+    if st.mode & crate::linux::stat::S_IFMT != crate::linux::stat::S_IFDIR {
+        return Err(Errno::ENOTDIR);
+    }
+    let base = dir.to_bytes();
+    let keep = flags & !(O_TMPFILE | O_EXCL);
+    for _ in 0..16 {
+        let mut r = [0u8; 8];
+        crate::sys::random::fill(&mut r)?;
+        let name = format!(".andruna-tmpfile-{:016x}", u64::from_ne_bytes(r));
+        let mut p = base.clone();
+        if p.last() != Some(&b'/') {
+            p.push(b'/');
+        }
+        p.extend_from_slice(name.as_bytes());
+        match openat(AT_FDCWD, &p, keep | O_CREAT | O_EXCL, mode) {
+            Ok(fd) => {
+                if let Err(e) = unlinkat(AT_FDCWD, &p, 0) {
+                    let _ = close(fd);
+                    return Err(e);
+                }
+                return Ok(fd);
+            }
+            Err(e) if e == Errno::EEXIST => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(Errno::EEXIST)
+}
+
 /// `fstatat`.
 pub fn fstatat(dirfd: i32, path: &[u8], flags: u32) -> SysResult<StatData> {
     if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT) != 0 {
@@ -354,13 +481,21 @@ pub fn fstatat(dirfd: i32, path: &[u8], flags: u32) -> SysResult<StatData> {
         return Ok(proc::stat(&node));
     }
     let r = resolve_at(dirfd, path)?;
-    let (_h, info) = open_handle(
-        &r,
-        FILE_READ_ATTRIBUTES.0,
-        OPEN_EXISTING,
-        FILE_FLAGS_AND_ATTRIBUTES(0),
-        nofollow,
-    )?;
+    let open = |access: u32| {
+        open_handle(
+            &r,
+            access,
+            OPEN_EXISTING,
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            nofollow,
+        )
+    };
+    // FILE_READ_EA shows the stored mode; a file that grants only its
+    // attributes is still reported, with the derived mode.
+    let (_h, info) = match open(FILE_READ_ATTRIBUTES.0 | FILE_READ_EA.0) {
+        Err(e) if e == Errno::EACCES => open(FILE_READ_ATTRIBUTES.0)?,
+        r => r?,
+    };
     if r.linux.trailing_slash && !info.directory {
         return Err(Errno::ENOTDIR);
     }
@@ -508,7 +643,26 @@ pub(crate) mod tests {
         assert_eq!(write(fd, UserBuf::from_ref(b"x")), Err(Errno::EBADF));
         close(fd).unwrap();
         assert_eq!(open(&p, O_ACCMODE), Err(Errno::EINVAL));
-        assert_eq!(open(&p, O_RDWR | O_TMPFILE), Err(Errno::EOPNOTSUPP));
+        assert_eq!(open(&p, O_RDWR | O_TMPFILE), Err(Errno::ENOTDIR));
+        assert_eq!(open(&d, O_RDONLY | O_TMPFILE), Err(Errno::EINVAL));
+        // An unnamed file: usable, and gone from the directory.
+        let fd = open(&d, O_RDWR | O_TMPFILE).unwrap();
+        assert_eq!(write(fd, UserBuf::from_ref(b"tmp")), Ok(3));
+        assert_eq!(fstat(fd).unwrap().size, 3);
+        let link = readlinkat(AT_FDCWD, format!("/proc/self/fd/{fd}").as_bytes(), 4096).unwrap();
+        assert!(
+            link.ends_with(b" (deleted)"),
+            "{}",
+            String::from_utf8_lossy(&link)
+        );
+        // Opening it through /proc/self/fd opens the same file again.
+        let again = open(&format!("/proc/self/fd/{fd}"), O_RDONLY).unwrap();
+        assert_eq!(fstat(again).unwrap().ino, fstat(fd).unwrap().ino);
+        let mut b = [0u8; 3];
+        assert_eq!(read(again, UserBuf::from_mut(&mut b)), Ok(3));
+        assert_eq!(&b, b"tmp");
+        close(again).unwrap();
+        close(fd).unwrap();
         assert_eq!(open(&format!("{p}/"), O_RDONLY), Err(Errno::ENOTDIR));
         assert_eq!(open(&p, O_RDONLY | O_DIRECTORY), Err(Errno::ENOTDIR));
         assert_eq!(open(&format!("{p}/y"), O_RDONLY), Err(Errno::ENOTDIR));

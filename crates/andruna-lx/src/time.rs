@@ -31,14 +31,22 @@ fn from_100ns(v: i128) -> Timespec {
 /// The CPU-time clock a negative clock id names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CpuClock {
-    Process { kind: i32 },
-    Thread { tid: Option<u32>, kind: i32 },
+    /// `pid` `None`: this process.
+    Process {
+        pid: Option<u32>,
+        kind: i32,
+    },
+    Thread {
+        tid: Option<u32>,
+        kind: i32,
+    },
 }
 
 fn cpu_clock(clk: i32) -> SysResult<CpuClock> {
     match clk {
         CLOCK_PROCESS_CPUTIME_ID => {
             return Ok(CpuClock::Process {
+                pid: None,
                 kind: CPUCLOCK_SCHED,
             });
         }
@@ -64,16 +72,22 @@ fn cpu_clock(clk: i32) -> SysResult<CpuClock> {
         };
         Ok(CpuClock::Thread { tid, kind })
     } else if id == 0 || id == process::getpid() {
-        Ok(CpuClock::Process { kind })
+        Ok(CpuClock::Process { pid: None, kind })
+    } else if id > 0 && thread::process_exists(id as u32) {
+        // Another process: its CPU time, as Linux allows.
+        Ok(CpuClock::Process {
+            pid: Some(id as u32),
+            kind,
+        })
     } else {
-        // Other processes' clocks are not available.
         Err(Errno::EINVAL)
     }
 }
 
 fn cpu_time(c: CpuClock) -> SysResult<Timespec> {
     let (t, kind) = match c {
-        CpuClock::Process { kind } => (thread::process_times()?, kind),
+        CpuClock::Process { pid: None, kind } => (thread::process_times()?, kind),
+        CpuClock::Process { pid: Some(p), kind } => (thread::process_times_of(p)?, kind),
         CpuClock::Thread { tid, kind } => (thread::thread_times(tid)?, kind),
     };
     let v = if kind == CPUCLOCK_VIRT {
@@ -290,10 +304,10 @@ mod tests {
         let p = make_process_cpuclock(process::getpid(), CPUCLOCK_VIRT);
         assert!(clock_gettime(p).is_ok());
         assert_eq!(clock_gettime(-1), Err(Errno::EINVAL)); // kind 3
-        // A thread id of another process (the System process has id 4 and
-        // its threads are not ours; id 4 itself is a process).
+        // A process that does not exist (other processes' clocks are
+        // readable when Windows lets this process query them).
         assert_eq!(
-            clock_gettime(make_process_cpuclock(4, CPUCLOCK_SCHED)),
+            clock_gettime(make_process_cpuclock(0x7fff_fff0, CPUCLOCK_SCHED)),
             Err(Errno::EINVAL)
         );
     }
