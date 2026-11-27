@@ -182,4 +182,4 @@ jobs:
 
       - name: Result
         if: steps.int.outcome != 'success' || steps.jit.outcome != 'success'
-        run: throw "libcore tests: unexpected failures (see the summary)"
+        run: throw "unexpected libcore test results, see the summary"
