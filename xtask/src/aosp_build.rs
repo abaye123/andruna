@@ -26,7 +26,7 @@ pub struct Options {
 }
 
 impl Arch {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::X64 => "x64",
             Self::Arm64 => "arm64",
@@ -104,7 +104,7 @@ pub fn build(opts: &Options) -> Result<()> {
     Ok(())
 }
 
-fn exe(name: &str) -> String {
+pub(crate) fn exe(name: &str) -> String {
     if cfg!(windows) {
         format!("{name}.exe")
     } else {
@@ -113,13 +113,13 @@ fn exe(name: &str) -> String {
 }
 
 /// A `-D<name>=<path>` argument with forward slashes, which CMake expects.
-fn define(name: &str, path: &Path) -> String {
+pub(crate) fn define(name: &str, path: &Path) -> String {
     format!("-D{name}={}", path.display().to_string().replace('\\', "/"))
 }
 
 /// Finds a tool: the environment variable, then PATH, then known install
 /// locations.
-fn find_tool(name: &str, env: &str, candidates: &[PathBuf]) -> Result<PathBuf> {
+pub(crate) fn find_tool(name: &str, env: &str, candidates: &[PathBuf]) -> Result<PathBuf> {
     if let Some(p) = std::env::var_os(env) {
         let p = PathBuf::from(p);
         if p.is_file() {
@@ -162,7 +162,7 @@ fn resolve_link(p: &Path) -> PathBuf {
     }
 }
 
-fn cmake_candidates() -> Vec<PathBuf> {
+pub(crate) fn cmake_candidates() -> Vec<PathBuf> {
     let mut v = Vec::new();
     for var in ["ProgramFiles", "ProgramW6432"] {
         if let Some(pf) = std::env::var_os(var) {
@@ -177,7 +177,7 @@ fn cmake_candidates() -> Vec<PathBuf> {
     v
 }
 
-fn ninja_candidates() -> Vec<PathBuf> {
+pub(crate) fn ninja_candidates() -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         let winget = PathBuf::from(local).join("Microsoft").join("WinGet");

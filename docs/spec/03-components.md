@@ -11,6 +11,7 @@ crates live in `crates/`, C# projects in `ui/`, AOSP build glue in `aosp/`.
 | `andruna-binder` | Library + sysd module | Rust | 2 |
 | `andruna-sysd` | Executable | Rust + Java services | 2 |
 | `andruna-compositor` | sysd module | Rust | 3 |
+| `andruna-gles` | Library (app process) + ANGLE DLLs | Rust + ANGLE | 3 |
 | `andruna-app` | Executable (app/host process) | Rust + AOSP | 1 |
 | `andruna-launch` | Executable (tiny) | Rust | 4 |
 | `andruna-pkg` | sysd module | Rust + framework parser | 2 |
@@ -135,6 +136,20 @@ one Windows window per task, one DirectComposition visual per surface.
 - Freeform windowing config: window bounds, insets (title bar as caption
   inset), density per monitor, `resizeableActivity` and minimum sizes.
 - Splash, letterboxing, back button and title bar color (D-2 to D-4).
+
+## andruna-gles
+
+**Responsibility.** EGL and OpenGL ES 1 to 3 for guest code in the app
+process, on ANGLE over Direct3D 11.
+
+**Interface.** The guest libraries `libEGL.so`, `libGLESv1_CM.so`,
+`libGLESv2.so`, `libGLESv3.so` (generated stubs bound to host functions,
+ADR 0030); towards the compositor, `WindowTarget`: a DirectComposition
+surface handle the window surface's swap chain presents into.
+
+**Design.** See [ADR 0029](../decisions/0029-angle-build-cmake-llvm-mingw.md),
+[ADR 0030](../decisions/0030-guest-gles-bindings-and-window-surfaces.md)
+and [the phase 3 notes](../plan/phase3/gles-angle.md).
 
 ## andruna-app: app and host process
 

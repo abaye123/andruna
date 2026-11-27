@@ -1,0 +1,42 @@
+[package]
+name = "andruna-gles"
+description = "OpenGL ES and EGL for guest code: ANGLE on Direct3D 11, window surfaces on DirectComposition."
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "andruna-gles-run"
+path = "src/bin/andruna-gles-run.rs"
+
+[dependencies]
+andruna-linker = { path = "../andruna-linker" }
+andruna-lx = { path = "../andruna-lx" }
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[dependencies.windows-numerics]
+version = "0.3"
+
+[lints]
+workspace = true

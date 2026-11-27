@@ -38,11 +38,29 @@ pub fn table() -> HashMap<Vec<u8>, u64> {
         .chain(crate::thread::symbols())
         .chain(crate::dl::symbols())
         .chain(crate::icu::symbols())
+        .chain(registered())
     {
         let old = t.insert(n.as_bytes().to_vec(), a);
         assert!(old.is_none(), "host symbol {n} defined twice");
     }
     t
+}
+
+static REGISTERED: Mutex<Vec<(&'static str, u64)>> = Mutex::new(Vec::new());
+
+/// Adds host functions from another crate (for example andruna-gles's
+/// `__andruna_gles_resolve`) to the table of every [`crate::Linker`]
+/// created afterwards. Each address must be a function with the guest
+/// convention that catches its own panics, like the loader's own.
+pub fn register(symbols: &[(&'static str, u64)]) {
+    REGISTERED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .extend_from_slice(symbols);
+}
+
+fn registered() -> Vec<(&'static str, u64)> {
+    REGISTERED.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 /// Names of the declared list that the table does not define.

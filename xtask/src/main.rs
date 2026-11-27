@@ -1,5 +1,6 @@
 //! Build orchestration for Andruna. Run as `cargo xtask <command>`.
 
+mod angle;
 mod aosp;
 mod aosp_build;
 mod build_cmd;
@@ -16,6 +17,13 @@ const USAGE: &str = "\
 Usage: cargo xtask <command> [options]
 
 Commands:
+  angle-build [--arch x64|arm64] [--debug]
+        Build ANGLE (third_party/aosp/external/angle, D3D11 back end only)
+        as libEGL.dll and libGLESv2.dll with CMake, Ninja and llvm-mingw
+        (aosp/angle) into out/angle/<arch>/build, and copy the DLLs to
+        out/angle/<arch>/bin. Needs `fetch --project external/angle
+        --project external/zlib`. Uses $CMAKE_BUILD_PARALLEL_LEVEL jobs
+        (default 4). Sign the DLLs with `sign <file>...`.
   aosp-build [--arch x64|arm64] [--runtime] [--keep-going] [--target <name>]...
         Configure and build the AOSP modules in aosp/ with CMake and Ninja
         (llvm-mingw) into out/aosp/<arch>, after applying patches/ to the
@@ -141,6 +149,18 @@ fn run(args: &[String]) -> Result<()> {
             };
             opts.finish()?;
             aosp_build::build(&o)
+        }
+        "angle-build" => {
+            let arch = match opts.value("--arch")? {
+                Some(a) => build_cmd::Arch::parse(&a)?,
+                None => build_cmd::Arch::host(),
+            };
+            let o = angle::Options {
+                arch,
+                debug: opts.flag("--debug"),
+            };
+            opts.finish()?;
+            angle::build(&o)
         }
         "fetch" => {
             let sel = aosp::Selection::from_options(&mut opts)?;
