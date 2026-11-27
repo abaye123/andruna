@@ -148,6 +148,22 @@ impl PointerTracker {
         !self.active.is_empty()
     }
 
+    /// Drops new contacts that start outside the app's window (the
+    /// letterbox around a non-resizable app): Android does not deliver a
+    /// down outside a window to it. Contacts already down keep their
+    /// gesture wherever they move.
+    pub fn filter_outside(&self, frames: &mut [PointerFrame], width: f32, height: f32) {
+        for f in frames {
+            for s in &mut f.pointers {
+                let outside = s.x < 0.0 || s.y < 0.0 || s.x >= width || s.y >= height;
+                if outside && !self.active.iter().any(|a| a.win_id == s.id) {
+                    s.in_contact = false;
+                    s.buttons = 0;
+                }
+            }
+        }
+    }
+
     fn tool(&self, s: &PointerSample) -> i32 {
         match self.kind {
             PointerKind::Mouse => TOOL_TYPE_MOUSE,
@@ -892,6 +908,28 @@ mod tests {
         // Tilted to the right: orientation -90 degrees.
         let o = m[2].current()[0].get(AXIS_ORIENTATION);
         assert!((o + std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn downs_outside_the_window_are_dropped_but_gestures_continue() {
+        let mut t = PointerTracker::new(PointerKind::Touch);
+        let mut outside = vec![frame(1, vec![touch(1, -5.0, 10.0)])];
+        t.filter_outside(&mut outside, 100.0, 100.0);
+        assert!(motions(&t.process(&outside, 0)).is_empty());
+        // Inside, then dragged outside: the gesture continues to its up.
+        let f = [
+            frame(2, vec![touch(2, 50.0, 50.0)]),
+            frame(3, vec![touch(2, 150.0, 50.0)]),
+            frame(4, vec![lifted(2, 150.0, 50.0)]),
+        ];
+        let mut ev = Vec::new();
+        for one in f {
+            let mut one = [one];
+            t.filter_outside(&mut one, 100.0, 100.0);
+            ev.extend(t.process(&one, 0));
+        }
+        let actions: Vec<_> = motions(&ev).iter().map(|m| m.action).collect();
+        assert_eq!(actions, vec![ACTION_DOWN, ACTION_MOVE, ACTION_UP]);
     }
 
     #[test]

@@ -1137,11 +1137,19 @@ fn pointer_message(m: Msg) -> Option<isize> {
             }
         }
         let meta = w.keys.meta_state(win::locks());
+        // Around a letterboxed app, downs do not start gestures.
+        let app_size = w
+            .layout
+            .filter(|l| l.letterboxed)
+            .map(|l| l.config.window.bounds.size());
         let tracker = match kind {
             PointerKind::Mouse => &mut w.mouse,
             PointerKind::Touch => &mut w.touch,
             PointerKind::Pen => &mut w.pen,
         };
+        if let Some(size) = app_size {
+            tracker.filter_outside(&mut frames, size.width as f32, size.height as f32);
+        }
         let events = tracker.process(&frames, meta);
         for e in events {
             deliver(s, &mut w, e);
