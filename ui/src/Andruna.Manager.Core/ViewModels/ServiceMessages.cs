@@ -50,6 +50,15 @@ public static class ServiceMessages
         SysdErrorCode.HostStartFailed => strings.Get("SysdErrorHostStartFailed"),
         SysdErrorCode.Busy => strings.Get("SysdErrorBusy"),
         SysdErrorCode.Internal => strings.Get("SysdErrorInternal"),
+        SysdErrorCode.InvalidPackage => strings.Get("SysdErrorInvalidPackage"),
+        SysdErrorCode.InvalidSignature => strings.Get("SysdErrorInvalidSignature"),
+        SysdErrorCode.SignerMismatch => strings.Get("SysdErrorSignerMismatch"),
+        SysdErrorCode.IncompatibleAbi => strings.Get("SysdErrorIncompatibleAbi"),
+        SysdErrorCode.SdkTooNew => strings.Get("SysdErrorSdkTooNew"),
+        SysdErrorCode.Downgrade => strings.Get("SysdErrorDowngrade"),
+        SysdErrorCode.InvalidSplits => strings.Get("SysdErrorInvalidSplits"),
+        SysdErrorCode.InstallFailed => strings.Get("SysdErrorInstallFailed"),
+        SysdErrorCode.NotPermitted => strings.Get("SysdErrorNotPermitted"),
         _ => strings.Format("SysdErrorOther", (ushort)code),
     };
 }

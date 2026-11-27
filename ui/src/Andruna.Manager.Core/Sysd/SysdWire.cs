@@ -37,21 +37,83 @@ public static class SysdWire
         public const ushort FocusWindow = 0x0004;
         public const ushort ListPackages = 0x0005;
 
+        // Package manager (0x0006..=0x000A).
+        public const ushort InspectPackage = 0x0006;
+        public const ushort InstallPackage = 0x0007;
+        public const ushort UninstallPackage = 0x0008;
+        public const ushort ListPackageInfo = 0x0009;
+        public const ushort StartActivity = 0x000A;
+
+        // Events and diagnostics (0x0010..=0x001F).
+        public const ushort WaitEvents = 0x0010;
+        public const ushort GetMissingFunctions = 0x0011;
+        public const ushort ReportMissingFunctions = 0x0012;
+
         public const ushort Pong = 0x8001;
         public const ushort StatusReply = 0x8002;
         public const ushort Started = 0x8003;
         public const ushort Focused = 0x8004;
         public const ushort Packages = 0x8005;
+        public const ushort PackageDetails = 0x8006;
+        public const ushort Installed = 0x8007;
+        public const ushort Uninstalled = 0x8008;
+        public const ushort PackageInfos = 0x8009;
+        public const ushort Events = 0x8010;
+        public const ushort MissingFunctions = 0x8011;
+        public const ushort Reported = 0x8012;
         public const ushort Error = 0x80FF;
+    }
+
+    /// <summary>Event types inside an Events response.</summary>
+    public static class EventType
+    {
+        public const ushort NotificationPosted = 1;
+        public const ushort NotificationRemoved = 2;
+        public const ushort AppCrashed = 3;
     }
 
     /// <summary>Encodes a request payload (without the length prefix).</summary>
     public static byte[] EncodeRequest(SysdRequest request, uint id)
     {
         var w = new Writer(request.Kind, id);
-        if (request.Package is { } package)
+        switch (request.Kind)
         {
-            w.Str(package);
+            case Kind.StartPackage or Kind.FocusWindow or Kind.GetMissingFunctions:
+                w.Str(request.Package ?? string.Empty);
+                break;
+            case Kind.StartActivity:
+                w.Str(request.Package ?? string.Empty);
+                w.Str(request.Activity ?? string.Empty);
+                break;
+            case Kind.InspectPackage:
+                w.Strs(request.Paths ?? []);
+                w.Str(request.Locale ?? string.Empty);
+                break;
+            case Kind.InstallPackage:
+                w.Strs(request.Paths ?? []);
+                break;
+            case Kind.UninstallPackage:
+                w.Str(request.Package ?? string.Empty);
+                w.U8(request.KeepData ? (byte)1 : (byte)0);
+                break;
+            case Kind.ListPackageInfo:
+                w.Str(request.Locale ?? string.Empty);
+                break;
+            case Kind.WaitEvents:
+                w.U64(request.Epoch);
+                w.U64(request.After);
+                w.U32(request.TimeoutMs);
+                break;
+            case Kind.ReportMissingFunctions:
+                var entries = request.Entries ?? [];
+                w.U32((uint)entries.Count);
+                foreach (var e in entries)
+                {
+                    w.Str(e.Name);
+                    w.U64(e.Calls);
+                }
+
+                break;
         }
 
         return w.ToArray();
@@ -82,6 +144,33 @@ public static class SysdWire
             Kind.Started => new SysdResponse.Started(r.U32(), r.Bool()),
             Kind.Focused => new SysdResponse.Focused(),
             Kind.Packages => new SysdResponse.Packages(r.StrList()),
+            Kind.PackageDetails => new SysdResponse.Details(new PackageDetails(
+                Package: r.Str(),
+                VersionCode: r.U64(),
+                VersionName: r.Str(),
+                Label: r.Str(),
+                MinSdk: r.U32(),
+                TargetSdk: r.U32(),
+                SignerSha256: r.Str(),
+                SignatureScheme: r.U8(),
+                Permissions: r.StrList(),
+                NativeAbis: r.StrList(),
+                SelectedAbi: r.Str(),
+                InstalledVersionCode: r.U64(),
+                IconPngPath: r.Str())),
+            Kind.Installed => new SysdResponse.Installed(new InstallOutcome(
+                Package: r.Str(),
+                VersionCode: r.U64(),
+                VersionName: r.Str(),
+                Updated: r.Bool(),
+                Compile: (CompileStatus)r.U8(),
+                CompileMessage: r.Str(),
+                Shortcuts: r.U32())),
+            Kind.Uninstalled => new SysdResponse.Uninstalled(),
+            Kind.PackageInfos => new SysdResponse.PackageInfos(r.PackageInfos()),
+            Kind.Events => new SysdResponse.Events(r.EventBatch()),
+            Kind.MissingFunctions => new SysdResponse.MissingFunctions(new MissingFunctionReport(r.U64(), r.MissingFunctions())),
+            Kind.Reported => new SysdResponse.Reported(),
             Kind.Error => new SysdResponse.Error(SysdErrorCodes.FromWire(r.U16()), r.Str()),
             _ => throw new SysdProtocolException($"unknown message kind 0x{kind:x4}"),
         };
@@ -151,6 +240,25 @@ public static class SysdWire
 
         public byte[] ToArray() => [.. _bytes];
 
+        public void Strs(IReadOnlyList<string> values)
+        {
+            U32((uint)values.Count);
+            foreach (var v in values)
+            {
+                Str(v);
+            }
+        }
+
+        public void U8(byte v) => _bytes.Add(v);
+
+        public void U64(ulong v)
+        {
+            for (var i = 0; i < 8; i++)
+            {
+                _bytes.Add((byte)(v >> (8 * i)));
+            }
+        }
+
         public void Str(string value)
         {
             var bytes = Encoding.UTF8.GetBytes(value);
@@ -169,7 +277,7 @@ public static class SysdWire
             _bytes.Add((byte)(v >> 8));
         }
 
-        private void U32(uint v)
+        public void U32(uint v)
         {
             for (var i = 0; i < 4; i++)
             {
@@ -184,7 +292,11 @@ public static class SysdWire
 
         private ReadOnlySpan<byte> _rest = bytes;
 
+        public byte U8() => Take(1)[0];
+
         public ushort U16() => BinaryPrimitives.ReadUInt16LittleEndian(Take(2));
+
+        public int I32() => BinaryPrimitives.ReadInt32LittleEndian(Take(4));
 
         public uint U32() => BinaryPrimitives.ReadUInt32LittleEndian(Take(4));
 
@@ -234,6 +346,84 @@ public static class SysdWire
             return list;
         }
 
+        /// <summary>A u32 count of entries of at least <paramref name="min"/> bytes, checked before allocating.</summary>
+        public int Count(int min)
+        {
+            var count = U32();
+            if (count > (uint)(_rest.Length / min))
+            {
+                throw new SysdProtocolException("message is truncated");
+            }
+
+            return (int)count;
+        }
+
+        public IReadOnlyList<PackageInfo> PackageInfos()
+        {
+            var n = Count((7 * 2) + (3 * 8) + 4);
+            var list = new List<PackageInfo>(n);
+            for (var i = 0; i < n; i++)
+            {
+                list.Add(new PackageInfo(
+                    Package: Str(),
+                    Label: Str(),
+                    VersionCode: U64(),
+                    VersionName: Str(),
+                    IconIcoPath: Str(),
+                    IconPngPath: Str(),
+                    LauncherActivities: StrList(),
+                    InstalledMs: U64(),
+                    SizeBytes: U64(),
+                    AppUserModelId: Str()));
+            }
+
+            return list;
+        }
+
+        public IReadOnlyList<MissingFunction> MissingFunctions()
+        {
+            var n = Count(10);
+            var list = new List<MissingFunction>(n);
+            for (var i = 0; i < n; i++)
+            {
+                list.Add(new MissingFunction(Str(), U64()));
+            }
+
+            return list;
+        }
+
+        public SysdEventBatch EventBatch()
+        {
+            var epoch = U64();
+            var next = U64();
+            var missed = Bool();
+            var n = Count(22);
+            var events = new List<SysdEvent>(n);
+            for (var i = 0; i < n; i++)
+            {
+                var seq = U64();
+                var time = U64();
+                var type = U16();
+                var body = new Reader(Take((int)Math.Min(U32(), (uint)int.MaxValue)));
+                SysdEvent e = type switch
+                {
+                    EventType.NotificationPosted => new SysdEvent.NotificationPosted(
+                        seq, time, body.Str(), body.I32(), body.Str(), body.Str(), body.Str(), body.Str()),
+                    EventType.NotificationRemoved => new SysdEvent.NotificationRemoved(seq, time, body.Str(), body.I32(), body.Str()),
+                    EventType.AppCrashed => new SysdEvent.AppCrashed(seq, time, body.Str(), body.U32(), body.U32(), body.Str()),
+                    _ => new SysdEvent.Unknown(seq, time, type),
+                };
+                if (e is not SysdEvent.Unknown)
+                {
+                    body.End();
+                }
+
+                events.Add(e);
+            }
+
+            return new SysdEventBatch(epoch, next, missed, events);
+        }
+
         public readonly void End()
         {
             if (!_rest.IsEmpty)
@@ -256,9 +446,25 @@ public static class SysdWire
     }
 }
 
-/// <summary>A request to sysd. <see cref="Package"/> is set for the kinds that carry one.</summary>
+/// <summary>A request to sysd; the properties a kind does not use stay at their defaults.</summary>
 public sealed record SysdRequest(ushort Kind, string? Package = null)
 {
+    public string? Activity { get; init; }
+
+    public IReadOnlyList<string>? Paths { get; init; }
+
+    public string? Locale { get; init; }
+
+    public bool KeepData { get; init; }
+
+    public ulong Epoch { get; init; }
+
+    public ulong After { get; init; }
+
+    public uint TimeoutMs { get; init; }
+
+    public IReadOnlyList<MissingFunction>? Entries { get; init; }
+
     public static SysdRequest Ping { get; } = new(SysdWire.Kind.Ping);
 
     public static SysdRequest Status { get; } = new(SysdWire.Kind.Status);
@@ -268,6 +474,27 @@ public sealed record SysdRequest(ushort Kind, string? Package = null)
     public static SysdRequest StartPackage(string package) => new(SysdWire.Kind.StartPackage, package);
 
     public static SysdRequest FocusWindow(string package) => new(SysdWire.Kind.FocusWindow, package);
+
+    public static SysdRequest StartActivity(string package, string activity) =>
+        new(SysdWire.Kind.StartActivity, package) { Activity = activity };
+
+    public static SysdRequest InspectPackage(IReadOnlyList<string> paths, string locale) =>
+        new(SysdWire.Kind.InspectPackage) { Paths = paths, Locale = locale };
+
+    public static SysdRequest InstallPackage(IReadOnlyList<string> paths) => new(SysdWire.Kind.InstallPackage) { Paths = paths };
+
+    public static SysdRequest UninstallPackage(string package, bool keepData) =>
+        new(SysdWire.Kind.UninstallPackage, package) { KeepData = keepData };
+
+    public static SysdRequest ListPackageInfo(string locale) => new(SysdWire.Kind.ListPackageInfo) { Locale = locale };
+
+    public static SysdRequest WaitEvents(ulong epoch, ulong after, uint timeoutMs) =>
+        new(SysdWire.Kind.WaitEvents) { Epoch = epoch, After = after, TimeoutMs = timeoutMs };
+
+    public static SysdRequest GetMissingFunctions(string package) => new(SysdWire.Kind.GetMissingFunctions, package);
+
+    public static SysdRequest ReportMissingFunctions(IReadOnlyList<MissingFunction> entries) =>
+        new(SysdWire.Kind.ReportMissingFunctions) { Entries = entries };
 }
 
 /// <summary>A response from sysd.</summary>
@@ -291,6 +518,25 @@ public abstract record SysdResponse
 
         public override int GetHashCode() => Names.Count;
     }
+
+    public sealed record Details(PackageDetails Value) : SysdResponse;
+
+    public sealed record Installed(InstallOutcome Value) : SysdResponse;
+
+    public sealed record Uninstalled : SysdResponse;
+
+    public sealed record PackageInfos(IReadOnlyList<PackageInfo> Value) : SysdResponse
+    {
+        public bool Equals(PackageInfos? other) => other is not null && Value.SequenceEqual(other.Value);
+
+        public override int GetHashCode() => Value.Count;
+    }
+
+    public sealed record Events(SysdEventBatch Value) : SysdResponse;
+
+    public sealed record MissingFunctions(MissingFunctionReport Value) : SysdResponse;
+
+    public sealed record Reported : SysdResponse;
 
     public sealed record Error(SysdErrorCode Code, string Message) : SysdResponse;
 }

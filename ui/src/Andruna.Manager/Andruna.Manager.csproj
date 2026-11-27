@@ -24,6 +24,8 @@
     <SelfContained>true</SelfContained>
     <!-- Only the two shipped languages go into the output (no satellite folders for others). -->
     <SatelliteResourceLanguages>en;he</SatelliteResourceLanguages>
+    <!-- Program.cs has its own Main: single instance and activation redirection. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
 
   <!-- `dotnet build -r win-arm64` selects the ARM64 platform, `-r win-x64` x64. -->

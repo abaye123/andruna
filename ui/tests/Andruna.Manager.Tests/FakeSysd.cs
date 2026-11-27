@@ -152,6 +152,15 @@ internal static class TestWire
             body.AddRange(b);
         }
 
+        void Strs(IReadOnlyList<string> list)
+        {
+            U32((uint)list.Count);
+            foreach (var s in list)
+            {
+                Str(s);
+            }
+        }
+
         ushort kind;
         switch (response)
         {
@@ -185,6 +194,119 @@ internal static class TestWire
                 }
 
                 break;
+            case SysdResponse.Details { Value: var d }:
+                kind = SysdWire.Kind.PackageDetails;
+                Str(d.Package);
+                U64(d.VersionCode);
+                Str(d.VersionName);
+                Str(d.Label);
+                U32(d.MinSdk);
+                U32(d.TargetSdk);
+                Str(d.SignerSha256);
+                body.Add(d.SignatureScheme);
+                Strs(d.Permissions);
+                Strs(d.NativeAbis);
+                Str(d.SelectedAbi);
+                U64(d.InstalledVersionCode);
+                Str(d.IconPngPath);
+                break;
+            case SysdResponse.Installed { Value: var o }:
+                kind = SysdWire.Kind.Installed;
+                Str(o.Package);
+                U64(o.VersionCode);
+                Str(o.VersionName);
+                body.Add(o.Updated ? (byte)1 : (byte)0);
+                body.Add((byte)o.Compile);
+                Str(o.CompileMessage);
+                U32(o.Shortcuts);
+                break;
+            case SysdResponse.Uninstalled:
+                kind = SysdWire.Kind.Uninstalled;
+                break;
+            case SysdResponse.PackageInfos { Value: var infos }:
+                kind = SysdWire.Kind.PackageInfos;
+                U32((uint)infos.Count);
+                foreach (var i in infos)
+                {
+                    Str(i.Package);
+                    Str(i.Label);
+                    U64(i.VersionCode);
+                    Str(i.VersionName);
+                    Str(i.IconIcoPath);
+                    Str(i.IconPngPath);
+                    Strs(i.LauncherActivities);
+                    U64(i.InstalledMs);
+                    U64(i.SizeBytes);
+                    Str(i.AppUserModelId);
+                }
+
+                break;
+            case SysdResponse.Events { Value: var batch }:
+                kind = SysdWire.Kind.Events;
+                U64(batch.Epoch);
+                U64(batch.Next);
+                body.Add(batch.Missed ? (byte)1 : (byte)0);
+                U32((uint)batch.Events.Count);
+                foreach (var e in batch.Events)
+                {
+                    var outer = body;
+                    body = [];
+                    ushort type;
+                    switch (e)
+                    {
+                        case SysdEvent.NotificationPosted n:
+                            type = SysdWire.EventType.NotificationPosted;
+                            Str(n.Package);
+                            U32((uint)n.Id);
+                            Str(n.Tag);
+                            Str(n.Channel);
+                            Str(n.Title);
+                            Str(n.Text);
+                            break;
+                        case SysdEvent.NotificationRemoved r:
+                            type = SysdWire.EventType.NotificationRemoved;
+                            Str(r.Package);
+                            U32((uint)r.Id);
+                            Str(r.Tag);
+                            break;
+                        case SysdEvent.AppCrashed c:
+                            type = SysdWire.EventType.AppCrashed;
+                            Str(c.Package);
+                            U32(c.Pid);
+                            U32(c.ExitCode);
+                            Str(c.Reason);
+                            break;
+                        case SysdEvent.Unknown u:
+                            type = u.Type;
+                            break;
+                        default:
+                            throw new ArgumentException(e.GetType().Name);
+                    }
+
+                    var eventBody = body;
+                    body = outer;
+                    U64(e.Seq);
+                    U64(e.TimeMs);
+                    U16(type);
+                    U32((uint)eventBody.Count);
+                    body.AddRange(eventBody);
+                }
+
+                break;
+            case SysdResponse.MissingFunctions { Value: var m }:
+                kind = SysdWire.Kind.MissingFunctions;
+                U64(m.UpdatedMs);
+                U32((uint)m.Entries.Count);
+                foreach (var e in m.Entries)
+                {
+                    Str(e.Name);
+                    U64(e.Calls);
+                }
+
+                break;
+            case SysdResponse.Reported:
+                kind = SysdWire.Kind.Reported;
+                break;
             case SysdResponse.Error e:
                 kind = SysdWire.Kind.Error;
                 U16((ushort)e.Code);
@@ -216,22 +338,62 @@ internal static class TestWire
             throw new SysdProtocolException($"version {version}");
         }
 
-        string? package = null;
-        if (kind is SysdWire.Kind.StartPackage or SysdWire.Kind.FocusWindow)
+        var at = SysdWire.HeaderLength;
+        string Str()
         {
-            var n = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(8));
-            package = Encoding.UTF8.GetString(payload, 10, n);
-            if (10 + n != payload.Length)
-            {
-                throw new SysdProtocolException("trailing bytes");
-            }
+            var n = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(at));
+            var s = Encoding.UTF8.GetString(payload, at + 2, n);
+            at += 2 + n;
+            return s;
         }
-        else if (payload.Length != SysdWire.HeaderLength)
+
+        uint U32()
+        {
+            var v = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(at));
+            at += 4;
+            return v;
+        }
+
+        ulong U64()
+        {
+            var v = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(at));
+            at += 8;
+            return v;
+        }
+
+        List<string> Strs()
+        {
+            var n = U32();
+            var list = new List<string>();
+            for (var i = 0; i < n; i++)
+            {
+                list.Add(Str());
+            }
+
+            return list;
+        }
+
+        var request = kind switch
+        {
+            SysdWire.Kind.StartPackage or SysdWire.Kind.FocusWindow or SysdWire.Kind.GetMissingFunctions => new SysdRequest(kind, Str()),
+            SysdWire.Kind.StartActivity => new SysdRequest(kind, Str()) { Activity = Str() },
+            SysdWire.Kind.InspectPackage => new SysdRequest(kind) { Paths = Strs(), Locale = Str() },
+            SysdWire.Kind.InstallPackage => new SysdRequest(kind) { Paths = Strs() },
+            SysdWire.Kind.UninstallPackage => new SysdRequest(kind, Str()) { KeepData = payload[at++] == 1 },
+            SysdWire.Kind.ListPackageInfo => new SysdRequest(kind) { Locale = Str() },
+            SysdWire.Kind.WaitEvents => new SysdRequest(kind) { Epoch = U64(), After = U64(), TimeoutMs = U32() },
+            SysdWire.Kind.ReportMissingFunctions => new SysdRequest(kind)
+            {
+                Entries = Enumerable.Range(0, (int)U32()).Select(_ => new MissingFunction(Str(), U64())).ToList(),
+            },
+            _ => new SysdRequest(kind),
+        };
+        if (at != payload.Length)
         {
             throw new SysdProtocolException("trailing bytes");
         }
 
-        return (id, new SysdRequest(kind, package));
+        return (id, request);
     }
 
     /// <summary>Writes a length prefix and payload without the client's range checks.</summary>

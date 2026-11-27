@@ -270,4 +270,346 @@
   <data name="NoticesReadFailedMessage" xml:space="preserve">
     <value>Windows reported: {0}</value>
   </data>
+  <data name="NavDiagnostics" xml:space="preserve">
+    <value>Diagnostics</value>
+  </data>
+  <data name="DialogCancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="LibrarySearchPlaceholder" xml:space="preserve">
+    <value>Search apps</value>
+  </data>
+  <data name="LibraryNamesOnly" xml:space="preserve">
+    <value>This version of the Andruna service reports only package names, so app icons and versions aren't shown yet.</value>
+  </data>
+  <data name="LibraryNoMatches" xml:space="preserve">
+    <value>No app matches your search.</value>
+  </data>
+  <data name="InstallDialogTitle" xml:space="preserve">
+    <value>Install an app</value>
+  </data>
+  <data name="InstallInspecting" xml:space="preserve">
+    <value>Checking {0}...</value>
+  </data>
+  <data name="InstallInstalling" xml:space="preserve">
+    <value>Installing {0}. This can take a minute.</value>
+  </data>
+  <data name="InstallVersionNew" xml:space="preserve">
+    <value>Version {0} ({1})</value>
+  </data>
+  <data name="InstallVersionUpdate" xml:space="preserve">
+    <value>Update to version {0} ({1}). Installed now: {2}</value>
+  </data>
+  <data name="InstallSigner" xml:space="preserve">
+    <value>Developer certificate (SHA-256): {0}. Signature scheme v{1}.</value>
+  </data>
+  <data name="InstallActionInstall" xml:space="preserve">
+    <value>Install</value>
+  </data>
+  <data name="InstallActionUpdate" xml:space="preserve">
+    <value>Update</value>
+  </data>
+  <data name="InstallPermissionsHeader" xml:space="preserve">
+    <value>Permissions the app asks for</value>
+  </data>
+  <data name="InstallNoPermissions" xml:space="preserve">
+    <value>The app asks for no permissions.</value>
+  </data>
+  <data name="InstallOpenApp" xml:space="preserve">
+    <value>Open</value>
+  </data>
+  <data name="InstallDoneInstalled" xml:space="preserve">
+    <value>{0} is installed. You'll find it in Start under All apps.</value>
+  </data>
+  <data name="InstallDoneUpdated" xml:space="preserve">
+    <value>{0} is updated.</value>
+  </data>
+  <data name="InstallCompileUnavailable" xml:space="preserve">
+    <value>It may start more slowly at first, because it couldn't be prepared in advance on this PC.</value>
+  </data>
+  <data name="InstallCompileFailed" xml:space="preserve">
+    <value>Preparing it in advance failed, so it may start more slowly.</value>
+  </data>
+  <data name="InstallFailedTitle" xml:space="preserve">
+    <value>The app wasn't installed</value>
+  </data>
+  <data name="InstallTrustNote" xml:space="preserve">
+    <value>Install apps only from sources you trust. Andruna checked that the file wasn't changed since the developer signed it.</value>
+  </data>
+  <data name="Perm_INTERNET" xml:space="preserve">
+    <value>Full network access</value>
+  </data>
+  <data name="Perm_ACCESS_NETWORK_STATE" xml:space="preserve">
+    <value>View network connections</value>
+  </data>
+  <data name="Perm_POST_NOTIFICATIONS" xml:space="preserve">
+    <value>Show notifications</value>
+  </data>
+  <data name="Perm_CAMERA" xml:space="preserve">
+    <value>Take pictures and videos</value>
+  </data>
+  <data name="Perm_RECORD_AUDIO" xml:space="preserve">
+    <value>Record audio with the microphone</value>
+  </data>
+  <data name="Perm_ACCESS_FINE_LOCATION" xml:space="preserve">
+    <value>Precise location</value>
+  </data>
+  <data name="Perm_ACCESS_COARSE_LOCATION" xml:space="preserve">
+    <value>Approximate location</value>
+  </data>
+  <data name="Perm_READ_CONTACTS" xml:space="preserve">
+    <value>Read your contacts</value>
+  </data>
+  <data name="Perm_READ_EXTERNAL_STORAGE" xml:space="preserve">
+    <value>Read files in shared storage</value>
+  </data>
+  <data name="Perm_WRITE_EXTERNAL_STORAGE" xml:space="preserve">
+    <value>Change files in shared storage</value>
+  </data>
+  <data name="Perm_READ_MEDIA_IMAGES" xml:space="preserve">
+    <value>Read pictures</value>
+  </data>
+  <data name="Perm_READ_MEDIA_VIDEO" xml:space="preserve">
+    <value>Read videos</value>
+  </data>
+  <data name="Perm_BLUETOOTH_CONNECT" xml:space="preserve">
+    <value>Connect to Bluetooth devices</value>
+  </data>
+  <data name="Perm_READ_PHONE_STATE" xml:space="preserve">
+    <value>Read phone status and identity</value>
+  </data>
+  <data name="Perm_VIBRATE" xml:space="preserve">
+    <value>Control vibration</value>
+  </data>
+  <data name="Perm_WAKE_LOCK" xml:space="preserve">
+    <value>Keep the device from sleeping</value>
+  </data>
+  <data name="Perm_RECEIVE_BOOT_COMPLETED" xml:space="preserve">
+    <value>Run at startup</value>
+  </data>
+  <data name="Perm_FOREGROUND_SERVICE" xml:space="preserve">
+    <value>Run in the background</value>
+  </data>
+  <data name="PermOther" xml:space="preserve">
+    <value>Other permission</value>
+  </data>
+  <data name="AppVersionFormat" xml:space="preserve">
+    <value>Version {0}</value>
+  </data>
+  <data name="AppOpenButton" xml:space="preserve">
+    <value>Open</value>
+  </data>
+  <data name="AppPinButton" xml:space="preserve">
+    <value>Pin to Start</value>
+  </data>
+  <data name="AppPinTitle" xml:space="preserve">
+    <value>Ready to pin</value>
+  </data>
+  <data name="AppPinMessage" xml:space="preserve">
+    <value>{0} is in Start under All apps. Windows lets only you pin apps: open Start, find {0} in All apps, right-click it and choose Pin to Start.</value>
+  </data>
+  <data name="AppPinFailedTitle" xml:space="preserve">
+    <value>The shortcut couldn't be created</value>
+  </data>
+  <data name="AppPinFailedMessage" xml:space="preserve">
+    <value>Windows reported: {0}</value>
+  </data>
+  <data name="AppOpenFailedTitle" xml:space="preserve">
+    <value>The app couldn't be opened</value>
+  </data>
+  <data name="AppOpenFailedMessage" xml:space="preserve">
+    <value>Andruna couldn't open {0} ({1}). Reinstalling Andruna may fix this.</value>
+  </data>
+  <data name="AppUninstalledTitle" xml:space="preserve">
+    <value>Uninstalled</value>
+  </data>
+  <data name="AppUninstalledMessage" xml:space="preserve">
+    <value>{0} was removed from this PC.</value>
+  </data>
+  <data name="AppUninstallUnavailableTitle" xml:space="preserve">
+    <value>Uninstalling isn't available yet</value>
+  </data>
+  <data name="AppUninstallUnavailableMessage" xml:space="preserve">
+    <value>This version of the Andruna service can't uninstall apps yet. Nothing was removed.</value>
+  </data>
+  <data name="AppUninstallFailedTitle" xml:space="preserve">
+    <value>The app wasn't uninstalled</value>
+  </data>
+  <data name="AppUninstallConfirmTitle" xml:space="preserve">
+    <value>Uninstall {0}?</value>
+  </data>
+  <data name="AppUninstallConfirmMessage" xml:space="preserve">
+    <value>The app and its Start menu shortcut will be removed from this PC.</value>
+  </data>
+  <data name="AppUninstallKeepData" xml:space="preserve">
+    <value>Keep the app's data (sign-ins, settings and files) in case you install it again</value>
+  </data>
+  <data name="AppPermissionsLoading" xml:space="preserve">
+    <value>Reading the permissions...</value>
+  </data>
+  <data name="AppPermissionsNoApk" xml:space="preserve">
+    <value>The installed app files weren't found.</value>
+  </data>
+  <data name="AppPermissionsNone" xml:space="preserve">
+    <value>The app asks for no permissions.</value>
+  </data>
+  <data name="AppPermissionsFailed" xml:space="preserve">
+    <value>The permissions couldn't be read.</value>
+  </data>
+  <data name="AppSizeLabel" xml:space="preserve">
+    <value>App</value>
+  </data>
+  <data name="AppDataSizeLabel" xml:space="preserve">
+    <value>Data</value>
+  </data>
+  <data name="AppInstalledLabel" xml:space="preserve">
+    <value>Installed</value>
+  </data>
+  <data name="AppDiagnosticsButton" xml:space="preserve">
+    <value>Diagnostics</value>
+  </data>
+  <data name="AppPermissionsGrantNote" xml:space="preserve">
+    <value>Andruna asks you before an app uses a sensitive permission.</value>
+  </data>
+  <data name="DiagTitle" xml:space="preserve">
+    <value>Diagnostics</value>
+  </data>
+  <data name="DiagServiceHeader" xml:space="preserve">
+    <value>Andruna service</value>
+  </data>
+  <data name="DiagCrashesHeader" xml:space="preserve">
+    <value>Recent app crashes</value>
+  </data>
+  <data name="DiagMissingHeader" xml:space="preserve">
+    <value>Missing functions</value>
+  </data>
+  <data name="DiagMissingDescription" xml:space="preserve">
+    <value>Parts of Android that Andruna doesn't provide yet and that the app called, most-called first. A problem report includes them and helps us decide what to build next.</value>
+  </data>
+  <data name="DiagAppLabel" xml:space="preserve">
+    <value>App</value>
+  </data>
+  <data name="DiagColumnArea" xml:space="preserve">
+    <value>Area</value>
+  </data>
+  <data name="DiagColumnFunction" xml:space="preserve">
+    <value>Function</value>
+  </data>
+  <data name="DiagColumnCalls" xml:space="preserve">
+    <value>Calls</value>
+  </data>
+  <data name="DiagNoApps" xml:space="preserve">
+    <value>No apps are installed.</value>
+  </data>
+  <data name="DiagNeedsService" xml:space="preserve">
+    <value>Shown when the Andruna service is running.</value>
+  </data>
+  <data name="DiagNoCrashes" xml:space="preserve">
+    <value>No app has crashed since the service started.</value>
+  </data>
+  <data name="DiagNoMissing" xml:space="preserve">
+    <value>{0} hasn't called any missing function so far.</value>
+  </data>
+  <data name="DiagLogsHeader" xml:space="preserve">
+    <value>Logs</value>
+  </data>
+  <data name="DiagLogEmpty" xml:space="preserve">
+    <value>The log is empty.</value>
+  </data>
+  <data name="DiagLogSysd" xml:space="preserve">
+    <value>Service</value>
+  </data>
+  <data name="DiagLogHost" xml:space="preserve">
+    <value>Apps</value>
+  </data>
+  <data name="DiagOpenLogs" xml:space="preserve">
+    <value>Open logs folder</value>
+  </data>
+  <data name="DiagSaveReport" xml:space="preserve">
+    <value>Save problem report</value>
+  </data>
+  <data name="DiagReportSavedTitle" xml:space="preserve">
+    <value>Problem report saved</value>
+  </data>
+  <data name="DiagReportSavedMessage" xml:space="preserve">
+    <value>Saved to {0}. Attach this file when you report the problem. It contains the logs, the crashes and the missing functions, and no app data.</value>
+  </data>
+  <data name="DiagReportFailedTitle" xml:space="preserve">
+    <value>The problem report couldn't be saved</value>
+  </data>
+  <data name="DiagReportFileName" xml:space="preserve">
+    <value>Andruna problem report</value>
+  </data>
+  <data name="DiagReportFileType" xml:space="preserve">
+    <value>Compressed folder</value>
+  </data>
+  <data name="DiagRefresh" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="CrashWindowTitle" xml:space="preserve">
+    <value>Andruna</value>
+  </data>
+  <data name="CrashTitle" xml:space="preserve">
+    <value>{0} stopped working</value>
+  </data>
+  <data name="CrashReasonApp" xml:space="preserve">
+    <value>The app stopped because of an error inside it: {0}</value>
+  </data>
+  <data name="CrashReasonAccessViolation" xml:space="preserve">
+    <value>The app stopped because its native code accessed memory it may not use. This is often a bug in the app, or something Andruna doesn't support yet.</value>
+  </data>
+  <data name="CrashReasonStackOverflow" xml:space="preserve">
+    <value>The app stopped because it ran out of stack space, usually because of a bug in the app.</value>
+  </data>
+  <data name="CrashReasonFastFail" xml:space="preserve">
+    <value>The app stopped because it detected a serious internal error.</value>
+  </data>
+  <data name="CrashReasonHeapCorruption" xml:space="preserve">
+    <value>The app stopped because its memory was damaged.</value>
+  </data>
+  <data name="CrashReasonOutOfMemory" xml:space="preserve">
+    <value>The app ran out of memory. Closing other apps may help.</value>
+  </data>
+  <data name="CrashReasonExitCode" xml:space="preserve">
+    <value>The app's process ended unexpectedly (code {0}).</value>
+  </data>
+  <data name="CrashReopen" xml:space="preserve">
+    <value>Open again</value>
+  </data>
+  <data name="CrashReportButton" xml:space="preserve">
+    <value>Report a problem</value>
+  </data>
+  <data name="CrashClose" xml:space="preserve">
+    <value>Close</value>
+  </data>
+  <data name="CrashHint" xml:space="preserve">
+    <value>If it happens again, a problem report with the logs helps fix it. Your app data isn't included.</value>
+  </data>
+  <data name="SysdErrorInvalidPackage" xml:space="preserve">
+    <value>The file isn't a valid Android app, or it's damaged. Download it again.</value>
+  </data>
+  <data name="SysdErrorInvalidSignature" xml:space="preserve">
+    <value>The app's signature is missing or doesn't match its contents, so the file may have been changed. Andruna doesn't install it.</value>
+  </data>
+  <data name="SysdErrorSignerMismatch" xml:space="preserve">
+    <value>This update was signed by a different developer than the installed app. To protect your data, Andruna doesn't install it. If you trust the file, uninstall the installed app first.</value>
+  </data>
+  <data name="SysdErrorIncompatibleAbi" xml:space="preserve">
+    <value>The app contains code only for processors this PC can't run.</value>
+  </data>
+  <data name="SysdErrorSdkTooNew" xml:space="preserve">
+    <value>The app needs a newer Android version than Andruna provides.</value>
+  </data>
+  <data name="SysdErrorDowngrade" xml:space="preserve">
+    <value>A newer version of this app is already installed.</value>
+  </data>
+  <data name="SysdErrorInvalidSplits" xml:space="preserve">
+    <value>The files don't form one complete app.</value>
+  </data>
+  <data name="SysdErrorInstallFailed" xml:space="preserve">
+    <value>The app couldn't be saved on this PC. Check that there is free disk space and try again.</value>
+  </data>
+  <data name="SysdErrorNotPermitted" xml:space="preserve">
+    <value>The service refused the request.</value>
+  </data>
 </root>

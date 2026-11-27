@@ -4,6 +4,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:l="using:Andruna.Manager.Localization"
+    xmlns:local="using:Andruna.Manager.Pages"
     xmlns:vm="using:Andruna.Manager.Core.ViewModels"
     AllowDrop="True"
     DragOver="OnDragOver"
@@ -11,6 +12,7 @@
 
     <Grid Padding="36,20,36,24" RowSpacing="16">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -21,13 +23,18 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="{l:Str Key=LibraryTitle}" Style="{StaticResource TitleTextBlockStyle}" VerticalAlignment="Center" />
-            <Button Grid.Column="1" Command="{x:Bind Vm.RefreshCommand}" ToolTipService.ToolTip="{l:Str Key=LibraryRefresh}"
-                    AutomationProperties.Name="{l:Str Key=LibraryRefresh}">
+            <AutoSuggestBox Grid.Column="1" Width="240" QueryIcon="Find" VerticalAlignment="Center"
+                            PlaceholderText="{l:Str Key=LibrarySearchPlaceholder}"
+                            AutomationProperties.Name="{l:Str Key=LibrarySearchPlaceholder}"
+                            Text="{x:Bind Vm.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <Button Grid.Column="2" Command="{x:Bind Vm.RefreshCommand}" ToolTipService.ToolTip="{l:Str Key=LibraryRefresh}"
+                    AutomationProperties.Name="{l:Str Key=LibraryRefresh}" VerticalAlignment="Center">
                 <FontIcon Glyph="&#xE72C;" FontSize="16" />
             </Button>
-            <Button Grid.Column="2" Style="{StaticResource AccentButtonStyle}" Click="OnInstallClick">
+            <Button Grid.Column="3" Style="{StaticResource AccentButtonStyle}" Click="OnInstallClick" VerticalAlignment="Center">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE710;" FontSize="14" />
                     <TextBlock Text="{l:Str Key=InstallApkButton}" />
@@ -46,36 +53,48 @@
             </InfoBar.ActionButton>
         </InfoBar>
 
-        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="12" VerticalAlignment="Top"
+        <InfoBar Grid.Row="2"
+                 IsOpen="{x:Bind Vm.NamesOnly, Mode=OneWay}"
+                 IsClosable="True"
+                 Severity="Informational"
+                 Message="{l:Str Key=LibraryNamesOnly}" />
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="12" VerticalAlignment="Top"
                     Visibility="{x:Bind Vm.IsLoading, Mode=OneWay}">
             <ProgressRing IsActive="{x:Bind Vm.IsLoading, Mode=OneWay}" Width="20" Height="20" />
             <TextBlock Text="{l:Str Key=LibraryLoading}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
         </StackPanel>
 
-        <GridView Grid.Row="2"
+        <GridView Grid.Row="3"
                   ItemsSource="{x:Bind Vm.Packages}"
                   IsItemClickEnabled="True"
                   SelectionMode="None"
                   ItemClick="OnPackageClick">
             <GridView.ItemTemplate>
                 <DataTemplate x:DataType="vm:PackageTile">
-                    <Border Style="{StaticResource CardStyle}" Width="200" Height="150">
-                        <StackPanel Spacing="8" VerticalAlignment="Center">
-                            <Border Width="56" Height="56" CornerRadius="12" HorizontalAlignment="Center"
-                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}">
-                                <FontIcon Glyph="&#xE71D;" FontSize="28" />
-                            </Border>
+                    <Border Style="{StaticResource CardStyle}" Width="200" Height="164" ToolTipService.ToolTip="{x:Bind PackageName}">
+                        <StackPanel Spacing="6" VerticalAlignment="Center">
+                            <Grid Width="56" Height="56" CornerRadius="12" HorizontalAlignment="Center"
+                                  Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                                <FontIcon Glyph="&#xE71D;" FontSize="28" Visibility="{x:Bind local:Ui.Hide(HasIcon)}" />
+                                <Image Source="{x:Bind local:Ui.Image(IconPath)}" Visibility="{x:Bind local:Ui.Visible(HasIcon)}" Stretch="Uniform" />
+                            </Grid>
                             <TextBlock Text="{x:Bind Label}" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"
                                        Style="{StaticResource BodyStrongTextBlockStyle}" />
-                            <TextBlock Text="{x:Bind VersionText}" HorizontalAlignment="Center"
+                            <TextBlock Text="{x:Bind VersionText}" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"
                                        Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock Text="{x:Bind SizeText}" HorizontalAlignment="Center"
+                                       Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                         </StackPanel>
                     </Border>
                 </DataTemplate>
             </GridView.ItemTemplate>
         </GridView>
 
-        <StackPanel Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" MaxWidth="440"
+        <TextBlock Grid.Row="3" Text="{l:Str Key=LibraryNoMatches}" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,40,0,0"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="{x:Bind Vm.ShowNoMatches, Mode=OneWay}" />
+
+        <StackPanel Grid.Row="3" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" MaxWidth="440"
                     Visibility="{x:Bind Vm.ShowEmptyState, Mode=OneWay}">
             <FontIcon Glyph="&#xE8F1;" FontSize="56" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
             <TextBlock Text="{x:Bind Vm.EmptyTitle, Mode=OneWay}" Style="{StaticResource SubtitleTextBlockStyle}"

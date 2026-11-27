@@ -270,4 +270,346 @@
   <data name="NoticesReadFailedMessage" xml:space="preserve">
     <value>הודעה מ-Windows: {0}</value>
   </data>
+  <data name="NavDiagnostics" xml:space="preserve">
+    <value>אבחון</value>
+  </data>
+  <data name="DialogCancel" xml:space="preserve">
+    <value>ביטול</value>
+  </data>
+  <data name="LibrarySearchPlaceholder" xml:space="preserve">
+    <value>חיפוש אפליקציות</value>
+  </data>
+  <data name="LibraryNamesOnly" xml:space="preserve">
+    <value>הגרסה הזו של שירות Andruna מדווחת רק על שמות החבילות, ולכן הסמלים והגרסאות של האפליקציות עדיין לא מוצגים.</value>
+  </data>
+  <data name="LibraryNoMatches" xml:space="preserve">
+    <value>אף אפליקציה לא מתאימה לחיפוש.</value>
+  </data>
+  <data name="InstallDialogTitle" xml:space="preserve">
+    <value>התקנת אפליקציה</value>
+  </data>
+  <data name="InstallInspecting" xml:space="preserve">
+    <value>בודקים את {0}...</value>
+  </data>
+  <data name="InstallInstalling" xml:space="preserve">
+    <value>מתקינים את {0}. זה יכול לקחת כדקה.</value>
+  </data>
+  <data name="InstallVersionNew" xml:space="preserve">
+    <value>גרסה {0} ({1})</value>
+  </data>
+  <data name="InstallVersionUpdate" xml:space="preserve">
+    <value>עדכון לגרסה {0} ({1}). מותקנת כעת: {2}</value>
+  </data>
+  <data name="InstallSigner" xml:space="preserve">
+    <value>תעודת המפתח (SHA-256): {0}. שיטת חתימה v{1}.</value>
+  </data>
+  <data name="InstallActionInstall" xml:space="preserve">
+    <value>התקנה</value>
+  </data>
+  <data name="InstallActionUpdate" xml:space="preserve">
+    <value>עדכון</value>
+  </data>
+  <data name="InstallPermissionsHeader" xml:space="preserve">
+    <value>הרשאות שהאפליקציה מבקשת</value>
+  </data>
+  <data name="InstallNoPermissions" xml:space="preserve">
+    <value>האפליקציה לא מבקשת הרשאות.</value>
+  </data>
+  <data name="InstallOpenApp" xml:space="preserve">
+    <value>פתיחה</value>
+  </data>
+  <data name="InstallDoneInstalled" xml:space="preserve">
+    <value>{0} הותקנה. אפשר למצוא אותה בתפריט התחל, בכל האפליקציות.</value>
+  </data>
+  <data name="InstallDoneUpdated" xml:space="preserve">
+    <value>{0} עודכנה.</value>
+  </data>
+  <data name="InstallCompileUnavailable" xml:space="preserve">
+    <value>ייתכן שבהתחלה היא תיפתח לאט יותר, כי לא ניתן היה להכין אותה מראש במחשב הזה.</value>
+  </data>
+  <data name="InstallCompileFailed" xml:space="preserve">
+    <value>ההכנה מראש נכשלה, ולכן ייתכן שהיא תיפתח לאט יותר.</value>
+  </data>
+  <data name="InstallFailedTitle" xml:space="preserve">
+    <value>האפליקציה לא הותקנה</value>
+  </data>
+  <data name="InstallTrustNote" xml:space="preserve">
+    <value>התקינו אפליקציות רק ממקורות שאתם סומכים עליהם. Andruna בדקה שהקובץ לא שונה מאז שהמפתח חתם עליו.</value>
+  </data>
+  <data name="Perm_INTERNET" xml:space="preserve">
+    <value>גישה מלאה לרשת</value>
+  </data>
+  <data name="Perm_ACCESS_NETWORK_STATE" xml:space="preserve">
+    <value>צפייה בחיבורי הרשת</value>
+  </data>
+  <data name="Perm_POST_NOTIFICATIONS" xml:space="preserve">
+    <value>הצגת התראות</value>
+  </data>
+  <data name="Perm_CAMERA" xml:space="preserve">
+    <value>צילום תמונות וסרטונים</value>
+  </data>
+  <data name="Perm_RECORD_AUDIO" xml:space="preserve">
+    <value>הקלטת קול במיקרופון</value>
+  </data>
+  <data name="Perm_ACCESS_FINE_LOCATION" xml:space="preserve">
+    <value>מיקום מדויק</value>
+  </data>
+  <data name="Perm_ACCESS_COARSE_LOCATION" xml:space="preserve">
+    <value>מיקום משוער</value>
+  </data>
+  <data name="Perm_READ_CONTACTS" xml:space="preserve">
+    <value>קריאת אנשי הקשר</value>
+  </data>
+  <data name="Perm_READ_EXTERNAL_STORAGE" xml:space="preserve">
+    <value>קריאת קבצים באחסון המשותף</value>
+  </data>
+  <data name="Perm_WRITE_EXTERNAL_STORAGE" xml:space="preserve">
+    <value>שינוי קבצים באחסון המשותף</value>
+  </data>
+  <data name="Perm_READ_MEDIA_IMAGES" xml:space="preserve">
+    <value>קריאת תמונות</value>
+  </data>
+  <data name="Perm_READ_MEDIA_VIDEO" xml:space="preserve">
+    <value>קריאת סרטונים</value>
+  </data>
+  <data name="Perm_BLUETOOTH_CONNECT" xml:space="preserve">
+    <value>התחברות למכשירי Bluetooth</value>
+  </data>
+  <data name="Perm_READ_PHONE_STATE" xml:space="preserve">
+    <value>קריאת מצב הטלפון וזהותו</value>
+  </data>
+  <data name="Perm_VIBRATE" xml:space="preserve">
+    <value>שליטה ברטט</value>
+  </data>
+  <data name="Perm_WAKE_LOCK" xml:space="preserve">
+    <value>מניעת מעבר למצב שינה</value>
+  </data>
+  <data name="Perm_RECEIVE_BOOT_COMPLETED" xml:space="preserve">
+    <value>הפעלה עם הפעלת המערכת</value>
+  </data>
+  <data name="Perm_FOREGROUND_SERVICE" xml:space="preserve">
+    <value>פעולה ברקע</value>
+  </data>
+  <data name="PermOther" xml:space="preserve">
+    <value>הרשאה אחרת</value>
+  </data>
+  <data name="AppVersionFormat" xml:space="preserve">
+    <value>גרסה {0}</value>
+  </data>
+  <data name="AppOpenButton" xml:space="preserve">
+    <value>פתיחה</value>
+  </data>
+  <data name="AppPinButton" xml:space="preserve">
+    <value>הצמדה להתחל</value>
+  </data>
+  <data name="AppPinTitle" xml:space="preserve">
+    <value>מוכן להצמדה</value>
+  </data>
+  <data name="AppPinMessage" xml:space="preserve">
+    <value>{0} נמצאת בתפריט התחל, בכל האפליקציות. רק אתם יכולים להצמיד אפליקציות ב-Windows: פתחו את התחל, מצאו את {0} בכל האפליקציות, לחצו עליה בלחצן הימני ובחרו 'הצמד להתחל'.</value>
+  </data>
+  <data name="AppPinFailedTitle" xml:space="preserve">
+    <value>לא ניתן היה ליצור את קיצור הדרך</value>
+  </data>
+  <data name="AppPinFailedMessage" xml:space="preserve">
+    <value>Windows דיווחה: {0}</value>
+  </data>
+  <data name="AppOpenFailedTitle" xml:space="preserve">
+    <value>לא ניתן היה לפתוח את האפליקציה</value>
+  </data>
+  <data name="AppOpenFailedMessage" xml:space="preserve">
+    <value>Andruna לא הצליחה לפתוח את {0} ({1}). התקנה מחדש של Andruna עשויה לפתור את זה.</value>
+  </data>
+  <data name="AppUninstalledTitle" xml:space="preserve">
+    <value>הוסרה</value>
+  </data>
+  <data name="AppUninstalledMessage" xml:space="preserve">
+    <value>{0} הוסרה מהמחשב.</value>
+  </data>
+  <data name="AppUninstallUnavailableTitle" xml:space="preserve">
+    <value>הסרת אפליקציות עדיין לא זמינה</value>
+  </data>
+  <data name="AppUninstallUnavailableMessage" xml:space="preserve">
+    <value>הגרסה הזו של שירות Andruna עדיין לא יכולה להסיר אפליקציות. שום דבר לא הוסר.</value>
+  </data>
+  <data name="AppUninstallFailedTitle" xml:space="preserve">
+    <value>האפליקציה לא הוסרה</value>
+  </data>
+  <data name="AppUninstallConfirmTitle" xml:space="preserve">
+    <value>להסיר את {0}?</value>
+  </data>
+  <data name="AppUninstallConfirmMessage" xml:space="preserve">
+    <value>האפליקציה וקיצור הדרך שלה בתפריט התחל יוסרו מהמחשב.</value>
+  </data>
+  <data name="AppUninstallKeepData" xml:space="preserve">
+    <value>לשמור את נתוני האפליקציה (חשבונות, הגדרות וקבצים) למקרה שתתקינו אותה שוב</value>
+  </data>
+  <data name="AppPermissionsLoading" xml:space="preserve">
+    <value>קוראים את ההרשאות...</value>
+  </data>
+  <data name="AppPermissionsNoApk" xml:space="preserve">
+    <value>קבצי האפליקציה המותקנת לא נמצאו.</value>
+  </data>
+  <data name="AppPermissionsNone" xml:space="preserve">
+    <value>האפליקציה לא מבקשת הרשאות.</value>
+  </data>
+  <data name="AppPermissionsFailed" xml:space="preserve">
+    <value>לא ניתן היה לקרוא את ההרשאות.</value>
+  </data>
+  <data name="AppSizeLabel" xml:space="preserve">
+    <value>אפליקציה</value>
+  </data>
+  <data name="AppDataSizeLabel" xml:space="preserve">
+    <value>נתונים</value>
+  </data>
+  <data name="AppInstalledLabel" xml:space="preserve">
+    <value>הותקנה</value>
+  </data>
+  <data name="AppDiagnosticsButton" xml:space="preserve">
+    <value>אבחון</value>
+  </data>
+  <data name="AppPermissionsGrantNote" xml:space="preserve">
+    <value>Andruna תשאל אתכם לפני שאפליקציה משתמשת בהרשאה רגישה.</value>
+  </data>
+  <data name="DiagTitle" xml:space="preserve">
+    <value>אבחון</value>
+  </data>
+  <data name="DiagServiceHeader" xml:space="preserve">
+    <value>שירות Andruna</value>
+  </data>
+  <data name="DiagCrashesHeader" xml:space="preserve">
+    <value>קריסות אחרונות של אפליקציות</value>
+  </data>
+  <data name="DiagMissingHeader" xml:space="preserve">
+    <value>פונקציות חסרות</value>
+  </data>
+  <data name="DiagMissingDescription" xml:space="preserve">
+    <value>חלקים של Android ש-Andruna עדיין לא מספקת והאפליקציה קראה להם, מהנפוץ ביותר. הם נכללים בדוח בעיה ועוזרים לנו להחליט מה לבנות בהמשך.</value>
+  </data>
+  <data name="DiagAppLabel" xml:space="preserve">
+    <value>אפליקציה</value>
+  </data>
+  <data name="DiagColumnArea" xml:space="preserve">
+    <value>תחום</value>
+  </data>
+  <data name="DiagColumnFunction" xml:space="preserve">
+    <value>פונקציה</value>
+  </data>
+  <data name="DiagColumnCalls" xml:space="preserve">
+    <value>קריאות</value>
+  </data>
+  <data name="DiagNoApps" xml:space="preserve">
+    <value>לא מותקנות אפליקציות.</value>
+  </data>
+  <data name="DiagNeedsService" xml:space="preserve">
+    <value>מוצג כשהשירות של Andruna פועל.</value>
+  </data>
+  <data name="DiagNoCrashes" xml:space="preserve">
+    <value>אף אפליקציה לא קרסה מאז שהשירות התחיל לפעול.</value>
+  </data>
+  <data name="DiagNoMissing" xml:space="preserve">
+    <value>{0} עדיין לא קראה לאף פונקציה חסרה.</value>
+  </data>
+  <data name="DiagLogsHeader" xml:space="preserve">
+    <value>יומנים</value>
+  </data>
+  <data name="DiagLogEmpty" xml:space="preserve">
+    <value>היומן ריק.</value>
+  </data>
+  <data name="DiagLogSysd" xml:space="preserve">
+    <value>שירות</value>
+  </data>
+  <data name="DiagLogHost" xml:space="preserve">
+    <value>אפליקציות</value>
+  </data>
+  <data name="DiagOpenLogs" xml:space="preserve">
+    <value>פתיחת תיקיית היומנים</value>
+  </data>
+  <data name="DiagSaveReport" xml:space="preserve">
+    <value>שמירת דוח בעיה</value>
+  </data>
+  <data name="DiagReportSavedTitle" xml:space="preserve">
+    <value>דוח הבעיה נשמר</value>
+  </data>
+  <data name="DiagReportSavedMessage" xml:space="preserve">
+    <value>נשמר ב-{0}. צרפו את הקובץ כשאתם מדווחים על הבעיה. הוא כולל את היומנים, הקריסות והפונקציות החסרות, בלי נתוני אפליקציות.</value>
+  </data>
+  <data name="DiagReportFailedTitle" xml:space="preserve">
+    <value>לא ניתן היה לשמור את דוח הבעיה</value>
+  </data>
+  <data name="DiagReportFileName" xml:space="preserve">
+    <value>דוח בעיה של Andruna</value>
+  </data>
+  <data name="DiagReportFileType" xml:space="preserve">
+    <value>תיקייה דחוסה</value>
+  </data>
+  <data name="DiagRefresh" xml:space="preserve">
+    <value>רענון</value>
+  </data>
+  <data name="CrashWindowTitle" xml:space="preserve">
+    <value>Andruna</value>
+  </data>
+  <data name="CrashTitle" xml:space="preserve">
+    <value>{0} הפסיקה לעבוד</value>
+  </data>
+  <data name="CrashReasonApp" xml:space="preserve">
+    <value>האפליקציה נעצרה בגלל שגיאה בתוכה: {0}</value>
+  </data>
+  <data name="CrashReasonAccessViolation" xml:space="preserve">
+    <value>האפליקציה נעצרה כי הקוד המקומי שלה ניגש לזיכרון שאסור לו לגשת אליו. לרוב זו תקלה באפליקציה, או משהו ש-Andruna עדיין לא תומכת בו.</value>
+  </data>
+  <data name="CrashReasonStackOverflow" xml:space="preserve">
+    <value>האפליקציה נעצרה כי נגמר לה מקום במחסנית, לרוב בגלל תקלה באפליקציה.</value>
+  </data>
+  <data name="CrashReasonFastFail" xml:space="preserve">
+    <value>האפליקציה נעצרה כי זיהתה שגיאה פנימית חמורה.</value>
+  </data>
+  <data name="CrashReasonHeapCorruption" xml:space="preserve">
+    <value>האפליקציה נעצרה כי הזיכרון שלה נפגע.</value>
+  </data>
+  <data name="CrashReasonOutOfMemory" xml:space="preserve">
+    <value>לאפליקציה נגמר הזיכרון. סגירת אפליקציות אחרות עשויה לעזור.</value>
+  </data>
+  <data name="CrashReasonExitCode" xml:space="preserve">
+    <value>התהליך של האפליקציה הסתיים באופן לא צפוי (קוד {0}).</value>
+  </data>
+  <data name="CrashReopen" xml:space="preserve">
+    <value>פתיחה מחדש</value>
+  </data>
+  <data name="CrashReportButton" xml:space="preserve">
+    <value>דיווח על בעיה</value>
+  </data>
+  <data name="CrashClose" xml:space="preserve">
+    <value>סגירה</value>
+  </data>
+  <data name="CrashHint" xml:space="preserve">
+    <value>אם זה קורה שוב, דוח בעיה עם היומנים עוזר לתקן את זה. נתוני האפליקציה שלכם לא נכללים בו.</value>
+  </data>
+  <data name="SysdErrorInvalidPackage" xml:space="preserve">
+    <value>הקובץ אינו אפליקציית Android תקינה, או שהוא פגום. הורידו אותו שוב.</value>
+  </data>
+  <data name="SysdErrorInvalidSignature" xml:space="preserve">
+    <value>החתימה של האפליקציה חסרה או לא תואמת לתוכן שלה, ולכן ייתכן שהקובץ שונה. Andruna לא תתקין אותו.</value>
+  </data>
+  <data name="SysdErrorSignerMismatch" xml:space="preserve">
+    <value>העדכון נחתם על ידי מפתח אחר מזה של האפליקציה המותקנת. כדי להגן על הנתונים שלכם, Andruna לא תתקין אותו. אם אתם סומכים על הקובץ, הסירו קודם את האפליקציה המותקנת.</value>
+  </data>
+  <data name="SysdErrorIncompatibleAbi" xml:space="preserve">
+    <value>האפליקציה כוללת קוד רק למעבדים שהמחשב הזה לא יכול להריץ.</value>
+  </data>
+  <data name="SysdErrorSdkTooNew" xml:space="preserve">
+    <value>האפליקציה דורשת גרסת Android חדשה יותר מזו ש-Andruna מספקת.</value>
+  </data>
+  <data name="SysdErrorDowngrade" xml:space="preserve">
+    <value>כבר מותקנת גרסה חדשה יותר של האפליקציה.</value>
+  </data>
+  <data name="SysdErrorInvalidSplits" xml:space="preserve">
+    <value>הקבצים לא מרכיבים אפליקציה אחת שלמה.</value>
+  </data>
+  <data name="SysdErrorInstallFailed" xml:space="preserve">
+    <value>לא ניתן היה לשמור את האפליקציה במחשב. בדקו שיש מקום פנוי בדיסק ונסו שוב.</value>
+  </data>
+  <data name="SysdErrorNotPermitted" xml:space="preserve">
+    <value>השירות דחה את הבקשה.</value>
+  </data>
 </root>
