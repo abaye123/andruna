@@ -43,6 +43,10 @@ OUT = Path(os.environ.get("LIBCORE_TESTS_OUT", ROOT / "out" / "libcore-tests"))
 JAR_NAME = "libcore-tests.jar"
 MAIN = "andruna.libcoretest.Main"
 TAG = "##lt "
+# Diagnostics of the S1 runner: a guest import it does not implement, and the
+# guest function a fault happened in.
+UNRESOLVED_RE = re.compile(r"unresolved guest import called: (\S+)")
+FAULT_RE = re.compile(r"guest fault \S+ at \S+ (?:\S+ )?\(([^)+]+)")
 
 DEFAULT_RUNNER = "s1"
 
@@ -139,7 +143,12 @@ class Expectation:
 
 CATEGORIES = {
     "lx-syscall": "a Linux system call or file the Linux layer does not provide yet",
+    "s1-libc": "a libc function the spike S1 runner's guest libc does not implement "
+               "(not an issue with bionic on andruna-linker)",
     "missing-native": "a JNI method or native library the guest build lacks",
+    "bootclasspath": "a module the minimal boot class path leaves out (Conscrypt and "
+                     "Bouncy Castle: no security providers, so no SecureRandom, digests, "
+                     "temporary files or serialization hashes)",
     "icu-data": "ICU data or locale data missing or different",
     "environment": "the test assumes a device environment (users, paths, properties, network)",
     "art": "an ART runtime problem (crash, hang, wrong result) to investigate",
@@ -170,8 +179,15 @@ def load_expectations(path):
 def categorize(reason):
     """A first guess at the category of a failure, for suggested expectations."""
     r = reason or ""
+    if re.search(r"Unable to configure default providers|sun\.security\.jca\.Providers|"
+                 r"UUID\$Holder|TempFileHelper", r):
+        return "bootclasspath"
+    if "libjavacoretests.so" in r:
+        return "harness"
     if "UnsatisfiedLinkError" in r or "No implementation found" in r:
         return "missing-native"
+    if "unimplemented guest imports" in r:
+        return "s1-libc"
     if re.search(r"ENOSYS|Function not implemented|EOPNOTSUPP|Operation not supported", r):
         return "lx-syscall"
     if re.search(r"ErrnoException|ENOENT|EACCES|EPERM|EINVAL", r):
@@ -240,6 +256,8 @@ def run_process(cmd, env, logf, test_timeout, results, order):
     pending = None
     done = False
     tail = []
+    enosys = []
+    fault = None
     timed_out = False
     last = time.monotonic()
     while True:
@@ -255,8 +273,15 @@ def run_process(cmd, env, logf, test_timeout, results, order):
             break
         logf.write(line + "\n")
         if not line.startswith(TAG):
-            if line.strip():
-                tail = (tail + [line.strip()])[-3:]
+            s = line.strip()
+            m = UNRESOLVED_RE.search(s)
+            if m and m.group(1) not in enosys:
+                enosys.append(m.group(1))
+            m = FAULT_RE.search(s)
+            if m:
+                fault = m.group(1)
+            if s:
+                tail = (tail + [s])[-3:]
             continue
         last = time.monotonic()
         parts = line[len(TAG):].split(" ", 3)
@@ -264,6 +289,8 @@ def run_process(cmd, env, logf, test_timeout, results, order):
         if kind == "START":
             pending = parts[1]
             tail = []
+            enosys = []
+            fault = None
         elif kind in ("PASS", "FAIL", "SKIP"):
             tid = parts[1]
             ms = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
@@ -291,7 +318,13 @@ def run_process(cmd, env, logf, test_timeout, results, order):
     logf.write(f"### exit {code}\n")
     if timed_out:
         logf.write("### killed: test timeout\n")
-    return pending, done, code, timed_out, tail
+    # The runner's diagnostics name the cause better than the last lines.
+    info = []
+    if fault:
+        info.append(f"guest fault in {fault}")
+    if enosys:
+        info.append("unimplemented guest imports called: " + " ".join(enosys))
+    return pending, done, code, timed_out, info or tail
 
 
 def kill(proc):
