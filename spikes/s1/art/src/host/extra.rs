@@ -181,12 +181,17 @@ gfn! {
     pub unsafe fn h_void1(_a: usize) -> () {}
 }
 
+/// bionic's `struct mallinfo` (ten size_t fields, 80 bytes).
+#[repr(C)]
+pub struct Mallinfo([usize; 10]);
+
 gfn! {
-    /// `mallinfo` (returned in memory, System V): all zero.
-    pub unsafe fn h_mallinfo(out: *mut u8) -> *mut u8 {
-        // SAFETY: the caller's 80-byte struct mallinfo return slot.
-        unsafe { core::ptr::write_bytes(out, 0, 80) };
-        out
+    /// `mallinfo`: all zero. Returned by value, so the compiler uses the
+    /// guest convention for a large result (a hidden pointer in RDI on
+    /// x86_64, in X8 on arm64; the round 3 version took it as the first
+    /// argument, which is wrong on arm64).
+    pub unsafe fn h_mallinfo() -> Mallinfo {
+        Mallinfo([0; 10])
     }
 }
 
