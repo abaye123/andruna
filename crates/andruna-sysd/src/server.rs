@@ -137,6 +137,13 @@ impl Context {
                     }
                 }
             }
+            Request::InspectPackage { .. }
+            | Request::InstallPackage { .. }
+            | Request::UninstallPackage { .. }
+            | Request::ListPackageInfo { .. } => Response::error(
+                ErrorCode::UnknownRequest,
+                "package manager requests are not wired yet",
+            ),
         }
     }
 
