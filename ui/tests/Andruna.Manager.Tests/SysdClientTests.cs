@@ -33,6 +33,33 @@ public class SysdClientTests
     }
 
     [Fact]
+    public async Task CancelledRequest_DoesNotLeaveItsAnswerForTheNextRequest()
+    {
+        await using var sysd = FakeSysd.Running();
+        var slow = true;
+        var answer = sysd.Handler;
+        sysd.Handler = (id, req) =>
+        {
+            if (slow)
+            {
+                slow = false;
+                Thread.Sleep(300);
+            }
+
+            return answer(id, req);
+        };
+        using var client = sysd.Client();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetStatusAsync(cts.Token));
+        await Task.Delay(400);
+
+        var status = await client.GetStatusAsync();
+
+        Assert.Equal(SysdOutcome.Ok, status.Outcome);
+    }
+
+    [Fact]
     public async Task Status_IsDecoded()
     {
         await using var sysd = FakeSysd.Running();

@@ -202,6 +202,14 @@ public sealed class SysdClient : ISysdClient, IDisposable
             Drop();
             return (SysdResult<SysdResponse>.Fail(SysdOutcome.ProtocolError, "the service did not answer in time"), false);
         }
+        catch (OperationCanceledException)
+        {
+            // The caller cancelled mid-request: the answer may still arrive on
+            // this connection and would be read as the answer to the next
+            // request, so the connection is dropped before cancelling.
+            Drop();
+            throw;
+        }
     }
 
     /// <summary>Opens and checks a connection; returns null on success, else the failure.</summary>
