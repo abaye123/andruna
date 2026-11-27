@@ -34,9 +34,17 @@
 //! - `madvise(MADV_DONTNEED)` decommits and recommits the pages. Another
 //!   thread touching them during that window takes an access violation; the
 //!   signal layer must retry such faults (see [`crate::signal`]).
-//! - File-backed and shared mappings return `ENOSYS` for now. They are
-//!   built on `MapViewOfFile3` with placeholders and need 64 KiB aligned
-//!   file offsets (`docs/spec/03-components.md`, andruna-lx, Memory).
+//! - File mappings are private memory filled from the file when the
+//!   mapping is made (`pread`). For `MAP_PRIVATE` this is Linux behavior,
+//!   except that later changes to the file are never seen (Linux leaves
+//!   that unspecified) and pages wholly past the end of the file read as
+//!   zero instead of raising `SIGBUS`. A read-only `MAP_SHARED` mapping is
+//!   the same snapshot: writes to the file after the mapping was made are
+//!   not seen, and `mprotect` to `PROT_WRITE` fails with `EACCES`.
+//!   Writable `MAP_SHARED` file mappings fail with `ENODEV` (the error of a
+//!   file system that cannot map files), and shared anonymous mappings
+//!   with `ENOSYS`. Sharing views between processes (`MapViewOfFile3` with
+//!   placeholders, `docs/spec/03-components.md`) is the next step.
 //! - `MAP_32BIT` returns `ENOMEM` for now (TODO: `MEM_ADDRESS_REQUIREMENTS`).
 
 use std::collections::BTreeMap;
@@ -118,6 +126,9 @@ enum Kind {
         alloc: usize,
         prot: u32,
         committed: bool,
+        /// A read-only shared file mapping: `PROT_WRITE` is refused
+        /// (`EACCES`), since writes would not reach the file.
+        no_write: bool,
     },
 }
 
@@ -161,12 +172,92 @@ pub fn mmap(
     fd: i32,
     offset: i64,
 ) -> SysResult<usize> {
-    lock(&SPACE).mmap(addr, len, prot, flags, fd, offset)
+    let a = if flags & MAP_ANONYMOUS == 0 {
+        map_file(addr, len, prot, flags, fd, offset)?
+    } else {
+        lock(&SPACE).mmap(addr, len, prot, flags, fd, offset)?
+    };
+    if let Some(l) = page_round_up(len) {
+        clear_names(&mut lock(&NAMES), a, a + l);
+        if flags & MAP_ANONYMOUS == 0
+            && let Ok(f) = crate::fd::FDS.get(fd)
+            && let Some(p) = f.ops().path()
+        {
+            lock(&NAMES).insert(a, (a + l, p));
+        }
+    }
+    Ok(a)
+}
+
+/// A file mapping: private memory filled from the file (see the module
+/// documentation).
+fn map_file(
+    addr: usize,
+    len: usize,
+    prot: u32,
+    flags: u32,
+    fd: i32,
+    offset: i64,
+) -> SysResult<usize> {
+    let shared = match flags & MAP_TYPE {
+        MAP_PRIVATE => false,
+        MAP_SHARED | MAP_SHARED_VALIDATE => true,
+        _ => return Err(Errno::EINVAL),
+    };
+    if offset < 0 || !(offset as u64).is_multiple_of(PAGE_SIZE as u64) {
+        return Err(Errno::EINVAL);
+    }
+    let file = crate::fd::FDS.get(fd)?;
+    use crate::linux::fcntl::{O_RDONLY, O_RDWR};
+    if !matches!(file.access(), O_RDONLY | O_RDWR) {
+        return Err(Errno::EACCES);
+    }
+    if !file.ops().mappable() {
+        return Err(Errno::ENODEV);
+    }
+    if shared && prot & PROT_WRITE != 0 {
+        if file.access() != O_RDWR {
+            return Err(Errno::EACCES);
+        }
+        // Writable shared file mappings are not supported yet.
+        return Err(Errno::ENODEV);
+    }
+    let anon = (flags & !MAP_TYPE & !MAP_SHARED_VALIDATE) | MAP_PRIVATE | MAP_ANONYMOUS;
+    let start = lock(&SPACE).mmap(addr, len, PROT_READ | PROT_WRITE, anon, -1, 0)?;
+    let size = page_round_up(len).ok_or(Errno::EINVAL)?;
+    let mut done = 0usize;
+    while done < size {
+        // SAFETY: the new mapping is writable and nothing else refers to
+        // it yet.
+        let buf = unsafe { crate::util::UserBuf::new((start + done) as *mut u8, size - done) };
+        match file.pread(buf, offset + done as i64) {
+            Ok(0) => break,
+            Ok(n) => done += n,
+            Err(e) => {
+                let _ = munmap(start, size);
+                return Err(e);
+            }
+        }
+    }
+    let mut s = lock(&SPACE);
+    if prot != PROT_READ | PROT_WRITE {
+        s.mprotect(start, size, prot)?;
+    }
+    if shared {
+        s.split_at(start)?;
+        s.split_at(start + size)?;
+        s.set_no_write(start, start + size);
+    }
+    Ok(start)
 }
 
 /// `munmap` on the process address space.
 pub fn munmap(addr: usize, len: usize) -> SysResult<()> {
-    lock(&SPACE).munmap(addr, len)
+    lock(&SPACE).munmap(addr, len)?;
+    if let Some(l) = page_round_up(len) {
+        clear_names(&mut lock(&NAMES), addr, addr.saturating_add(l));
+    }
+    Ok(())
 }
 
 /// `mprotect` on the process address space.
@@ -231,6 +322,110 @@ pub fn mremap(addr: usize, old_len: usize, new_len: usize, flags: u32) -> SysRes
     Ok(to)
 }
 
+/// Names of mappings for `/proc/self/maps` (start -> (end, name)).
+static NAMES: Mutex<BTreeMap<usize, (usize, Vec<u8>)>> = Mutex::new(BTreeMap::new());
+
+/// Names `[addr, addr+len)` (`prctl(PR_SET_VMA_ANON_NAME)`, file paths).
+/// An empty name removes it.
+pub fn set_name(addr: usize, len: usize, name: &[u8]) -> SysResult<()> {
+    let (start, end) = check_range(addr, len)?;
+    if lock(&SPACE).require_mapped(start, end).is_err() {
+        return Err(Errno::ENOMEM);
+    }
+    let mut n = lock(&NAMES);
+    clear_names(&mut n, start, end);
+    if !name.is_empty() {
+        n.insert(start, (end, name.to_vec()));
+    }
+    Ok(())
+}
+
+/// Removes names in `[start, end)`, cutting names that overlap it.
+fn clear_names(n: &mut BTreeMap<usize, (usize, Vec<u8>)>, start: usize, end: usize) {
+    let hit: Vec<usize> = n
+        .range(..end)
+        .filter(|(_, (e, _))| *e > start)
+        .map(|(s, _)| *s)
+        .collect();
+    for s in hit {
+        let (e, name) = n.remove(&s).expect("present");
+        if s < start {
+            n.insert(s, (start, name.clone()));
+        }
+        if e > end {
+            n.insert(end, (e, name));
+        }
+    }
+}
+
+/// `/proc/self/maps` for lx's mappings: one line per run of pages with
+/// the same protection and name.
+pub fn maps() -> Vec<u8> {
+    let s = lock(&SPACE);
+    let names = lock(&NAMES);
+    let name_at = |a: usize| {
+        names
+            .range(..=a)
+            .next_back()
+            .filter(|(_, (e, _))| *e > a)
+            .map(|(_, (_, n))| n.clone())
+    };
+    // (start, end, protection, shared, name)
+    type Line = (usize, usize, u32, bool, Option<Vec<u8>>);
+    let mut lines: Vec<Line> = Vec::new();
+    for (&start, span) in &s.spans {
+        let Kind::Mapped { prot, no_write, .. } = span.kind else {
+            continue;
+        };
+        // Split at name boundaries inside the span.
+        let mut cuts = vec![start, span.end];
+        for (&ns, (ne, _)) in names.range(start..span.end) {
+            cuts.push(ns);
+            cuts.push((*ne).min(span.end));
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        for w in cuts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let name = name_at(a);
+            match lines.last_mut() {
+                Some(l) if l.1 == a && l.2 == prot && l.3 == no_write && l.4 == name => l.1 = b,
+                _ => lines.push((a, b, prot, no_write, name)),
+            }
+        }
+    }
+    let mut out = String::new();
+    for (a, b, prot, shared, name) in lines {
+        let p = |bit: u32, c: char| if prot & bit != 0 { c } else { '-' };
+        out.push_str(&format!(
+            "{a:08x}-{b:08x} {}{}{}{} 00000000 00:00 0",
+            p(PROT_READ, 'r'),
+            p(PROT_WRITE, 'w'),
+            p(PROT_EXEC, 'x'),
+            if shared { 's' } else { 'p' },
+        ));
+        if let Some(n) = name {
+            out.push_str("                          ");
+            out.push_str(&String::from_utf8_lossy(&n));
+        }
+        out.push('\n');
+    }
+    out.into_bytes()
+}
+
+/// Whether lx has a mapping at `addr` (`None` if the table is busy, as it
+/// can be when a fault happens while it is locked).
+pub fn is_mapped(addr: usize) -> Option<bool> {
+    let s = SPACE.try_lock().ok()?;
+    Some(matches!(
+        s.pieces(addr, addr + 1).first(),
+        Some(Piece::Own {
+            kind: Kind::Mapped { .. },
+            ..
+        })
+    ))
+}
+
 /// `madvise` on the process address space.
 pub fn madvise(addr: usize, len: usize, advice: i32) -> SysResult<()> {
     lock(&SPACE).madvise(addr, len, advice)
@@ -266,13 +461,14 @@ impl AddressSpace {
         };
         match flags & MAP_TYPE {
             MAP_PRIVATE => {}
+            // Shared anonymous memory (between processes after fork, or
+            // through memfd) is not supported yet.
             MAP_SHARED | MAP_SHARED_VALIDATE => return Err(Errno::ENOSYS),
             _ => return Err(Errno::EINVAL),
         }
         if flags & MAP_ANONYMOUS == 0 {
-            // TODO(spec 03, andruna-lx Memory): file mappings on
-            // MapViewOfFile3 with placeholders.
-            return Err(Errno::ENOSYS);
+            // File mappings go through `map_file`.
+            return Err(Errno::EINVAL);
         }
         if flags & MAP_HUGETLB != 0 || cfg!(target_arch = "x86_64") && flags & MAP_32BIT != 0 {
             return Err(Errno::ENOMEM);
@@ -342,6 +538,19 @@ impl AddressSpace {
         }
         let (start, end) = check_range(addr, len)?;
         let pieces = self.require_mapped(start, end)?;
+        if prot & PROT_WRITE != 0
+            && pieces.iter().any(|p| {
+                matches!(
+                    p,
+                    Piece::Own {
+                        kind: Kind::Mapped { no_write: true, .. },
+                        ..
+                    }
+                )
+            })
+        {
+            return Err(Errno::EACCES);
+        }
         let page_prot = page_protection(prot);
         for p in pieces {
             match p {
@@ -407,6 +616,16 @@ impl AddressSpace {
         }
         self.merge_around(start, end);
         Ok(())
+    }
+
+    /// Marks the mapped spans of `[start, end)` as read-only shared file
+    /// mappings.
+    fn set_no_write(&mut self, start: usize, end: usize) {
+        for (_, span) in self.spans.range_mut(start..end) {
+            if let Kind::Mapped { no_write, .. } = &mut span.kind {
+                *no_write = true;
+            }
+        }
     }
 
     /// Whether `[addr, addr+len)` is entirely mapped by lx, and with what
@@ -502,6 +721,7 @@ impl AddressSpace {
                         alloc: s,
                         prot,
                         committed: commit.is_some(),
+                        no_write: false,
                     },
                 },
             );
@@ -856,7 +1076,8 @@ mod tests {
             s.mmap(0, 4096, RW, MAP_SHARED | MAP_ANONYMOUS, -1, 0),
             Err(Errno::ENOSYS)
         );
-        assert_eq!(s.mmap(0, 4096, RW, MAP_PRIVATE, 3, 0), Err(Errno::ENOSYS));
+        // File mappings go through `mmap`, not the table.
+        assert_eq!(s.mmap(0, 4096, RW, MAP_PRIVATE, 3, 0), Err(Errno::EINVAL));
         assert_eq!(s.munmap(0x10001, 4096), Err(Errno::EINVAL));
         assert_eq!(s.munmap(0x10000, 0), Err(Errno::EINVAL));
         assert_eq!(s.mprotect(0x10001, 4096, RW), Err(Errno::EINVAL));
@@ -932,9 +1153,13 @@ mod tests {
 
         // MAP_FIXED into free memory at a page (not 64 KiB) boundary.
         let f = a + 3 * PAGE_SIZE;
-        let r = s
-            .mmap(f, 2 * PAGE_SIZE, RW, ANON | MAP_FIXED_NOREPLACE, -1, 0)
-            .unwrap();
+        let r = match s.mmap(f, 2 * PAGE_SIZE, RW, ANON | MAP_FIXED_NOREPLACE, -1, 0) {
+            Ok(r) => r,
+            // Another test thread mapped the block that was just freed:
+            // nothing left to check here.
+            Err(Errno::EEXIST) => return,
+            Err(e) => panic!("{e:?}"),
+        };
         assert_eq!(r, f);
         write(f + PAGE_SIZE, 1);
         assert_eq!(state(f - PAGE_SIZE).0, 0x2000, "rest stays placeholder");

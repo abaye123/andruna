@@ -11,6 +11,7 @@ use crate::linux::time::Timespec;
 use crate::process;
 use crate::sys::OwnedHandle;
 use crate::sys::file::{self as os, REPARSE_TAG_LX_SYMLINK, REPARSE_TAG_SYMLINK, WriteAt};
+
 use crate::sys::time::UNIX_EPOCH_AS_FILETIME;
 use crate::util::{UserBuf, lock};
 
@@ -23,13 +24,20 @@ const ATTR_READONLY: u32 = 0x1;
 pub struct RegularFile {
     handle: OwnedHandle,
     pos: Mutex<u64>,
+    /// The Linux path it was opened by (empty if unknown).
+    path: Vec<u8>,
 }
 
 impl RegularFile {
     pub fn new(handle: OwnedHandle) -> Self {
+        Self::with_path(handle, Vec::new())
+    }
+
+    pub fn with_path(handle: OwnedHandle, path: Vec<u8>) -> Self {
         Self {
             handle,
             pos: Mutex::new(0),
+            path,
         }
     }
 
@@ -107,23 +115,108 @@ impl FileOps for RegularFile {
     fn stat(&self) -> SysResult<StatData> {
         stat_of(&self.handle)
     }
+
+    fn truncate(&self, len: u64) -> SysResult<()> {
+        os::set_len(self.handle.raw(), len)
+    }
+
+    /// A handle without write access cannot be flushed on Windows; Linux
+    /// allows `fsync` on any descriptor, so that case succeeds (nothing was
+    /// written through it).
+    fn sync(&self) -> SysResult<()> {
+        match os::flush(self.handle.raw()) {
+            Err(Errno::EACCES) | Err(Errno::EBADF) => Ok(()),
+            r => r,
+        }
+    }
+
+    fn mappable(&self) -> bool {
+        true
+    }
+
+    fn path(&self) -> Option<Vec<u8>> {
+        (!self.path.is_empty()).then(|| self.path.clone())
+    }
+}
+
+impl RegularFile {
+    /// The raw handle, for lx's own use.
+    pub fn handle(&self) -> &OwnedHandle {
+        &self.handle
+    }
 }
 
 /// A directory. Its Linux path is kept for `*at` calls relative to it.
+///
+/// `getdents64` reads the whole listing when it starts at offset 0 and
+/// returns it from that snapshot; the offset is the index of the next
+/// entry. `.` and `..` come first, as Linux file systems report them.
 #[derive(Debug)]
 pub struct Directory {
     handle: OwnedHandle,
     path: Vec<u8>,
-    pos: Mutex<u64>,
+    pos: Mutex<(u64, Option<Vec<DirEntry>>)>,
 }
+
+/// One entry of a listing: inode, `d_type`, name.
+#[derive(Clone, Debug)]
+pub struct DirEntry {
+    pub ino: u64,
+    pub kind: u8,
+    pub name: Vec<u8>,
+}
+
+pub const DT_DIR: u8 = 4;
+pub const DT_REG: u8 = 8;
+pub const DT_LNK: u8 = 10;
 
 impl Directory {
     pub fn new(handle: OwnedHandle, path: Vec<u8>) -> Self {
         Self {
             handle,
             path,
-            pos: Mutex::new(0),
+            pos: Mutex::new((0, None)),
         }
+    }
+
+    fn list(&self) -> SysResult<Vec<DirEntry>> {
+        let me = os::info(self.handle.raw())?.file_id;
+        let mut out = vec![
+            DirEntry {
+                ino: me,
+                kind: DT_DIR,
+                name: b".".to_vec(),
+            },
+            DirEntry {
+                ino: me,
+                kind: DT_DIR,
+                name: b"..".to_vec(),
+            },
+        ];
+        for e in os::read_dir(self.handle.raw())? {
+            let dot = [u16::from(b'.')];
+            let dotdot = [u16::from(b'.'), u16::from(b'.')];
+            if e.name == dot || e.name == dotdot {
+                if e.name == dotdot {
+                    out[1].ino = e.file_id;
+                }
+                continue;
+            }
+            let reparse = e.attributes & 0x400 != 0;
+            let kind = if reparse && is_symlink_tag(e.reparse_tag) {
+                DT_LNK
+            } else if e.attributes & 0x10 != 0 {
+                DT_DIR
+            } else {
+                DT_REG
+            };
+            out.push(DirEntry {
+                ino: e.file_id,
+                kind,
+                name: super::path::decode_component(&e.name),
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -137,15 +230,35 @@ impl FileOps for Directory {
     }
 
     fn seek(&self, offset: i64, whence: i32) -> SysResult<u64> {
-        // Directory offsets are cookies for getdents (next round).
+        // Offsets are entry indexes; seeking to 0 starts a new listing.
         let mut pos = lock(&self.pos);
         let new = match whence {
             SEEK_SET => offset,
-            SEEK_CUR => (*pos as i64).checked_add(offset).ok_or(Errno::EINVAL)?,
+            SEEK_CUR => (pos.0 as i64).checked_add(offset).ok_or(Errno::EINVAL)?,
             _ => return Err(Errno::EINVAL),
         };
-        *pos = u64::try_from(new).map_err(|_| Errno::EINVAL)?;
-        Ok(*pos)
+        pos.0 = u64::try_from(new).map_err(|_| Errno::EINVAL)?;
+        if pos.0 == 0 {
+            pos.1 = None;
+        }
+        Ok(pos.0)
+    }
+
+    fn sync(&self) -> SysResult<()> {
+        Ok(())
+    }
+
+    fn path(&self) -> Option<Vec<u8>> {
+        Some(self.path.clone())
+    }
+
+    fn getdents(&self, out: &mut Vec<u8>, max: usize) -> SysResult<()> {
+        let mut pos = lock(&self.pos);
+        if pos.1.is_none() || pos.0 == 0 {
+            pos.1 = Some(self.list()?);
+        }
+        let (p, list) = &mut *pos;
+        write_dirents(list.as_ref().expect("listed"), p, out, max)
     }
 
     fn stat(&self) -> SysResult<StatData> {
@@ -155,6 +268,38 @@ impl FileOps for Directory {
     fn dir_path(&self) -> Option<&[u8]> {
         Some(&self.path)
     }
+}
+
+/// Appends `linux_dirent64` records for `entries[*pos..]` to `out`, at most
+/// `max` bytes, and advances `pos` (the index of the next entry, also the
+/// `d_off` of the previous one). `EINVAL` if not even one record fits.
+pub fn write_dirents(
+    entries: &[DirEntry],
+    pos: &mut u64,
+    out: &mut Vec<u8>,
+    max: usize,
+) -> SysResult<()> {
+    let mut i = *pos as usize;
+    while let Some(e) = entries.get(i) {
+        // d_ino, d_off, d_reclen, d_type, name, NUL, padded to 8.
+        let len = (19 + e.name.len() + 1).next_multiple_of(8);
+        if out.len() + len > max {
+            if out.is_empty() {
+                return Err(Errno::EINVAL);
+            }
+            break;
+        }
+        let start = out.len();
+        out.extend_from_slice(&e.ino.to_le_bytes());
+        out.extend_from_slice(&(i as i64 + 1).to_le_bytes());
+        out.extend_from_slice(&(len as u16).to_le_bytes());
+        out.push(e.kind);
+        out.extend_from_slice(&e.name);
+        out.resize(start + len, 0);
+        i += 1;
+    }
+    *pos = i as u64;
+    Ok(())
 }
 
 /// Whether a reparse tag is a symbolic link in the Linux sense.

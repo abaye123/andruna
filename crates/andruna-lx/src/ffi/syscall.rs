@@ -17,13 +17,14 @@ use core::sync::atomic::AtomicU32;
 use super::fs::{sys_fstat, sys_fstatat, sys_openat, sys_pread, sys_pwrite, sys_read, sys_write};
 use super::mem::sys_mmap;
 use super::time::{sys_clock_getres, sys_clock_gettime, sys_clock_nanosleep, sys_nanosleep};
-use super::{guard, read_arg};
+use super::{guard, read_arg, write_arg};
 use crate::errno::{Errno, SysResult};
 use crate::fd::FDS;
 use crate::linux::fcntl::{AT_FDCWD, AT_SYMLINK_NOFOLLOW};
+use crate::linux::signal::{KernelSigaction, SigInfo, SigSet, StackT};
 use crate::linux::syscall_nr::{NATIVE, Sysno};
 use crate::linux::time::Timespec;
-use crate::{fs, futex, mem, process};
+use crate::{fs, futex, mem, process, sched, signal};
 
 /// Dispatches one system call. Arguments are the raw 64-bit values.
 ///
@@ -33,6 +34,8 @@ use crate::{fs, futex, mem, process};
 pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
     let sysno = NATIVE.lookup(nr).ok_or(Errno::ENOSYS)?;
     let int = |i: usize| a[i] as i32;
+    // SAFETY: path arguments are NUL-terminated strings (contract).
+    let path = |p: usize| unsafe { super::path_arg(p as *const c_char) };
     let uint = |i: usize| a[i] as u32;
     let ptr = |i: usize| a[i] as usize;
     // SAFETY: for every call below, the pointer arguments are forwarded
@@ -69,12 +72,263 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
             Sysno::ClockGettime => sys_clock_gettime(int(0), ptr(1) as _),
             Sysno::ClockGetres => sys_clock_getres(int(0), ptr(1) as _),
             Sysno::ClockNanosleep => sys_clock_nanosleep(int(0), int(1), ptr(2) as _).map(|()| 0),
-            Sysno::Futex => sys_futex(ptr(0), int(1), uint(2), ptr(3), uint(5)),
+            Sysno::Futex => sys_futex(ptr(0), int(1), uint(2), ptr(3), ptr(4), uint(5)),
             Sysno::Mremap => mem::mremap(ptr(0), ptr(1), ptr(2), uint(3)).map(|a| a as i64),
             Sysno::Getcwd => sys_getcwd(ptr(0) as *mut u8, ptr(1)),
             Sysno::Chdir => fs::chdir(super::path_arg(ptr(0) as *const c_char)?).map(|()| 0),
+            Sysno::RtSigaction => sys_rt_sigaction(int(0), ptr(1) as _, ptr(2) as _, ptr(3)),
+            Sysno::RtSigprocmask => sys_rt_sigprocmask(int(0), ptr(1) as _, ptr(2) as _, ptr(3)),
+            Sysno::RtSigreturn => sys_rt_sigreturn(a[0] as u64),
+            Sysno::RtSigpending => {
+                if ptr(1) != 8 {
+                    return Err(Errno::EINVAL);
+                }
+                write_arg(ptr(0) as *mut SigSet, signal::sigpending()).map(|()| 0)
+            }
+            Sysno::RtSigtimedwait => {
+                sys_rt_sigtimedwait(ptr(0) as _, ptr(1) as _, ptr(2) as _, ptr(3))
+            }
+            Sysno::RtSigqueueinfo => {
+                let info = queue_info(int(1), ptr(2) as _)?;
+                signal::kill(int(0), int(1), Some(info)).map(|()| 0)
+            }
+            Sysno::RtTgsigqueueinfo => {
+                let info = queue_info(int(2), ptr(3) as _)?;
+                signal::tgkill(Some(int(0)), int(1), int(2), Some(info)).map(|()| 0)
+            }
+            Sysno::RtSigsuspend => {
+                let m = read_arg(ptr(0) as *const SigSet)?;
+                signal::sigsuspend(m, ptr(1)).map(|()| 0)
+            }
+            Sysno::Pause => signal::sigsuspend(signal::current().blocked(), 8).map(|()| 0),
+            Sysno::Sigaltstack => sys_sigaltstack(ptr(0) as _, ptr(1) as _),
+            Sysno::Kill => signal::kill(int(0), int(1), None).map(|()| 0),
+            Sysno::Tkill => signal::tgkill(None, int(0), int(1), None).map(|()| 0),
+            Sysno::Tgkill => signal::tgkill(Some(int(0)), int(1), int(2), None).map(|()| 0),
+            Sysno::Getdents64 => sys_getdents64(int(0), ptr(1) as *mut u8, uint(2) as usize),
+            Sysno::Unlinkat => fs::unlinkat(int(0), path(ptr(1))?, uint(2)).map(|()| 0),
+            Sysno::Unlink => fs::unlinkat(AT_FDCWD, path(ptr(0))?, 0).map(|()| 0),
+            Sysno::Rmdir => fs::unlinkat(AT_FDCWD, path(ptr(0))?, fs::AT_REMOVEDIR).map(|()| 0),
+            Sysno::Mkdirat => fs::mkdirat(int(0), path(ptr(1))?, uint(2)).map(|()| 0),
+            Sysno::Mkdir => fs::mkdirat(AT_FDCWD, path(ptr(0))?, uint(1)).map(|()| 0),
+            Sysno::Renameat => {
+                fs::renameat2(int(0), path(ptr(1))?, int(2), path(ptr(3))?, 0).map(|()| 0)
+            }
+            Sysno::Renameat2 => {
+                fs::renameat2(int(0), path(ptr(1))?, int(2), path(ptr(3))?, uint(4)).map(|()| 0)
+            }
+            Sysno::Rename => {
+                fs::renameat2(AT_FDCWD, path(ptr(0))?, AT_FDCWD, path(ptr(1))?, 0).map(|()| 0)
+            }
+            Sysno::Symlinkat => fs::symlinkat(path(ptr(0))?, int(1), path(ptr(2))?).map(|()| 0),
+            Sysno::Symlink => fs::symlinkat(path(ptr(0))?, AT_FDCWD, path(ptr(1))?).map(|()| 0),
+            Sysno::Readlinkat => sys_readlinkat(int(0), path(ptr(1))?, ptr(2) as *mut u8, a[3]),
+            Sysno::Readlink => sys_readlinkat(AT_FDCWD, path(ptr(0))?, ptr(1) as *mut u8, a[2]),
+            Sysno::Ftruncate => fs::ftruncate(int(0), a[1]).map(|()| 0),
+            Sysno::Truncate => fs::truncate(path(ptr(0))?, a[1]).map(|()| 0),
+            Sysno::Fsync | Sysno::Fdatasync => fs::fsync(int(0)).map(|()| 0),
+            Sysno::Faccessat => fs::faccessat(int(0), path(ptr(1))?, int(2), 0).map(|()| 0),
+            Sysno::Faccessat2 => fs::faccessat(int(0), path(ptr(1))?, int(2), uint(3)).map(|()| 0),
+            Sysno::Access => fs::faccessat(AT_FDCWD, path(ptr(0))?, int(1), 0).map(|()| 0),
+            Sysno::Prctl => {
+                crate::process::prctl(int(0), a[1] as u64, a[2] as u64, a[3] as u64, a[4] as u64)
+            }
+            Sysno::SchedGetscheduler => sched::getscheduler(int(0)).map(i64::from),
+            Sysno::SchedSetscheduler => {
+                let prio = read_arg(ptr(2) as *const i32)?;
+                sched::setscheduler(int(0), int(1), prio).map(|()| 0)
+            }
+            Sysno::SchedGetparam => {
+                let prio = sched::getparam(int(0))?;
+                write_arg(ptr(1) as *mut i32, prio).map(|()| 0)
+            }
+            Sysno::SchedSetparam => {
+                let prio = read_arg(ptr(1) as *const i32)?;
+                sched::setparam(int(0), prio).map(|()| 0)
+            }
+            Sysno::SchedGetPriorityMax => sched::priority_max(int(0)).map(i64::from),
+            Sysno::SchedGetPriorityMin => sched::priority_min(int(0)).map(i64::from),
+            Sysno::SchedGetaffinity => {
+                let m = sched::getaffinity(int(0), ptr(1))?;
+                if ptr(2) == 0 {
+                    return Err(Errno::EFAULT);
+                }
+                core::ptr::copy_nonoverlapping(m.as_ptr(), ptr(2) as *mut u8, m.len());
+                Ok(m.len() as i64)
+            }
+            Sysno::SchedSetaffinity => {
+                if ptr(2) == 0 {
+                    return Err(Errno::EFAULT);
+                }
+                let m = core::slice::from_raw_parts(ptr(2) as *const u8, ptr(1).min(1024));
+                sched::setaffinity(int(0), m).map(|()| 0)
+            }
         }
     }
+}
+
+/// `getdents64(int, void*, unsigned int)`.
+///
+/// # Safety
+///
+/// `buf` is NULL or writable for `count` bytes.
+unsafe fn sys_getdents64(fd: i32, buf: *mut u8, count: usize) -> SysResult<i64> {
+    let data = fs::getdents64(fd, count)?;
+    if !data.is_empty() {
+        if buf.is_null() {
+            return Err(Errno::EFAULT);
+        }
+        // SAFETY: the caller's buffer, `count` bytes (contract); the data
+        // is at most `count` bytes.
+        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), buf, data.len()) };
+    }
+    Ok(data.len() as i64)
+}
+
+/// `readlinkat(int, const char*, char*, size_t)`.
+///
+/// # Safety
+///
+/// `buf` is NULL or writable for `size` bytes.
+unsafe fn sys_readlinkat(dirfd: i32, path: &[u8], buf: *mut u8, size: i64) -> SysResult<i64> {
+    if size <= 0 {
+        return Err(Errno::EINVAL);
+    }
+    let t = fs::readlinkat(dirfd, path, size as usize)?;
+    if buf.is_null() {
+        return Err(Errno::EFAULT);
+    }
+    // SAFETY: the caller's buffer (contract); `t` is at most `size` bytes.
+    unsafe { core::ptr::copy_nonoverlapping(t.as_ptr(), buf, t.len()) };
+    Ok(t.len() as i64)
+}
+
+/// `rt_sigaction(int, const struct sigaction*, struct sigaction*, size_t)`.
+///
+/// # Safety
+///
+/// `act` and `old` are NULL or valid kernel `struct sigaction` pointers.
+unsafe fn sys_rt_sigaction(
+    sig: i32,
+    act: *const KernelSigaction,
+    old: *mut KernelSigaction,
+    size: usize,
+) -> SysResult<i64> {
+    let new = if act.is_null() {
+        None
+    } else {
+        // SAFETY: contract.
+        Some(unsafe { read_arg(act) }?)
+    };
+    let prev = signal::sigaction(sig, new, size)?;
+    if !old.is_null() {
+        // SAFETY: contract.
+        unsafe { write_arg(old, prev) }?;
+    }
+    Ok(0)
+}
+
+/// # Safety
+///
+/// `set` and `old` are NULL or valid `sigset_t` pointers.
+unsafe fn sys_rt_sigprocmask(
+    how: i32,
+    set: *const SigSet,
+    old: *mut SigSet,
+    size: usize,
+) -> SysResult<i64> {
+    let new = if set.is_null() {
+        None
+    } else {
+        // SAFETY: contract.
+        Some(unsafe { read_arg(set) }?)
+    };
+    let prev = signal::sigprocmask(how, new, size)?;
+    if !old.is_null() {
+        // SAFETY: contract.
+        unsafe { write_arg(old, prev) }?;
+    }
+    Ok(0)
+}
+
+/// `rt_sigreturn`: on x86_64 the Andruna `__restore_rt` passes the frame's
+/// `ucontext_t` as the first argument. arm64 frames return through the lx
+/// restorer, which needs no system call.
+///
+/// # Safety
+///
+/// `uc` is the `ucontext_t` of the calling thread's current signal frame.
+unsafe fn sys_rt_sigreturn(uc: u64) -> SysResult<i64> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: contract.
+        Err(unsafe { signal::sigreturn(uc) })
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let _ = uc;
+        Err(Errno::ENOSYS)
+    }
+}
+
+/// # Safety
+///
+/// `set` is a readable `sigset_t`, `info` NULL or a writable `siginfo_t`,
+/// `timeout` NULL or a readable `struct timespec`.
+unsafe fn sys_rt_sigtimedwait(
+    set: *const SigSet,
+    info: *mut SigInfo,
+    timeout: *const Timespec,
+    size: usize,
+) -> SysResult<i64> {
+    // SAFETY: contract.
+    let s = unsafe { read_arg(set) }?;
+    let t = if timeout.is_null() {
+        None
+    } else {
+        // SAFETY: contract.
+        Some(unsafe { read_arg(timeout) }?)
+    };
+    let got = signal::sigtimedwait(s, t.as_ref(), size)?;
+    if !info.is_null() {
+        // SAFETY: contract.
+        unsafe { write_arg(info, got) }?;
+    }
+    Ok(i64::from(got.si_signo))
+}
+
+/// Reads the `siginfo_t` of `rt_sigqueueinfo` and `rt_tgsigqueueinfo`.
+///
+/// # Safety
+///
+/// `info` is NULL or a readable `siginfo_t`.
+unsafe fn queue_info(sig: i32, info: *const SigInfo) -> SysResult<SigInfo> {
+    // SAFETY: contract.
+    let mut i = unsafe { read_arg(info) }?;
+    signal::check_queue_info(&i)?;
+    i.si_signo = sig;
+    Ok(i)
+}
+
+/// # Safety
+///
+/// `ss` and `old` are NULL or valid `stack_t` pointers.
+unsafe fn sys_sigaltstack(ss: *const StackT, old: *mut StackT) -> SysResult<i64> {
+    // The caller's stack pointer: lx runs on the caller's stack.
+    let marker = 0u8;
+    let sp = core::ptr::addr_of!(marker) as u64;
+    let new = if ss.is_null() {
+        None
+    } else {
+        // SAFETY: contract.
+        Some(unsafe { read_arg(ss) }?)
+    };
+    let prev = signal::sigaltstack(new, sp)?;
+    if !old.is_null() {
+        // SAFETY: contract.
+        unsafe { write_arg(old, prev) }?;
+    }
+    Ok(0)
 }
 
 /// The `getcwd` system call: the path with its NUL, `ERANGE` if it does
@@ -105,12 +359,32 @@ unsafe fn sys_getcwd(buf: *mut u8, size: usize) -> SysResult<i64> {
 /// `uaddr` is a futex word the caller owns, or NULL / misaligned (which is
 /// rejected); `timeout` is NULL or a readable `struct timespec` for the wait
 /// operations.
-unsafe fn sys_futex(uaddr: usize, op: i32, val: u32, timeout: usize, val3: u32) -> SysResult<i64> {
+unsafe fn sys_futex(
+    uaddr: usize,
+    op: i32,
+    val: u32,
+    timeout: usize,
+    uaddr2: usize,
+    val3: u32,
+) -> SysResult<i64> {
+    use crate::linux::futex::{FUTEX_CMP_REQUEUE, FUTEX_REQUEUE, FUTEX_WAKE_OP};
     futex::check_uaddr(uaddr)?;
     // SAFETY: `uaddr` is non-NULL and 4-byte aligned, and the caller passes
     // a live futex word, which C code accesses atomically like `AtomicU32`.
     let word = unsafe { &*(uaddr as *const AtomicU32) };
     let cmd = op & crate::linux::futex::FUTEX_CMD_MASK;
+    if matches!(cmd, FUTEX_REQUEUE | FUTEX_CMP_REQUEUE | FUTEX_WAKE_OP) {
+        futex::check_uaddr(uaddr2)?;
+        // SAFETY: as for `uaddr`.
+        let word2 = unsafe { &*(uaddr2 as *const AtomicU32) };
+        // The timeout argument carries `val2` for these operations.
+        let val2 = timeout as u32;
+        return match cmd {
+            FUTEX_REQUEUE => futex::requeue(word, word2, val, val2, None),
+            FUTEX_CMP_REQUEUE => futex::requeue(word, word2, val, val2, Some(val3)),
+            _ => futex::wake_op(word, word2, val, val2, val3),
+        };
+    }
     let waits = matches!(
         cmd,
         crate::linux::futex::FUTEX_WAIT | crate::linux::futex::FUTEX_WAIT_BITSET
@@ -140,7 +414,10 @@ pub unsafe extern "C" fn syscall(
     a6: i64,
 ) -> i64 {
     // SAFETY: forwarded from this function's contract.
-    guard(|| unsafe { dispatch(number, [a1, a2, a3, a4, a5, a6]) })
+    let r = guard(|| unsafe { dispatch(number, [a1, a2, a3, a4, a5, a6]) });
+    // Signals queued for this thread are delivered when the call returns.
+    signal::deliver_at_syscall_exit();
+    r
 }
 
 #[cfg(test)]

@@ -17,10 +17,13 @@
 //!   mappings do not exist yet; cross-process futexes on them need a
 //!   different mechanism (TODO with shared mappings).
 //! - An unmapped `uaddr` faults instead of returning `EFAULT`.
-//! - Waits time out with millisecond granularity (rounded up), and never
-//!   return `EINTR` until signals exist ([`crate::signal`]).
-//! - Bitsets other than `FUTEX_BITSET_MATCH_ANY`, requeue and PI operations
-//!   return `ENOSYS`.
+//! - Waits time out with millisecond granularity (rounded up). A queued
+//!   signal makes a wait return `EINTR` ([`crate::signal`]), also with
+//!   `SA_RESTART` (callers in bionic retry).
+//! - `FUTEX_REQUEUE` and `FUTEX_CMP_REQUEUE` wake the waiters to be moved
+//!   instead of moving them ([`requeue`]).
+//! - Bitsets other than `FUTEX_BITSET_MATCH_ANY` and PI operations return
+//!   `ENOSYS`.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -121,7 +124,14 @@ pub fn wait(word: &AtomicU32, val: u32, deadline: Option<Deadline>) -> SysResult
     }
     let addr = word.as_ptr() as usize;
     add_waiter(addr);
+    // A thread with signal state can be interrupted: senders wake it on
+    // `addr`. A wake that comes between the check and the sleep is lost,
+    // so such a thread sleeps at most a second at a time.
+    let interruptible = crate::signal::sleeping_on(addr);
     let r = loop {
+        if interruptible.is_some() && crate::signal::interrupted() {
+            break Err(Errno::EINTR);
+        }
         let ms = match deadline {
             None => None,
             Some(d) => match d.remaining_ms() {
@@ -130,7 +140,15 @@ pub fn wait(word: &AtomicU32, val: u32, deadline: Option<Deadline>) -> SysResult
                 Err(e) => break Err(e),
             },
         };
+        let ms = if interruptible.is_some() {
+            Some(ms.unwrap_or(1000).min(1000))
+        } else {
+            ms
+        };
         match os::wait_on_address(word, val, ms) {
+            Wait::Woken if interruptible.is_some() && crate::signal::interrupted() => {
+                break Err(Errno::EINTR);
+            }
             Wait::Woken => break Ok(()),
             // Re-check the deadline: a Windows timeout can end slightly
             // before it on the Linux clock.
@@ -204,6 +222,94 @@ pub fn futex(
     }
 }
 
+/// Wakes up to `n` waiters on `addr` (none for `n == 0`).
+fn wake_n(addr: usize, n: u32) -> u32 {
+    if n == 0 {
+        0
+    } else {
+        wake(addr, n.min(i32::MAX as u32) as i32)
+    }
+}
+
+/// `FUTEX_REQUEUE` / `FUTEX_CMP_REQUEUE` (with `expected`): wakes up to
+/// `n_wake` waiters on `word` and moves up to `n_requeue` others to
+/// `word2`. `WaitOnAddress` cannot move a waiter to another address, so
+/// the ones to move are woken instead: a futex waiter treats that as a
+/// spurious wake-up, checks its condition and waits again (on `word2`, if
+/// that is where its condition now lives). Returns the number woken plus
+/// the number "moved", as Linux does.
+pub fn requeue(
+    word: &AtomicU32,
+    _word2: &AtomicU32,
+    n_wake: u32,
+    n_requeue: u32,
+    expected: Option<u32>,
+) -> SysResult<i64> {
+    if n_wake > i32::MAX as u32 || n_requeue > i32::MAX as u32 {
+        return Err(Errno::EINVAL);
+    }
+    if let Some(v) = expected
+        && word.load(Ordering::SeqCst) != v
+    {
+        return Err(Errno::EAGAIN);
+    }
+    let addr = word.as_ptr() as usize;
+    let waiting = waiters(addr);
+    let woken = wake_n(addr, n_wake.min(waiting));
+    let moved = (waiting - woken).min(n_requeue);
+    if moved > 0 {
+        os::wake_all(addr);
+    }
+    Ok(i64::from(woken + moved))
+}
+
+/// `FUTEX_WAKE_OP`: applies the operation encoded in `val3` to `word2`
+/// atomically, wakes up to `n` waiters on `word`, and up to `n2` on
+/// `word2` if the old value of `word2` passes the encoded comparison.
+pub fn wake_op(word: &AtomicU32, word2: &AtomicU32, n: u32, n2: u32, val3: u32) -> SysResult<i64> {
+    let sext12 = |v: u32| (((v & 0xfff) << 20) as i32) >> 20;
+    let op = (val3 >> 28) & 0xf;
+    let cmp = (val3 >> 24) & 0xf;
+    let mut oparg = sext12(val3 >> 12) as u32;
+    let cmparg = sext12(val3);
+    if op & 8 != 0 {
+        // FUTEX_OP_OPARG_SHIFT
+        if oparg > 31 {
+            return Err(Errno::EINVAL);
+        }
+        oparg = 1 << oparg;
+    }
+    let f = |old: u32| -> Option<u32> {
+        match op & 7 {
+            0 => Some(oparg),
+            1 => Some(old.wrapping_add(oparg)),
+            2 => Some(old | oparg),
+            3 => Some(old & !oparg),
+            4 => Some(old ^ oparg),
+            _ => None,
+        }
+    };
+    if f(0).is_none() || cmp > 5 {
+        return Err(Errno::ENOSYS);
+    }
+    let old = word2
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, f)
+        .expect("operation checked above") as i32;
+    let mut r = wake_n(word.as_ptr() as usize, n);
+    let pass = match cmp {
+        0 => old == cmparg,
+        1 => old != cmparg,
+        2 => old < cmparg,
+        3 => old <= cmparg,
+        4 => old > cmparg,
+        _ => old >= cmparg,
+    };
+    if pass {
+        r += wake_n(word2.as_ptr() as usize, n2);
+    }
+    Ok(i64::from(r))
+}
+
 /// Validates `uaddr` as Linux does before touching it.
 pub fn check_uaddr(uaddr: usize) -> SysResult<()> {
     if uaddr == 0 {
@@ -222,6 +328,37 @@ mod tests {
     use std::time::{Duration, Instant};
 
     const PRIV: i32 = FUTEX_PRIVATE_FLAG;
+
+    #[test]
+    fn requeue_and_wake_op() {
+        let w = Arc::new(AtomicU32::new(0));
+        let w2 = AtomicU32::new(5);
+        let mut threads = Vec::new();
+        for _ in 0..3 {
+            let w = w.clone();
+            threads.push(std::thread::spawn(move || wait(&w, 0, None)));
+        }
+        while waiters(w.as_ptr() as usize) < 3 {
+            std::thread::yield_now();
+        }
+        assert_eq!(requeue(&w, &w2, 1, 1, Some(7)), Err(Errno::EAGAIN));
+        // One woken, two "moved" (woken as well).
+        assert_eq!(requeue(&w, &w2, 1, 5, Some(0)), Ok(3));
+        for t in threads {
+            assert_eq!(t.join().unwrap(), Ok(()));
+        }
+        assert_eq!(requeue(&w, &w2, 1, 1, None), Ok(0));
+
+        // FUTEX_OP(ADD, 3, CMP_EQ, 5): w2 += 3, wake on w2 if it was 5.
+        let val3 = (1 << 28) | (3 << 12) | 5;
+        assert_eq!(wake_op(&w, &w2, 1, 1, val3), Ok(0));
+        assert_eq!(w2.load(Ordering::SeqCst), 8);
+        // OPARG_SHIFT: w2 |= 1 << 4.
+        let val3 = ((8 | 2) << 28) | (4 << 12);
+        wake_op(&w, &w2, 1, 1, val3).unwrap();
+        assert_eq!(w2.load(Ordering::SeqCst), 24);
+        assert_eq!(wake_op(&w, &w2, 1, 1, 7 << 28), Err(Errno::ENOSYS));
+    }
 
     #[test]
     fn wait_value_mismatch() {

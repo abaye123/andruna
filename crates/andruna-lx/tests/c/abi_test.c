@@ -261,8 +261,9 @@ static void test_memory(void) {
     CHECK(mmap(p + 1, 4096, LX_PROT_READ, LX_MAP_PRIVATE | LX_MAP_ANONYMOUS | LX_MAP_FIXED,
                -1, 0) == LX_MAP_FAILED && *__errno() == LX_EINVAL);
     *__errno() = 0;
-    CHECK(mmap(NULL, 4096, LX_PROT_READ, LX_MAP_PRIVATE, 3, 0) == LX_MAP_FAILED &&
-          *__errno() == LX_ENOSYS);
+    /* A file mapping of a descriptor that is not open. */
+    CHECK(mmap(NULL, 4096, LX_PROT_READ, LX_MAP_PRIVATE, 77, 0) == LX_MAP_FAILED &&
+          *__errno() == LX_EBADF);
 }
 
 static volatile uint32_t futex_word;

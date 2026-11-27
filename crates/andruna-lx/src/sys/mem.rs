@@ -101,7 +101,6 @@ pub struct Region {
     pub base: usize,
     pub size: usize,
     pub state: VIRTUAL_ALLOCATION_TYPE,
-    #[cfg_attr(not(test), allow(dead_code))]
     pub protect: PAGE_PROTECTION_FLAGS,
 }
 

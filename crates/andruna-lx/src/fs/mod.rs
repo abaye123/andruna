@@ -15,8 +15,12 @@
 
 pub mod file;
 pub mod mount;
+mod names;
 pub mod path;
+pub mod proc;
 pub mod stream;
+
+pub use names::*;
 
 use std::sync::{Arc, RwLock};
 
@@ -87,7 +91,7 @@ struct Resolved {
     windows: Vec<u16>,
 }
 
-fn resolve_at(dirfd: i32, path: &[u8]) -> SysResult<Resolved> {
+fn linux_at(dirfd: i32, path: &[u8]) -> SysResult<LinuxPath> {
     // An empty path is checked before the directory descriptor.
     if path.is_empty() {
         return Err(Errno::ENOENT);
@@ -100,9 +104,102 @@ fn resolve_at(dirfd: i32, path: &[u8]) -> SysResult<Resolved> {
         let f = FDS.get(dirfd)?;
         f.ops().dir_path().ok_or(Errno::ENOTDIR)?.to_vec()
     };
-    let linux = normalize(&base, path)?;
+    normalize(&base, path)
+}
+
+fn resolve_at(dirfd: i32, path: &[u8]) -> SysResult<Resolved> {
+    let linux = linux_at(dirfd, path)?;
+    if proc::is_proc(&linux) {
+        // `/proc` is lx's own; names in it cannot be created or removed.
+        return Err(Errno::EACCES);
+    }
     let windows = util::read(&MOUNTS).resolve(&linux)?;
     Ok(Resolved { linux, windows })
+}
+
+/// A `/proc` path with its symbolic links followed (all but the last one
+/// with `nofollow`), or `None` for paths outside `/proc`.
+fn proc_lookup(
+    dirfd: i32,
+    path: &[u8],
+    nofollow: bool,
+) -> SysResult<Option<(LinuxPath, proc::Node)>> {
+    let mut linux = linux_at(dirfd, path)?;
+    if !proc::is_proc(&linux) {
+        return Ok(None);
+    }
+    for _ in 0..8 {
+        // Follow links in the middle of the path (`/proc/self/...`).
+        let mut followed = false;
+        for n in 2..linux.components.len() {
+            let pre = linux.prefix(n);
+            if let Ok(proc::Node::Link(t)) = proc::lookup(&pre) {
+                let parent = linux.prefix(n - 1).to_bytes();
+                let mut np = normalize(&parent, &t)?;
+                np.components.extend_from_slice(&linux.components[n..]);
+                np.trailing_slash = linux.trailing_slash;
+                linux = np;
+                followed = true;
+                break;
+            }
+        }
+        if followed {
+            continue;
+        }
+        let node = proc::lookup(&linux)?;
+        if let proc::Node::Link(t) = &node
+            && !nofollow
+        {
+            let parent = linux.prefix(linux.components.len() - 1).to_bytes();
+            let np = normalize(&parent, t)?;
+            if !proc::is_proc(&np) {
+                return Ok(Some((np, node)));
+            }
+            linux = np;
+            continue;
+        }
+        return Ok(Some((linux, node)));
+    }
+    Err(Errno::ELOOP)
+}
+
+/// Opens a `/proc` node.
+fn proc_open(dirfd: i32, path: &[u8], flags: u32) -> SysResult<Option<i32>> {
+    let nofollow = flags & O_NOFOLLOW != 0;
+    let Some((linux, node)) = proc_lookup(dirfd, path, nofollow)? else {
+        return Ok(None);
+    };
+    let ops: Box<dyn crate::fd::FileOps> = match node {
+        proc::Node::Link(_) if !proc::is_proc(&linux) => {
+            // A link out of /proc (fd/N, exe): open the target itself.
+            return openat(AT_FDCWD, &linux.to_bytes(), flags, 0).map(Some);
+        }
+        proc::Node::Link(_) if flags & O_PATH == 0 => return Err(Errno::ELOOP),
+        proc::Node::Link(_) => return Err(Errno::ENXIO),
+        proc::Node::Dir(e) => {
+            if flags & O_ACCMODE != O_RDONLY || flags & O_CREAT != 0 {
+                return Err(Errno::EISDIR);
+            }
+            Box::new(proc::ProcDir::new(linux.to_bytes(), e))
+        }
+        proc::Node::Props => {
+            if flags & O_ACCMODE != O_RDONLY {
+                return Err(Errno::EACCES);
+            }
+            Box::new(proc::ProcFile::props())
+        }
+        proc::Node::File { content, comm_of } => {
+            if flags & O_DIRECTORY != 0 {
+                return Err(Errno::ENOTDIR);
+            }
+            if flags & O_ACCMODE != O_RDONLY && comm_of.is_none() {
+                return Err(Errno::EACCES);
+            }
+            Box::new(proc::ProcFile::new(content, comm_of))
+        }
+    };
+    let file = Arc::new(OpenFile::new(ops, flags));
+    FDS.insert(file, flags & O_CLOEXEC != 0, 0).map(Some)
 }
 
 /// Refines "not found" for `path`: `ENOTDIR` when a parent component
@@ -184,6 +281,9 @@ pub fn openat(dirfd: i32, path: &[u8], flags: u32, _mode: u32) -> SysResult<i32>
     if !path_only && acc == O_ACCMODE {
         return Err(Errno::EINVAL);
     }
+    if let Some(fd) = proc_open(dirfd, path, flags)? {
+        return Ok(fd);
+    }
     let r = resolve_at(dirfd, path)?;
     let creat = flags & O_CREAT != 0;
     let trunc = flags & O_TRUNC != 0;
@@ -229,7 +329,7 @@ pub fn openat(dirfd: i32, path: &[u8], flags: u32, _mode: u32) -> SysResult<i32>
         if trunc && !path_only {
             os::set_len(h.raw(), 0)?;
         }
-        Box::new(RegularFile::new(h))
+        Box::new(RegularFile::with_path(h, r.linux.to_bytes()))
     };
     let file = Arc::new(OpenFile::new(ops, flags));
     FDS.insert(file, flags & O_CLOEXEC != 0, 0)
@@ -246,8 +346,14 @@ pub fn fstatat(dirfd: i32, path: &[u8], flags: u32) -> SysResult<StatData> {
         }
         return FDS.get(dirfd)?.stat();
     }
-    let r = resolve_at(dirfd, path)?;
     let nofollow = flags & AT_SYMLINK_NOFOLLOW != 0;
+    if let Some((linux, node)) = proc_lookup(dirfd, path, nofollow)? {
+        if !proc::is_proc(&linux) {
+            return fstatat(AT_FDCWD, &linux.to_bytes(), flags);
+        }
+        return Ok(proc::stat(&node));
+    }
+    let r = resolve_at(dirfd, path)?;
     let (_h, info) = open_handle(
         &r,
         FILE_READ_ATTRIBUTES.0,
@@ -287,6 +393,22 @@ pub fn lseek(fd: i32, offset: i64, whence: i32) -> SysResult<i64> {
 
 pub fn close(fd: i32) -> SysResult<()> {
     FDS.close(fd)
+}
+
+pub fn ftruncate(fd: i32, len: i64) -> SysResult<()> {
+    FDS.get(fd)?.truncate(len)
+}
+
+pub fn fsync(fd: i32) -> SysResult<()> {
+    FDS.get(fd)?.sync()
+}
+
+/// `getdents64` into a buffer of `max` bytes; returns the records.
+pub fn getdents64(fd: i32, max: usize) -> SysResult<Vec<u8>> {
+    let f = FDS.get(fd)?;
+    let mut out = Vec::new();
+    f.getdents(&mut out, max)?;
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -497,5 +619,458 @@ pub(crate) mod tests {
         std::fs::remove_file(host).unwrap();
         assert_eq!(pread(fd, UserBuf::from_mut(&mut [0u8; 4]), 0), Ok(4));
         close(fd).unwrap();
+    }
+
+    fn names(buf: &[u8]) -> Vec<(String, u8)> {
+        let mut out = Vec::new();
+        let mut off = 0;
+        while off < buf.len() {
+            let reclen = u16::from_le_bytes([buf[off + 16], buf[off + 17]]) as usize;
+            let kind = buf[off + 18];
+            let name = &buf[off + 19..off + reclen];
+            let end = name.iter().position(|&b| b == 0).unwrap();
+            out.push((String::from_utf8_lossy(&name[..end]).into_owned(), kind));
+            off += reclen;
+        }
+        out
+    }
+
+    #[test]
+    fn names_unlink_mkdir_rename_getdents() {
+        let d = test_dir("names");
+        let f = format!("{d}/a.txt");
+        let fd = open(&f, O_CREAT | O_RDWR).unwrap();
+        write_all(fd, b"hello world");
+        // ftruncate shrinks and grows without moving the offset.
+        assert_eq!(ftruncate(fd, 5), Ok(()));
+        assert_eq!(fstat(fd).unwrap().size, 5);
+        assert_eq!(ftruncate(fd, -1), Err(Errno::EINVAL));
+        assert_eq!(fsync(fd), Ok(()));
+        let ro = open(&f, O_RDONLY).unwrap();
+        assert_eq!(ftruncate(ro, 1), Err(Errno::EINVAL));
+        assert_eq!(fsync(ro), Ok(()));
+        close(ro).unwrap();
+        assert_eq!(truncate(f.as_bytes(), 3), Ok(()));
+        assert_eq!(fstat(fd).unwrap().size, 3);
+
+        assert_eq!(
+            mkdirat(AT_FDCWD, format!("{d}/sub").as_bytes(), 0o755),
+            Ok(())
+        );
+        assert_eq!(
+            mkdirat(AT_FDCWD, format!("{d}/sub").as_bytes(), 0o755),
+            Err(Errno::EEXIST)
+        );
+        assert_eq!(
+            mkdirat(AT_FDCWD, format!("{d}/no/sub").as_bytes(), 0o755),
+            Err(Errno::ENOENT)
+        );
+        let g = format!("{d}/sub/b.txt");
+        assert_eq!(
+            renameat2(AT_FDCWD, f.as_bytes(), AT_FDCWD, g.as_bytes(), 0),
+            Ok(())
+        );
+        assert_eq!(
+            fstatat(AT_FDCWD, f.as_bytes(), 0).err(),
+            Some(Errno::ENOENT)
+        );
+        // The open descriptor follows the file.
+        assert_eq!(fstat(fd).unwrap().size, 3);
+        // Replace an existing file; NOREPLACE refuses.
+        let h = format!("{d}/c.txt");
+        close(open(&h, O_CREAT | O_WRONLY).unwrap()).unwrap();
+        assert_eq!(
+            renameat2(
+                AT_FDCWD,
+                h.as_bytes(),
+                AT_FDCWD,
+                g.as_bytes(),
+                RENAME_NOREPLACE
+            ),
+            Err(Errno::EEXIST)
+        );
+        assert_eq!(
+            renameat2(AT_FDCWD, h.as_bytes(), AT_FDCWD, g.as_bytes(), 0),
+            Ok(())
+        );
+        assert_eq!(fstatat(AT_FDCWD, g.as_bytes(), 0).unwrap().size, 0);
+        assert_eq!(
+            renameat2(AT_FDCWD, g.as_bytes(), AT_FDCWD, b"/x", RENAME_EXCHANGE),
+            Err(Errno::EINVAL)
+        );
+
+        // getdents64 lists ., .., the file and nothing else.
+        let dfd = open(&format!("{d}/sub"), O_RDONLY | O_DIRECTORY).unwrap();
+        let mut all = Vec::new();
+        loop {
+            let b = getdents64(dfd, 64).unwrap();
+            if b.is_empty() {
+                break;
+            }
+            all.extend(names(&b));
+        }
+        assert_eq!(
+            all,
+            vec![
+                (".".into(), file::DT_DIR),
+                ("..".into(), file::DT_DIR),
+                ("b.txt".into(), file::DT_REG)
+            ]
+        );
+        // At the end: nothing more, whatever the size.
+        assert_eq!(getdents64(dfd, 8), Ok(Vec::new()));
+        assert_eq!(lseek(dfd, 0, SEEK_SET), Ok(0));
+        assert_eq!(names(&getdents64(dfd, 4096).unwrap()).len(), 3);
+        assert_eq!(getdents64(fd, 4096), Err(Errno::ENOTDIR));
+        close(dfd).unwrap();
+
+        // unlink and rmdir.
+        assert_eq!(
+            unlinkat(AT_FDCWD, format!("{d}/sub").as_bytes(), 0),
+            Err(Errno::EISDIR)
+        );
+        assert_eq!(
+            unlinkat(AT_FDCWD, format!("{d}/sub").as_bytes(), AT_REMOVEDIR),
+            Err(Errno::ENOTEMPTY)
+        );
+        assert_eq!(
+            unlinkat(AT_FDCWD, g.as_bytes(), AT_REMOVEDIR),
+            Err(Errno::ENOTDIR)
+        );
+        assert_eq!(unlinkat(AT_FDCWD, g.as_bytes(), 0), Ok(()));
+        assert_eq!(unlinkat(AT_FDCWD, g.as_bytes(), 0), Err(Errno::ENOENT));
+        assert_eq!(
+            unlinkat(AT_FDCWD, format!("{d}/sub").as_bytes(), AT_REMOVEDIR),
+            Ok(())
+        );
+        // The renamed and unlinked file stays usable through the descriptor.
+        assert_eq!(fstat(fd).unwrap().size, 3);
+        close(fd).unwrap();
+
+        assert_eq!(
+            faccessat(AT_FDCWD, d.as_bytes(), R_OK | W_OK | X_OK, 0),
+            Ok(())
+        );
+        let e = format!("{d}/e");
+        close(open(&e, O_CREAT | O_WRONLY).unwrap()).unwrap();
+        assert_eq!(faccessat(AT_FDCWD, e.as_bytes(), R_OK | W_OK, 0), Ok(()));
+        assert_eq!(
+            faccessat(AT_FDCWD, e.as_bytes(), X_OK, 0),
+            Err(Errno::EACCES)
+        );
+        assert_eq!(faccessat(AT_FDCWD, b"/none", F_OK, 0), Err(Errno::ENOENT));
+        assert_eq!(faccessat(AT_FDCWD, e.as_bytes(), 8, 0), Err(Errno::EINVAL));
+    }
+
+    #[test]
+    fn symbolic_links() {
+        let d = test_dir("links");
+        let target = format!("{d}/t.txt");
+        close(open(&target, O_CREAT | O_WRONLY).unwrap()).unwrap();
+        let link = format!("{d}/l");
+        match symlinkat(b"t.txt", AT_FDCWD, link.as_bytes()) {
+            Err(Errno::EPERM) => {
+                // Windows refuses links without developer mode or the
+                // privilege: lx reports EPERM, as Linux does on file systems
+                // without links. Nothing else to check here.
+                eprintln!("symbolic links are not available to this user");
+                return;
+            }
+            r => assert_eq!(r, Ok(())),
+        }
+        assert_eq!(
+            readlinkat(AT_FDCWD, link.as_bytes(), 100),
+            Ok(b"t.txt".to_vec())
+        );
+        assert_eq!(readlinkat(AT_FDCWD, link.as_bytes(), 2), Ok(b"t.".to_vec()));
+        assert_eq!(
+            readlinkat(AT_FDCWD, target.as_bytes(), 100),
+            Err(Errno::EINVAL)
+        );
+        assert_eq!(
+            symlinkat(b"t.txt", AT_FDCWD, link.as_bytes()),
+            Err(Errno::EEXIST)
+        );
+        let st = fstatat(AT_FDCWD, link.as_bytes(), AT_SYMLINK_NOFOLLOW).unwrap();
+        assert_eq!(st.mode & S_IFMT, crate::linux::stat::S_IFLNK);
+        // Opening follows the link (Windows resolves it).
+        let fd = open(&link, O_WRONLY).unwrap();
+        write_all(fd, b"via link");
+        close(fd).unwrap();
+        assert_eq!(fstatat(AT_FDCWD, target.as_bytes(), 0).unwrap().size, 8);
+        // Absolute targets round-trip through the mount table.
+        let abs = format!("{d}/abs");
+        symlinkat(target.as_bytes(), AT_FDCWD, abs.as_bytes()).unwrap();
+        assert_eq!(
+            readlinkat(AT_FDCWD, abs.as_bytes(), 200),
+            Ok(target.as_bytes().to_vec())
+        );
+        // Relative targets with directories.
+        let rel = format!("{d}/rel");
+        symlinkat(b"../links/t.txt", AT_FDCWD, rel.as_bytes()).unwrap();
+        assert_eq!(
+            readlinkat(AT_FDCWD, rel.as_bytes(), 200),
+            Ok(b"../links/t.txt".to_vec())
+        );
+        // unlink removes the link, not the target.
+        unlinkat(AT_FDCWD, link.as_bytes(), 0).unwrap();
+        assert!(fstatat(AT_FDCWD, target.as_bytes(), 0).is_ok());
+        // A dangling link can be created and read.
+        let dangling = format!("{d}/dangling");
+        symlinkat(b"missing", AT_FDCWD, dangling.as_bytes()).unwrap();
+        assert_eq!(
+            readlinkat(AT_FDCWD, dangling.as_bytes(), 100),
+            Ok(b"missing".to_vec())
+        );
+    }
+
+    #[test]
+    fn file_mappings() {
+        use crate::linux::mman::*;
+        let d = test_dir("mmap");
+        let f = format!("{d}/m");
+        let fd = open(&f, O_CREAT | O_RDWR).unwrap();
+        let mut data = vec![0u8; 3 * PAGE_SIZE + 100];
+        for (i, b) in data.iter_mut().enumerate() {
+            *b = (i % 251) as u8;
+        }
+        write_all(fd, &data);
+        // Private, from a page offset, beyond the end of the file.
+        let len = 4 * PAGE_SIZE;
+        let a = crate::mem::mmap(
+            0,
+            len,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE,
+            fd,
+            PAGE_SIZE as i64,
+        )
+        .unwrap();
+        // SAFETY: a readable and writable mapping of `len` bytes.
+        let m = unsafe { core::slice::from_raw_parts_mut(a as *mut u8, len) };
+        assert_eq!(&m[..2 * PAGE_SIZE + 100], &data[PAGE_SIZE..]);
+        assert!(m[2 * PAGE_SIZE + 100..].iter().all(|&b| b == 0));
+        // Private writes do not reach the file.
+        m[0] = 0xee;
+        assert_eq!(
+            pread(fd, UserBuf::from_mut(&mut [0u8; 1]), PAGE_SIZE as i64),
+            Ok(1)
+        );
+        let mut one = [0u8; 1];
+        pread(fd, UserBuf::from_mut(&mut one), PAGE_SIZE as i64).unwrap();
+        assert_eq!(one[0], data[PAGE_SIZE]);
+        crate::mem::munmap(a, len).unwrap();
+
+        // Read-only shared: readable, and never writable.
+        let a = crate::mem::mmap(0, PAGE_SIZE, PROT_READ, MAP_SHARED, fd, 0).unwrap();
+        // SAFETY: a readable mapping of one page.
+        assert_eq!(unsafe { *(a as *const u8).add(7) }, data[7]);
+        assert_eq!(
+            crate::mem::mprotect(a, PAGE_SIZE, PROT_READ | PROT_WRITE),
+            Err(Errno::EACCES)
+        );
+        crate::mem::munmap(a, PAGE_SIZE).unwrap();
+
+        // Errors.
+        let rw = PROT_READ | PROT_WRITE;
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, rw, MAP_SHARED, fd, 0),
+            Err(Errno::ENODEV)
+        );
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, rw, MAP_PRIVATE, fd, 10),
+            Err(Errno::EINVAL)
+        );
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, rw, MAP_PRIVATE, -1, 0),
+            Err(Errno::EBADF)
+        );
+        let wo = open(&f, O_WRONLY).unwrap();
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, PROT_READ, MAP_PRIVATE, wo, 0),
+            Err(Errno::EACCES)
+        );
+        close(wo).unwrap();
+        let ro = open(&f, O_RDONLY).unwrap();
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, rw, MAP_SHARED, ro, 0),
+            Err(Errno::EACCES)
+        );
+        // A private writable mapping of a read-only descriptor is allowed.
+        let a = crate::mem::mmap(0, PAGE_SIZE, rw, MAP_PRIVATE, ro, 0).unwrap();
+        crate::mem::munmap(a, PAGE_SIZE).unwrap();
+        close(ro).unwrap();
+        let dfd = open(&d, O_RDONLY | O_DIRECTORY).unwrap();
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, PROT_READ, MAP_PRIVATE, dfd, 0),
+            Err(Errno::ENODEV)
+        );
+        close(dfd).unwrap();
+        close(fd).unwrap();
+    }
+
+    fn read_all(fd: i32) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let b = read_n(fd, 4096);
+            if b.is_empty() {
+                return out;
+            }
+            out.extend(b);
+        }
+    }
+
+    fn read_path(p: &str) -> SysResult<Vec<u8>> {
+        let fd = open(p, O_RDONLY)?;
+        let b = read_all(fd);
+        close(fd)?;
+        Ok(b)
+    }
+
+    #[test]
+    fn proc_self() {
+        let d = test_dir("procfs");
+        let pid = crate::process::getpid();
+        let tid = crate::process::gettid();
+
+        let status = String::from_utf8(read_path("/proc/self/status").unwrap()).unwrap();
+        assert!(status.contains(&format!("\nTgid:\t{pid}\n")), "{status}");
+        assert!(status.contains("TracerPid:\t0"));
+        let by_pid = read_path(&format!("/proc/{pid}/status")).unwrap();
+        assert!(String::from_utf8(by_pid).unwrap().contains(&format!(
+            "
+Pid:	{pid}
+"
+        )));
+        assert_eq!(read_path("/proc/1/status"), Err(Errno::ENOENT));
+        assert_eq!(read_path("/proc/self/nonexistent"), Err(Errno::ENOENT));
+        assert_eq!(
+            readlinkat(AT_FDCWD, b"/proc/self", 64),
+            Ok(pid.to_string().into_bytes())
+        );
+        assert_eq!(
+            fstatat(AT_FDCWD, b"/proc/self/fd", 0).unwrap().mode & S_IFMT,
+            S_IFDIR
+        );
+        // Names in /proc cannot be created.
+        assert_eq!(
+            open("/proc/self/new", O_CREAT | O_WRONLY),
+            Err(Errno::ENOENT)
+        );
+        assert_eq!(
+            unlinkat(AT_FDCWD, b"/proc/self/status", 0),
+            Err(Errno::EACCES)
+        );
+
+        // fd: links to the open files, listed by getdents.
+        let f = format!("{d}/x");
+        let fd = open(&f, O_CREAT | O_RDWR).unwrap();
+        write_all(fd, b"data");
+        let link = format!("/proc/self/fd/{fd}");
+        assert_eq!(
+            readlinkat(AT_FDCWD, link.as_bytes(), 256),
+            Ok(f.as_bytes().to_vec())
+        );
+        let again = open(&link, O_RDONLY).unwrap();
+        assert_eq!(read_n(again, 10), b"data");
+        close(again).unwrap();
+        let dfd = open("/proc/self/fd", O_RDONLY | O_DIRECTORY).unwrap();
+        let listed = names(&getdents64(dfd, 65536).unwrap());
+        assert!(
+            listed
+                .iter()
+                .any(|(n, k)| *n == fd.to_string() && *k == file::DT_LNK)
+        );
+        // Relative lookups from the directory descriptor.
+        assert_eq!(
+            readlinkat(dfd, fd.to_string().as_bytes(), 256),
+            Ok(f.as_bytes().to_vec())
+        );
+        close(dfd).unwrap();
+
+        // task: this thread, with a writable comm.
+        let tdir = open("/proc/self/task", O_RDONLY | O_DIRECTORY).unwrap();
+        let tasks = names(&getdents64(tdir, 65536).unwrap());
+        assert!(tasks.iter().any(|(n, _)| *n == tid.to_string()));
+        close(tdir).unwrap();
+        let comm = format!("/proc/self/task/{tid}/comm");
+        let c = open(&comm, O_WRONLY).unwrap();
+        write_all(c, b"lx-test-thread-name-long\n");
+        close(c).unwrap();
+        assert_eq!(read_path(&comm).unwrap(), b"lx-test-thread-\n");
+        assert_eq!(
+            read_path("/proc/thread-self/comm").unwrap(),
+            b"lx-test-thread-\n"
+        );
+
+        // maps: an lx mapping with its name.
+        use crate::linux::mman::*;
+        let a = crate::mem::mmap(
+            0,
+            2 * PAGE_SIZE,
+            PROT_READ,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+        .unwrap();
+        let name = c"lx-test";
+        // SAFETY: a NUL-terminated name.
+        unsafe {
+            crate::process::prctl(
+                0x5356_4d41,
+                0,
+                a as u64,
+                PAGE_SIZE as u64,
+                name.as_ptr() as u64,
+            )
+        }
+        .unwrap();
+        let maps = String::from_utf8(read_path("/proc/self/maps").unwrap()).unwrap();
+        let first = format!("{a:08x}-{:08x} r--p 00000000 00:00 0", a + PAGE_SIZE);
+        let line = maps
+            .lines()
+            .find(|l| l.starts_with(&first))
+            .expect("mapping listed");
+        assert!(line.ends_with("[anon:lx-test]"), "{line}");
+        let second = format!("{:08x}-{:08x} r--p", a + PAGE_SIZE, a + 2 * PAGE_SIZE);
+        assert!(maps.lines().any(|l| l.starts_with(&second)));
+        crate::mem::munmap(a, 2 * PAGE_SIZE).unwrap();
+        // A file mapping is named after its file.
+        let m = crate::mem::mmap(0, PAGE_SIZE, PROT_READ, MAP_PRIVATE, fd, 0).unwrap();
+        let maps = String::from_utf8(read_path("/proc/self/maps").unwrap()).unwrap();
+        assert!(
+            maps.lines()
+                .any(|l| l.starts_with(&format!("{m:08x}-")) && l.ends_with(&f))
+        );
+        crate::mem::munmap(m, PAGE_SIZE).unwrap();
+        close(fd).unwrap();
+
+        // exe and cmdline from the program the host recorded.
+        let exe_rel = format!("{d}/prog");
+        close(open(&exe_rel, O_CREAT | O_WRONLY).unwrap()).unwrap();
+        let root = std::env::temp_dir().join(format!("andruna-lx-test-{}", std::process::id()));
+        crate::process::set_program(
+            &root.join("procfs").join("prog"),
+            &["prog".into(), "-x".into()],
+        );
+        assert_eq!(
+            readlinkat(AT_FDCWD, b"/proc/self/exe", 256),
+            Ok(exe_rel.as_bytes().to_vec())
+        );
+        assert_eq!(read_path("/proc/self/cmdline").unwrap(), b"prog\0-x\0");
+
+        // The property area, as bionic opens and maps it.
+        let st = fstatat(AT_FDCWD, b"/dev/__properties__", 0).unwrap();
+        assert_eq!((st.uid, st.gid, st.mode), (0, 0, S_IFREG | 0o444));
+        let pfd = open("/dev/__properties__", O_RDONLY | O_NOFOLLOW | O_CLOEXEC).unwrap();
+        assert_eq!(fstat(pfd).unwrap().size, st.size);
+        let a = crate::mem::mmap(0, st.size as usize, PROT_READ, MAP_SHARED, pfd, 0).unwrap();
+        // SAFETY: a readable mapping of the area; the magic is at offset 8.
+        let magic = unsafe { *((a + 8) as *const u32) };
+        assert_eq!(magic, 0x504f_5250);
+        crate::mem::munmap(a, st.size as usize).unwrap();
+        close(pfd).unwrap();
+        assert_eq!(open("/dev/__properties__", O_RDWR), Err(Errno::EACCES));
     }
 }

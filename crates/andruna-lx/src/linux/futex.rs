@@ -2,6 +2,9 @@
 
 pub const FUTEX_WAIT: i32 = 0;
 pub const FUTEX_WAKE: i32 = 1;
+pub const FUTEX_REQUEUE: i32 = 3;
+pub const FUTEX_CMP_REQUEUE: i32 = 4;
+pub const FUTEX_WAKE_OP: i32 = 5;
 pub const FUTEX_WAIT_BITSET: i32 = 9;
 pub const FUTEX_WAKE_BITSET: i32 = 10;
 pub const FUTEX_PRIVATE_FLAG: i32 = 128;

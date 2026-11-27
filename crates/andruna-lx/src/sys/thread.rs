@@ -2,9 +2,11 @@
 
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetCurrentThreadId,
-    GetProcessIdOfThread, GetProcessTimes, GetThreadTimes, OpenThread, SwitchToThread,
-    THREAD_QUERY_LIMITED_INFORMATION,
+    GetActiveProcessorCount, GetCurrentProcess, GetCurrentProcessId, GetCurrentThread,
+    GetCurrentThreadId, GetExitCodeThread, GetProcessAffinityMask, GetProcessIdOfThread,
+    GetProcessTimes, GetThreadTimes, OpenThread, SetThreadAffinityMask, SwitchToThread,
+    THREAD_QUERY_INFORMATION, THREAD_QUERY_LIMITED_INFORMATION, THREAD_SET_INFORMATION,
+    TerminateProcess,
 };
 
 use super::OwnedHandle;
@@ -19,6 +21,144 @@ pub fn current_process_id() -> u32 {
 pub fn current_thread_id() -> u32 {
     // SAFETY: no arguments; returns a value.
     unsafe { GetCurrentThreadId() }
+}
+
+/// Logical processors in the calling thread's processor group.
+pub fn processor_count() -> usize {
+    // SAFETY: no pointer arguments.
+    let n = unsafe { GetActiveProcessorCount(0) };
+    (n as usize).max(1)
+}
+
+fn open_for_affinity(tid: u32) -> SysResult<OwnedHandle> {
+    let tid = crate::process::windows_tid(tid);
+    // SAFETY: opens a new handle that the result owns.
+    let h = unsafe {
+        OpenThread(
+            THREAD_SET_INFORMATION | THREAD_QUERY_INFORMATION,
+            false,
+            tid,
+        )
+    }
+    .map_err(|_| Errno::ESRCH)?;
+    Ok(OwnedHandle::from_raw(h))
+}
+
+/// The affinity mask of thread `tid` of this process.
+pub fn affinity(tid: u32) -> SysResult<u64> {
+    let h = open_for_affinity(tid)?;
+    let (mut process, mut system) = (0usize, 0usize);
+    // SAFETY: valid out pointers; the pseudo handle is always valid.
+    unsafe { GetProcessAffinityMask(GetCurrentProcess(), &mut process, &mut system) }
+        .map_err(Errno::from)?;
+    // Windows has no getter: setting returns the previous mask, which is
+    // then put back.
+    // SAFETY: `h` is a live thread handle with set access.
+    let old = unsafe { SetThreadAffinityMask(h.raw(), process) };
+    if old == 0 {
+        return Err(Errno::EINVAL);
+    }
+    // SAFETY: as above.
+    unsafe { SetThreadAffinityMask(h.raw(), old) };
+    Ok(old as u64)
+}
+
+/// Sets the affinity mask of thread `tid` of this process.
+pub fn set_affinity(tid: u32, mask: u64) -> SysResult<()> {
+    let h = open_for_affinity(tid)?;
+    // SAFETY: `h` is a live thread handle with set access.
+    if unsafe { SetThreadAffinityMask(h.raw(), mask as usize) } == 0 {
+        return Err(Errno::EINVAL);
+    }
+    Ok(())
+}
+
+/// The thread ids of this process.
+pub fn threads() -> Vec<u32> {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+    let pid = current_process_id();
+    // SAFETY: creates a snapshot handle that `owned` closes.
+    let Ok(h) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) }) else {
+        return vec![current_thread_id()];
+    };
+    let owned = OwnedHandle::from_raw(h);
+    let mut e = THREADENTRY32 {
+        dwSize: core::mem::size_of::<THREADENTRY32>() as u32,
+        ..Default::default()
+    };
+    let mut out = Vec::new();
+    // SAFETY: `e` is a valid THREADENTRY32 with its size set.
+    let mut ok = unsafe { Thread32First(owned.raw(), &mut e) }.is_ok();
+    while ok {
+        if e.th32OwnerProcessID == pid {
+            out.push(crate::process::linux_tid(e.th32ThreadID));
+        }
+        // SAFETY: as above.
+        ok = unsafe { Thread32Next(owned.raw(), &mut e) }.is_ok();
+    }
+    out.sort_unstable();
+    out
+}
+
+fn open_named(
+    tid: u32,
+    access: windows::Win32::System::Threading::THREAD_ACCESS_RIGHTS,
+) -> Option<OwnedHandle> {
+    let tid = crate::process::windows_tid(tid);
+    // SAFETY: opens a new handle that the result owns.
+    let h = unsafe { OpenThread(access, false, tid) }.ok()?;
+    Some(OwnedHandle::from_raw(h))
+}
+
+/// The Windows description (name) of thread `tid`.
+pub fn description(tid: u32) -> Option<String> {
+    use windows::Win32::System::Threading::GetThreadDescription;
+    let h = open_named(tid, THREAD_QUERY_LIMITED_INFORMATION)?;
+    // SAFETY: `h` is a live thread handle; the returned string is freed
+    // with LocalFree below.
+    let p = unsafe { GetThreadDescription(h.raw()) }.ok()?;
+    // SAFETY: a NUL-terminated string from Windows.
+    let s = unsafe { p.to_string() }.ok();
+    // SAFETY: the string was allocated by GetThreadDescription.
+    unsafe {
+        windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(p.0 as _)))
+    };
+    s
+}
+
+/// Sets the Windows description (name) of thread `tid`.
+pub fn set_description(tid: u32, name: &str) -> SysResult<()> {
+    use windows::Win32::System::Threading::{SetThreadDescription, THREAD_SET_LIMITED_INFORMATION};
+    let h = open_named(tid, THREAD_SET_LIMITED_INFORMATION).ok_or(Errno::ESRCH)?;
+    let w: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: `h` is a live thread handle; `w` is NUL-terminated.
+    unsafe { SetThreadDescription(h.raw(), windows::core::PCWSTR(w.as_ptr())) }
+        .map_err(|_| Errno::EINVAL)
+}
+
+/// Whether `tid` is a running thread of this process.
+pub fn is_own_thread(tid: u32) -> bool {
+    let tid = crate::process::windows_tid(tid);
+    // SAFETY: opens a new handle that `owned` closes.
+    let Ok(h) = (unsafe { OpenThread(THREAD_QUERY_LIMITED_INFORMATION, false, tid) }) else {
+        return false;
+    };
+    let owned = OwnedHandle::from_raw(h);
+    let mut code = 0u32;
+    // SAFETY: `owned` is a live thread handle; `code` is a valid out pointer.
+    let alive = unsafe { GetExitCodeThread(owned.raw(), &mut code) }.is_ok() && code == 259;
+    // SAFETY: as above.
+    alive && unsafe { GetProcessIdOfThread(owned.raw()) } == current_process_id()
+}
+
+/// Ends the process at once with `code` (no exit handlers run, as for a
+/// Linux process killed by a signal).
+pub fn terminate_process(code: u32) -> ! {
+    // SAFETY: the pseudo handle of the current process is always valid.
+    let _ = unsafe { TerminateProcess(GetCurrentProcess(), code) };
+    std::process::abort()
 }
 
 /// Gives up the processor to another ready thread, if any.

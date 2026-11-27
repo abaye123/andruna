@@ -58,6 +58,10 @@ fn len32(buf: &UserBuf) -> usize {
 }
 
 impl FileOps for HostStream {
+    fn kind_name(&self) -> &'static str {
+        "host-stream"
+    }
+
     fn read(&self, _file: &OpenFile, buf: UserBuf) -> SysResult<usize> {
         let mut n = 0u32;
         // SAFETY: `buf` is a caller buffer no Rust reference aliases (see

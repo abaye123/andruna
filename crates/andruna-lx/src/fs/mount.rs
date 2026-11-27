@@ -117,6 +117,51 @@ impl MountTable {
         Ok(())
     }
 
+    /// The Linux path of a Windows path in `\\?\` form (not
+    /// NUL-terminated), through the mount whose Windows directory is its
+    /// longest prefix; `None` when no mount holds it.
+    pub fn unresolve(&self, windows: &[u16]) -> Option<Vec<u8>> {
+        // Windows compares names without case (ASCII is enough for the
+        // prefixes lx creates).
+        let fold = |c: u16| {
+            if (u16::from(b'A')..=u16::from(b'Z')).contains(&c) {
+                c + 32
+            } else {
+                c
+            }
+        };
+        let sep = u16::from(b'\\');
+        let m = self
+            .mounts
+            .iter()
+            .filter(|m| {
+                let mw = &m.windows;
+                windows.len() >= mw.len()
+                    && windows.iter().zip(mw).all(|(a, b)| fold(*a) == fold(*b))
+                    && (windows.len() == mw.len()
+                        || mw.last() == Some(&sep)
+                        || windows[mw.len()] == sep)
+            })
+            .max_by_key(|m| m.windows.len())?;
+        let mut out = Vec::new();
+        for c in &m.linux {
+            out.push(b'/');
+            out.extend_from_slice(c);
+        }
+        let rest = &windows[m.windows.len()..];
+        for c in rest
+            .split(|&c| c == u16::from(b'\\'))
+            .filter(|c| !c.is_empty())
+        {
+            out.push(b'/');
+            out.extend(super::path::decode_component(c));
+        }
+        if out.is_empty() {
+            out.push(b'/');
+        }
+        Some(out)
+    }
+
     /// The Windows path of `path`, NUL-terminated. `ENOENT` when no mount
     /// covers it.
     pub fn resolve(&self, path: &LinuxPath) -> SysResult<Vec<u16>> {
