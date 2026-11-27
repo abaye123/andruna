@@ -107,6 +107,28 @@ HWUI's `EglManager` and Skia's GL back end on top of this path:
 | Buffer queue in `ANativeWindow` (`dequeueBuffer`/`queueBuffer`, CPU `lock`) | `-ENOSYS` | Needed for `Surface.lockCanvas`, media producers; design with the compositor |
 | `Surface` from the framework | not connected | andruna-compositor gives each `Surface` a `WindowTarget`; `android_view_Surface` natives wrap `native_window::create` |
 
+## Integration with andruna-compositor
+
+andruna-compositor (merged on main) hands producers a `SurfaceHandle`
+(a composition surface handle duplicated into the app process, and the
+size) and documents the same producer model in its `surface` module: a
+flip-model swap chain bound to the handle, an ANGLE pbuffer on the back
+buffer, `glFlush` and `Present` for `eglSwapBuffers`. andruna-gles's
+`WindowTarget` maps onto it directly: `surface_handle()` is
+`SurfaceHandle::handle`, `size()` follows the window. Two points to settle
+when the two are connected:
+
+- **Orientation.** ANGLE renders into the texture in OpenGL row order
+  (checked by `texture_client_buffer_content_is_bottom_up`), so a GL
+  producer's content is bottom-up. The compositor's surface visual needs a
+  per-surface vertical flip for GL producers (`window::flip_transform`),
+  which its `presented` hook or a flag on the surface can carry. Producers
+  that write top-down (video, CPU) keep the identity transform.
+- **Device.** The compositor's notes create ANGLE's display on the
+  producer's device (`EGL_ANGLE_device_creation`); andruna-gles instead
+  uses the device of ANGLE's default display, so one device serves every
+  EGL display of the process. Either works with the same handle.
+
 ## Open points
 
 - Present to photon is not measured end to end; measure it
