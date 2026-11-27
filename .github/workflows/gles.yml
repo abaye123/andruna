@@ -6,7 +6,7 @@ name: GLES
 
 on:
   push:
-    branches: [main]
+    branches: [main, p3-gles]
     paths:
       - "aosp/angle/**"
       - "aosp/aosp.lock"
