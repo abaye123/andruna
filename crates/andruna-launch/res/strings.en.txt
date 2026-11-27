@@ -12,3 +12,7 @@ busy = Too many apps are open. Close one and try again.
 internal = Andruna could not start the app {package}.\n\n{detail}
 invalid_activity = "{activity}" is not a valid activity name. The shortcut may be damaged.
 sysd_outdated = The Andruna system server is older than this launcher and cannot start the app {package} this way. Restart Andruna or reinstall it.
+uninstall_confirm = Uninstall {app}?\n\nThe app, its Start menu shortcut and its compiled code will be removed from this PC.
+keep_data = Keep the app's data (for a later reinstall)
+uninstall_running = {package} is open. Close it, then uninstall it again.
+uninstall_failed = Andruna could not uninstall {package}.\n\n{detail}

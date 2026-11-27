@@ -51,16 +51,44 @@ stays open.
 | StartPackage | 0x0003 | `str` package | Started (0x8003): `u32` host pid, `bool` already running |
 | FocusWindow | 0x0004 | `str` package | Focused (0x8004) |
 | ListPackages | 0x0005 | - | Packages (0x8005): `u32` count, `str` each, sorted |
+| InspectPackage | 0x0006 | `strs` APK paths, `str` locale | PackageDetails (0x8006), below |
+| InstallPackage | 0x0007 | `strs` APK paths | Installed (0x8007), below |
+| UninstallPackage | 0x0008 | `str` package, `bool` keep data | Uninstalled (0x8008) |
+| ListPackageInfo | 0x0009 | `str` locale | PackageInfos (0x8009): `u32` count, PackageInfo each, sorted by package |
+| StartActivity | 0x000A | `str` package, `str` activity | Started (0x8003), as StartPackage |
 | WaitEvents | 0x0010 | `u64` epoch, `u64` after, `u32` timeout ms | Events (0x8010): `u64` epoch, `u64` next, `bool` missed, `u32` count, events |
 | GetMissingFunctions | 0x0011 | `str` package | MissingFunctions (0x8011): `u64` updated ms, `u32` count, (`str` name, `u64` calls) each, most-called first |
 | ReportMissingFunctions | 0x0012 | `u32` count, (`str` name, `u64` calls) each | Reported (0x8012) |
-| StartActivity | 0x000A | `str` package, `str` activity | Started (0x8003) |
 | (any) | | | Error (0x80FF): `u16` code, `str` message |
+
+`strs` is a `u32` count followed by that many strings. A locale is a tag
+such as `he-IL` or `en`; empty means sysd's UI language.
+
+- PackageDetails: `str` package, `u64` version code, `str` version name,
+  `str` label, `u32` min SDK, `u32` target SDK, `str` signer SHA-256 (hex),
+  `u8` signature scheme (1, 2, 3, 31), `strs` permissions, `strs` native
+  ABIs, `str` selected ABI, `u64` installed version code (0 if none), `str`
+  icon PNG path.
+- Installed: `str` package, `u64` version code, `str` version name, `bool`
+  updated, `u8` compile status (0 compiled, 1 no code, 2 compiler
+  unavailable, 3 compile failed; the package is installed in all cases),
+  `str` compile message, `u32` shortcuts created.
+- PackageInfo: `str` package, `str` label, `u64` version code, `str`
+  version name, `str` icon `.ico` path, `str` icon PNG path, `strs`
+  launcher activities, `u64` install time (ms since the Unix epoch), `u64`
+  size in bytes, `str` AppUserModelID.
 
 Error codes: 1 UnsupportedVersion, 2 Malformed, 3 UnknownRequest,
 4 InvalidPackageName, 5 NotInstalled, 6 NotRunning, 7 NoWindow,
-8 HostStartFailed, 9 Busy, 10 Internal, 32 NotPermitted. Clients treat
-unknown codes as failures.
+8 HostStartFailed, 9 Busy, 10 Internal, 11 InvalidPackage,
+12 InvalidSignature, 13 SignerMismatch, 14 IncompatibleAbi, 15 SdkTooNew,
+16 Downgrade, 17 InvalidSplits, 18 InstallFailed, 32 NotPermitted. Clients
+treat unknown codes as failures.
+
+The package manager messages (0x0006 to 0x000A) have their golden payloads
+in `tests/golden/v1-pkg.txt`. Install and inspect run synchronously on the
+connection's thread and can take seconds (dex2oat); clients use a generous
+timeout.
 
 ### Number ranges
 

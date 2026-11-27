@@ -40,10 +40,12 @@ impl Fixture {
             )
             .unwrap(),
         );
+        let store = Arc::new(andruna_sysd::open_store(&layout, false).unwrap());
         let ctx = Arc::new(Context {
             layout,
             activity,
             supervisor,
+            store,
             started: Instant::now(),
         });
         let server = Server::spawn(listener, ctx.clone()).unwrap();
@@ -59,7 +61,9 @@ impl Fixture {
         Client::connect(&self.endpoint, Duration::from_secs(5)).unwrap()
     }
 
-    fn install(&self, package: &str) {
+    /// Makes a package look installed to the supervisor (its directory
+    /// exists) without a database record, for the host tests.
+    fn install_dir_only(&self, package: &str) {
         fs::create_dir_all(self.root.join("app").join(package)).unwrap();
     }
 
@@ -113,13 +117,12 @@ fn ping_status_and_packages() {
         c.request(&Request::ListPackages).unwrap(),
         Response::Packages { packages: vec![] }
     );
-    f.install("org.example.two");
-    f.install("com.example.one");
+    // A directory alone is not an installed package: the list comes from
+    // the package database.
+    f.install_dir_only("org.example.two");
     assert_eq!(
         c.request(&Request::ListPackages).unwrap(),
-        Response::Packages {
-            packages: vec!["com.example.one".into(), "org.example.two".into()]
-        }
+        Response::Packages { packages: vec![] }
     );
     // A second client is counted while open.
     let mut c2 = f.client();
@@ -163,7 +166,7 @@ fn start_refusals() {
 #[test]
 fn start_focus_and_exit_of_a_host() {
     let f = Fixture::new("host");
-    f.install("com.example.demo");
+    f.install_dir_only("com.example.demo");
     let mut c = f.client();
     let start = Request::StartPackage {
         package: "com.example.demo".into(),
@@ -309,7 +312,7 @@ fn started_pid(r: Response) -> u32 {
 fn a_crashed_host_is_an_event_and_waiters_are_passive() {
     use andruna_ipc::EventKind;
     let f = Fixture::new("crash");
-    f.install("com.example.crash");
+    f.install_dir_only("com.example.crash");
     let mut waiter = f.client();
     let (epoch, next) = match waiter
         .request(&Request::WaitEvents {

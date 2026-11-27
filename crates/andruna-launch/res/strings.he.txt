@@ -12,3 +12,7 @@ busy = יותר מדי אפליקציות פתוחות. סגרו אחת ונסו
 internal = Andruna לא הצליחה להפעיל את האפליקציה {package}.\n\n{detail}
 invalid_activity = "{activity}" אינו שם תקין של מסך באפליקציה. ייתכן שקיצור הדרך פגום.
 sysd_outdated = שרת המערכת של Andruna ישן יותר מרכיב ההפעלה ואינו יכול להפעיל כך את האפליקציה {package}. הפעילו מחדש את Andruna או התקינו אותה מחדש.
+uninstall_confirm = להסיר את {app}?\n\nהאפליקציה, קיצור הדרך שלה בתפריט התחל והקוד המהודר שלה יוסרו מהמחשב.
+keep_data = לשמור את נתוני האפליקציה (להתקנה מחדש בעתיד)
+uninstall_running = {package} פתוחה. סגרו אותה ונסו להסיר שוב.
+uninstall_failed = Andruna לא הצליחה להסיר את {package}.\n\n{detail}

@@ -131,6 +131,56 @@ fn reports_a_package_that_is_not_installed() {
 }
 
 #[test]
+fn uninstalls_quietly() {
+    use andruna_pkg::testkit::apk::ApkSpec;
+    use andruna_pkg::testkit::sign::{KeyKind, SignConfig, TestKey};
+    let env = Env::new("uninstall");
+    let uninstall = |package: &str| {
+        Command::new(LAUNCH)
+            .args([
+                "--quiet",
+                "--uninstall",
+                "--instance",
+                &env.instance,
+                "--root",
+            ])
+            .arg(&env.root)
+            .arg(package)
+            .output()
+            .unwrap()
+    };
+    // Not installed: refused; this also started sysd.
+    let out = uninstall("org.example.gone");
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert!(stderr(&out).contains("not installed"), "{}", stderr(&out));
+
+    let key = TestKey::generate(KeyKind::P256, "launch test");
+    let apk = env.root.join("app.apk");
+    fs::write(
+        &apk,
+        ApkSpec::new("org.example.gone").build(&SignConfig::new(key)),
+    )
+    .unwrap();
+    let mut c = env.client().unwrap();
+    let r = c
+        .request(&Request::InstallPackage {
+            paths: vec![apk.display().to_string()],
+        })
+        .unwrap();
+    assert!(matches!(r, Response::Installed(_)), "{r:?}");
+
+    let out = uninstall("org.example.gone");
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        c.request(&Request::ListPackages).unwrap(),
+        Response::Packages { packages: vec![] }
+    );
+    // `<package>/<activity>` is not a valid uninstall target.
+    let out = uninstall("org.example.gone/.Main");
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+}
+
+#[test]
 fn rejects_bad_command_lines_without_starting_sysd() {
     let env = Env::new("usage");
     let out = env.launch("not a package");

@@ -25,8 +25,13 @@ What exists now:
   `diagnostics\<package>.missing`.
 - **Supervision**: host processes run in a kill-on-close job object, their
   exit is tracked, and their window can be focused.
-- **Installed packages** are the directories `app\<package>\`; nothing
-  installs packages yet, so the list is empty on a real machine.
+- **Package manager** ([andruna-pkg](../andruna-pkg/README.md)): inspect,
+  install, uninstall and list requests (`src/pkg.rs`). The product writes
+  Start menu shortcuts and "Installed apps" entries; with `--root` (tests,
+  development) shortcuts go to `<root>\start-menu` and no registry entry is
+  written. dex2oat runs through `andruna-app.exe` next to sysd when it and
+  its ART root exist; otherwise installs report the compile step as
+  unavailable.
 
 **Placeholder.** The host process is meant to be `andruna-app.exe`, which
 does not exist yet. Until it does, sysd starts its own executable as

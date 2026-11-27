@@ -55,6 +55,10 @@ mod kind {
     pub const WAIT_EVENTS: u16 = 0x0010;
     pub const GET_MISSING_FUNCTIONS: u16 = 0x0011;
     pub const REPORT_MISSING_FUNCTIONS: u16 = 0x0012;
+    pub const INSPECT_PACKAGE: u16 = 0x0006;
+    pub const INSTALL_PACKAGE: u16 = 0x0007;
+    pub const UNINSTALL_PACKAGE: u16 = 0x0008;
+    pub const LIST_PACKAGE_INFO: u16 = 0x0009;
 
     pub const PONG: u16 = 0x8001;
     pub const STATUS_REPLY: u16 = 0x8002;
@@ -64,7 +68,114 @@ mod kind {
     pub const EVENTS: u16 = 0x8010;
     pub const MISSING_FUNCTIONS: u16 = 0x8011;
     pub const REPORTED: u16 = 0x8012;
+    pub const PACKAGE_DETAILS: u16 = 0x8006;
+    pub const INSTALLED: u16 = 0x8007;
+    pub const UNINSTALLED: u16 = 0x8008;
+    pub const PACKAGE_INFOS: u16 = 0x8009;
     pub const ERROR: u16 = 0x80FF;
+}
+
+/// What [`Request::InspectPackage`] reports about an APK set before it is
+/// installed (the install confirmation screen, P-12).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct PackageDetails {
+    pub package: String,
+    pub version_code: u64,
+    pub version_name: String,
+    /// The application label in the requested locale.
+    pub label: String,
+    pub min_sdk: u32,
+    pub target_sdk: u32,
+    /// SHA-256 of the signing certificate, lowercase hex.
+    pub signer_sha256: String,
+    /// Signature scheme that verified: 1, 2, 3 or 31 (v3.1).
+    pub signature_scheme: u8,
+    /// Requested permissions, in manifest order.
+    pub permissions: Vec<String>,
+    /// Native ABIs in the APK set (`lib/<abi>/`), empty for pure Java.
+    pub native_abis: Vec<String>,
+    /// The ABI that would be installed, empty for pure Java.
+    pub selected_abi: String,
+    /// Version code of the installed package of the same name; 0 when it
+    /// is not installed.
+    pub installed_version_code: u64,
+    /// A PNG of the launcher icon (256 x 256) that sysd wrote to its cache
+    /// directory; empty when the APK has no icon sysd can render.
+    pub icon_png: String,
+}
+
+/// How the ahead-of-time compilation step of an install ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompileStatus {
+    /// dex2oat compiled the package.
+    Compiled,
+    /// The package has no code.
+    NoCode,
+    /// The compiler is not available (no andruna-app or ART root); the
+    /// package runs with the JIT.
+    Unavailable,
+    /// dex2oat failed; the package is installed and runs with the JIT.
+    Failed,
+    /// A value this version does not know.
+    Other(u8),
+}
+
+impl CompileStatus {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::Compiled => 0,
+            Self::NoCode => 1,
+            Self::Unavailable => 2,
+            Self::Failed => 3,
+            Self::Other(v) => v,
+        }
+    }
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => Self::Compiled,
+            1 => Self::NoCode,
+            2 => Self::Unavailable,
+            3 => Self::Failed,
+            v => Self::Other(v),
+        }
+    }
+}
+
+/// The result of [`Request::InstallPackage`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstallOutcome {
+    pub package: String,
+    pub version_code: u64,
+    pub version_name: String,
+    /// True when an installed version was replaced.
+    pub updated: bool,
+    pub compile: CompileStatus,
+    /// Detail of the compile step (empty when compiled).
+    pub compile_message: String,
+    /// Start menu shortcuts created (one per launcher activity).
+    pub shortcuts: u32,
+}
+
+/// One installed package, as [`Request::ListPackageInfo`] reports it.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct PackageInfo {
+    pub package: String,
+    /// Label in the requested locale.
+    pub label: String,
+    pub version_code: u64,
+    pub version_name: String,
+    /// The package's `.ico` (16 to 256 px), empty when it has none.
+    pub icon_ico: String,
+    /// A 256 x 256 PNG of the icon, empty when it has none.
+    pub icon_png: String,
+    /// Fully qualified launcher activity names, in manifest order.
+    pub launcher_activities: Vec<String>,
+    /// Install or last update time, milliseconds since the Unix epoch.
+    pub installed_ms: u64,
+    /// Bytes used by the installed APKs and compiled code (not app data).
+    pub size_bytes: u64,
+    /// The AppUserModelID of the package's windows and shortcuts.
+    pub app_user_model_id: String,
 }
 
 /// A request from a client (launcher, manager) to sysd.
@@ -82,6 +193,21 @@ pub enum Request {
     FocusWindow { package: String },
     /// The installed packages; answered with [`Response::Packages`].
     ListPackages,
+    /// Parses and verifies an APK set (a base APK and optional split APKs,
+    /// absolute paths) without installing it; answered with
+    /// [`Response::PackageDetails`]. `locale` (for example `he-IL`; empty
+    /// for sysd's UI language) selects the label.
+    InspectPackage { paths: Vec<String>, locale: String },
+    /// Installs or updates a package from an APK set; answered with
+    /// [`Response::Installed`] when the package is installed (also when
+    /// only the compile step failed, see [`CompileStatus`]).
+    InstallPackage { paths: Vec<String> },
+    /// Removes a package, its shortcuts and its compiled code, and its data
+    /// unless `keep_data`; answered with [`Response::Uninstalled`].
+    UninstallPackage { package: String, keep_data: bool },
+    /// The installed packages with their details; answered with
+    /// [`Response::PackageInfos`].
+    ListPackageInfo { locale: String },
     /// Events after `after` (the sequence number of the last event the
     /// client saw) of the sysd instance `epoch`; answered with
     /// [`Response::Events`] as soon as there is one, or empty after
@@ -160,6 +286,13 @@ pub enum Response {
         entries: Vec<MissingFunction>,
     },
     Reported,
+    PackageDetails(PackageDetails),
+    Installed(InstallOutcome),
+    Uninstalled,
+    PackageInfos {
+        /// Sorted by package name.
+        packages: Vec<PackageInfo>,
+    },
     Error {
         code: ErrorCode,
         message: String,
@@ -193,6 +326,24 @@ pub enum ErrorCode {
     /// The caller may not make this request (for example a report from a
     /// process that is not a host sysd started).
     NotPermitted,
+    /// The file is not a valid APK: damaged archive, manifest or resources,
+    /// misaligned entries, or a file that cannot be read.
+    InvalidPackage,
+    /// The APK is unsigned, its signature does not verify, or it uses a
+    /// signature algorithm that is not supported.
+    InvalidSignature,
+    /// An update is signed by another key than the installed package.
+    SignerMismatch,
+    /// The package's native code cannot run on this PC (P-14).
+    IncompatibleAbi,
+    /// The package needs a newer Android version than Andruna provides.
+    SdkTooNew,
+    /// The update's version code is lower than the installed one.
+    Downgrade,
+    /// The APKs given do not form one package (splits).
+    InvalidSplits,
+    /// Writing the package to disk, the database or the Start menu failed.
+    InstallFailed,
     /// A code this version does not know.
     Other(u16),
 }
@@ -211,6 +362,14 @@ impl ErrorCode {
             Self::Busy => 9,
             Self::Internal => 10,
             Self::NotPermitted => 32,
+            Self::InvalidPackage => 11,
+            Self::InvalidSignature => 12,
+            Self::SignerMismatch => 13,
+            Self::IncompatibleAbi => 14,
+            Self::SdkTooNew => 15,
+            Self::Downgrade => 16,
+            Self::InvalidSplits => 17,
+            Self::InstallFailed => 18,
             Self::Other(c) => c,
         }
     }
@@ -228,6 +387,14 @@ impl ErrorCode {
             9 => Self::Busy,
             10 => Self::Internal,
             32 => Self::NotPermitted,
+            11 => Self::InvalidPackage,
+            12 => Self::InvalidSignature,
+            13 => Self::SignerMismatch,
+            14 => Self::IncompatibleAbi,
+            15 => Self::SdkTooNew,
+            16 => Self::Downgrade,
+            17 => Self::InvalidSplits,
+            18 => Self::InstallFailed,
             c => Self::Other(c),
         }
     }
@@ -326,6 +493,13 @@ impl Writer {
         self.u16(end as u16);
         self.0.extend_from_slice(&s.as_bytes()[..end]);
     }
+    /// A list of strings: `u32` count, then each string.
+    fn strs(&mut self, v: &[String]) {
+        self.u32(v.len() as u32);
+        for s in v {
+            self.str(s);
+        }
+    }
 }
 
 struct Reader<'a>(&'a [u8]);
@@ -369,6 +543,23 @@ impl<'a> Reader<'a> {
         let n = self.u16()? as usize;
         let b = self.take(n)?;
         String::from_utf8(b.to_vec()).map_err(|_| DecodeError::InvalidUtf8)
+    }
+    /// A count of items that each take at least `min` bytes, checked
+    /// against the remaining bytes before anything is allocated.
+    fn count(&mut self, min: usize) -> Result<usize, DecodeError> {
+        let n = self.u32()? as usize;
+        if n > self.0.len() / min.max(1) {
+            return Err(DecodeError::Truncated);
+        }
+        Ok(n)
+    }
+    fn strs(&mut self) -> Result<Vec<String>, DecodeError> {
+        let n = self.count(2)?;
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            v.push(self.str()?);
+        }
+        Ok(v)
     }
     fn end(&self) -> Result<(), DecodeError> {
         if self.0.is_empty() {
@@ -443,6 +634,28 @@ impl Request {
                 events::write_missing(&mut w, entries);
                 w
             }
+            Self::InspectPackage { paths, locale } => {
+                let mut w = Writer::new(kind::INSPECT_PACKAGE, id);
+                w.strs(paths);
+                w.str(locale);
+                w
+            }
+            Self::InstallPackage { paths } => {
+                let mut w = Writer::new(kind::INSTALL_PACKAGE, id);
+                w.strs(paths);
+                w
+            }
+            Self::UninstallPackage { package, keep_data } => {
+                let mut w = Writer::new(kind::UNINSTALL_PACKAGE, id);
+                w.str(package);
+                w.u8(u8::from(*keep_data));
+                w
+            }
+            Self::ListPackageInfo { locale } => {
+                let mut w = Writer::new(kind::LIST_PACKAGE_INFO, id);
+                w.str(locale);
+                w
+            }
             Self::StartActivity { package, activity } => {
                 let mut w = Writer::new(kind::START_ACTIVITY, id);
                 w.str(package);
@@ -471,6 +684,16 @@ impl Request {
             kind::REPORT_MISSING_FUNCTIONS => Self::ReportMissingFunctions {
                 entries: events::read_missing(&mut r)?,
             },
+            kind::INSPECT_PACKAGE => Self::InspectPackage {
+                paths: r.strs()?,
+                locale: r.str()?,
+            },
+            kind::INSTALL_PACKAGE => Self::InstallPackage { paths: r.strs()? },
+            kind::UNINSTALL_PACKAGE => Self::UninstallPackage {
+                package: r.str()?,
+                keep_data: r.bool()?,
+            },
+            kind::LIST_PACKAGE_INFO => Self::ListPackageInfo { locale: r.str()? },
             kind::START_ACTIVITY => Self::StartActivity {
                 package: r.str()?,
                 activity: r.str()?,
@@ -551,6 +774,52 @@ impl Response {
                 w
             }
             Self::Reported => Writer::new(kind::REPORTED, id),
+            Self::PackageDetails(d) => {
+                let mut w = Writer::new(kind::PACKAGE_DETAILS, id);
+                w.str(&d.package);
+                w.u64(d.version_code);
+                w.str(&d.version_name);
+                w.str(&d.label);
+                w.u32(d.min_sdk);
+                w.u32(d.target_sdk);
+                w.str(&d.signer_sha256);
+                w.u8(d.signature_scheme);
+                w.strs(&d.permissions);
+                w.strs(&d.native_abis);
+                w.str(&d.selected_abi);
+                w.u64(d.installed_version_code);
+                w.str(&d.icon_png);
+                w
+            }
+            Self::Installed(o) => {
+                let mut w = Writer::new(kind::INSTALLED, id);
+                w.str(&o.package);
+                w.u64(o.version_code);
+                w.str(&o.version_name);
+                w.u8(u8::from(o.updated));
+                w.u8(o.compile.to_u8());
+                w.str(&o.compile_message);
+                w.u32(o.shortcuts);
+                w
+            }
+            Self::Uninstalled => Writer::new(kind::UNINSTALLED, id),
+            Self::PackageInfos { packages } => {
+                let mut w = Writer::new(kind::PACKAGE_INFOS, id);
+                w.u32(packages.len() as u32);
+                for p in packages {
+                    w.str(&p.package);
+                    w.str(&p.label);
+                    w.u64(p.version_code);
+                    w.str(&p.version_name);
+                    w.str(&p.icon_ico);
+                    w.str(&p.icon_png);
+                    w.strs(&p.launcher_activities);
+                    w.u64(p.installed_ms);
+                    w.u64(p.size_bytes);
+                    w.str(&p.app_user_model_id);
+                }
+                w
+            }
             Self::Error { code, message } => {
                 let mut w = Writer::new(kind::ERROR, id);
                 w.u16(code.to_u16());
@@ -608,6 +877,51 @@ impl Response {
                 entries: events::read_missing(&mut r)?,
             },
             kind::REPORTED => Self::Reported,
+            kind::PACKAGE_DETAILS => Self::PackageDetails(PackageDetails {
+                package: r.str()?,
+                version_code: r.u64()?,
+                version_name: r.str()?,
+                label: r.str()?,
+                min_sdk: r.u32()?,
+                target_sdk: r.u32()?,
+                signer_sha256: r.str()?,
+                signature_scheme: r.u8()?,
+                permissions: r.strs()?,
+                native_abis: r.strs()?,
+                selected_abi: r.str()?,
+                installed_version_code: r.u64()?,
+                icon_png: r.str()?,
+            }),
+            kind::INSTALLED => Self::Installed(InstallOutcome {
+                package: r.str()?,
+                version_code: r.u64()?,
+                version_name: r.str()?,
+                updated: r.bool()?,
+                compile: CompileStatus::from_u8(r.u8()?),
+                compile_message: r.str()?,
+                shortcuts: r.u32()?,
+            }),
+            kind::UNINSTALLED => Self::Uninstalled,
+            kind::PACKAGE_INFOS => {
+                // An entry is at least 7 strings, 3 u64 and a u32 count.
+                let n = r.count(7 * 2 + 3 * 8 + 4)?;
+                let mut packages = Vec::with_capacity(n);
+                for _ in 0..n {
+                    packages.push(PackageInfo {
+                        package: r.str()?,
+                        label: r.str()?,
+                        version_code: r.u64()?,
+                        version_name: r.str()?,
+                        icon_ico: r.str()?,
+                        icon_png: r.str()?,
+                        launcher_activities: r.strs()?,
+                        installed_ms: r.u64()?,
+                        size_bytes: r.u64()?,
+                        app_user_model_id: r.str()?,
+                    });
+                }
+                Self::PackageInfos { packages }
+            }
             kind::ERROR => Self::Error {
                 code: ErrorCode::from_u16(r.u16()?),
                 message: r.str()?,
@@ -704,6 +1018,47 @@ mod tests {
             Response::error(ErrorCode::NotInstalled, "not installed"),
             Response::error(ErrorCode::Other(999), ""),
         ]
+    }
+
+    #[test]
+    fn package_messages_round_trip_and_bound_counts() {
+        let reqs = [
+            Request::InspectPackage {
+                paths: vec!["C:\\a.apk".into(), "C:\\b.apk".into()],
+                locale: "he-IL".into(),
+            },
+            Request::InstallPackage { paths: vec![] },
+            Request::UninstallPackage {
+                package: "a.b".into(),
+                keep_data: true,
+            },
+            Request::ListPackageInfo { locale: "".into() },
+            Request::StartActivity {
+                package: "a.b".into(),
+                activity: "a.b.Main".into(),
+            },
+        ];
+        for r in reqs {
+            assert_eq!(Request::decode(&r.encode(3)), Ok((3, r)));
+        }
+        let infos = Response::PackageInfos {
+            packages: vec![PackageInfo {
+                package: "a.b".into(),
+                launcher_activities: vec!["a.b.Main".into()],
+                ..Default::default()
+            }],
+        };
+        assert_eq!(Response::decode(&infos.encode(4)), Ok((4, infos)));
+        let mut bytes = Response::PackageInfos { packages: vec![] }.encode(1);
+        bytes[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(Response::decode(&bytes), Err(DecodeError::Truncated));
+        let mut bytes = Request::InstallPackage { paths: vec![] }.encode(1);
+        bytes[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(Request::decode(&bytes), Err(DecodeError::Truncated));
+        for c in 1..=20u16 {
+            assert_eq!(ErrorCode::from_u16(c).to_u16(), c);
+        }
+        assert_eq!(CompileStatus::from_u8(9), CompileStatus::Other(9));
     }
 
     #[test]

@@ -42,6 +42,12 @@ struct Args {
     activity: Option<String>,
     instance: String,
     root: Option<PathBuf>,
+    /// `--uninstall`: remove the package (what Windows "Installed apps"
+    /// runs, ADR 0027).
+    uninstall: bool,
+    /// `--keep-data` with `--quiet --uninstall`.
+    keep_data: bool,
+    quiet: bool,
 }
 
 /// A failure, as a resource key with its arguments and an English detail
@@ -70,10 +76,15 @@ fn parse_args() -> Result<Args, Failure> {
     let mut package = None;
     let mut instance = DEFAULT_INSTANCE.to_string();
     let mut root = None;
+    let mut uninstall = false;
+    let mut keep_data = false;
+    let mut quiet = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--quiet" => {}
+            "--quiet" => quiet = true,
+            "--uninstall" => uninstall = true,
+            "--keep-data" => keep_data = true,
             "--instance" => instance = it.next().ok_or_else(|| Failure::new("usage", 1))?,
             "--root" => {
                 root = Some(PathBuf::from(
@@ -87,11 +98,17 @@ fn parse_args() -> Result<Args, Failure> {
     }
     let target: String = package.ok_or_else(|| Failure::new("usage", 1))?;
     let (package, activity) = split_target(&target);
+    if uninstall && activity.is_some() {
+        return Err(Failure::new("usage", 1));
+    }
     Ok(Args {
         package,
         activity,
         instance,
         root,
+        uninstall,
+        keep_data,
+        quiet,
     })
 }
 
@@ -287,6 +304,70 @@ fn report(f: &Failure, quiet: bool) {
     );
 }
 
+/// Asks for confirmation (unless `--quiet`), then sends `UninstallPackage`.
+fn uninstall_package(args: &Args) -> Result<(), Failure> {
+    let endpoint =
+        Endpoint::for_current_user(&args.instance).map_err(|_| Failure::new("usage", 1))?;
+    let mut client = connect(args, &endpoint)?;
+    let failed = |detail: String| {
+        Failure::new("uninstall_failed", 3)
+            .arg("package", args.package.clone())
+            .arg("detail", detail)
+    };
+    let keep_data = if args.quiet {
+        args.keep_data
+    } else {
+        // The app's label in the user's language, for the question.
+        let lang = Lang::current();
+        let locale = if lang.is_rtl() { "he" } else { "en" };
+        let label = match client.request(&Request::ListPackageInfo {
+            locale: locale.into(),
+        }) {
+            Ok(Response::PackageInfos { packages }) => packages
+                .into_iter()
+                .find(|p| p.package == args.package)
+                .map(|p| p.label),
+            _ => None,
+        }
+        .unwrap_or_else(|| args.package.clone());
+        let text = l10n::text(lang, "uninstall_confirm", &[("app", &label)]);
+        let (instruction, content) = text.split_once("\n\n").unwrap_or((&text, ""));
+        let answer = sys::confirm(
+            &l10n::text(lang, "title", &[]),
+            instruction,
+            content,
+            &l10n::text(lang, "keep_data", &[]),
+            lang.is_rtl(),
+        );
+        if !answer.yes {
+            return Ok(());
+        }
+        answer.checked
+    };
+    let resp = client
+        .request(&Request::UninstallPackage {
+            package: args.package.clone(),
+            keep_data,
+        })
+        .map_err(|e| failed(e.to_string()))?;
+    match resp {
+        Response::Uninstalled => Ok(()),
+        Response::Error { code, message } => {
+            let f = match code {
+                ErrorCode::NotInstalled => Failure::new("not_installed", 3),
+                ErrorCode::InvalidPackageName => Failure::new("invalid_package", 1),
+                ErrorCode::Busy => Failure::new("uninstall_running", 3),
+                // Also an older sysd without the package manager.
+                _ => Failure::new("uninstall_failed", 3),
+            };
+            Err(f
+                .arg("package", args.package.clone())
+                .arg("detail", message))
+        }
+        other => Err(failed(format!("unexpected answer {other:?}"))),
+    }
+}
+
 fn main() {
     sys::make_std_handles_private();
     let quiet = std::env::args().any(|a| a == "--quiet");
@@ -301,7 +382,11 @@ fn main() {
                 .arg("package", args.package.clone())
                 .arg("activity", a.clone()));
         }
-        start_package(&args)
+        if args.uninstall {
+            uninstall_package(&args)
+        } else {
+            start_package(&args)
+        }
     });
     if let Err(f) = result {
         report(&f, quiet);
