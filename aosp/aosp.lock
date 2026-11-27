@@ -166,6 +166,12 @@ commit = "8731e6760935ad5289fd64c37d28155a0fa289e3"
 purpose = "zlib for libziparchive and libcore"
 
 [[project]]
+name = "platform/frameworks/base"
+path = "frameworks/base"
+commit = "94b4c163b7dfe5ce3607f7bb8456f9573f7de57d"
+purpose = "the Android framework: framework.jar, libandroid_runtime, libandroidfw, framework-res, aapt2"
+
+[[project]]
 name = "platform/frameworks/libs/modules-utils"
 path = "frameworks/libs/modules-utils"
 commit = "a11fa5c814cc3239217ce4d093bfc5c808f73785"
@@ -227,6 +233,12 @@ name = "platform/system/timezone"
 path = "system/timezone"
 commit = "cbd571efcf6b551ba83a31147ec7a06182f8ec31"
 purpose = "time zone data files of the tzdata module (tzdata, ICU overlay, tz_version)"
+
+[[project]]
+name = "platform/system/tools/aidl"
+path = "system/tools/aidl"
+commit = "9a94664f74536bf28010207fd1804b04c6435e2c"
+purpose = "the AIDL compiler, built as a host tool for framework.jar"
 
 [[project]]
 name = "platform/system/unwinding"
