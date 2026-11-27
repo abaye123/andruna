@@ -103,6 +103,9 @@ set(ANDRUNA_BP_BASE_OPTIONS
   -fPIC -O2 -g
   -funwind-tables -ffunction-sections -fdata-sections
   -fstack-protector-strong
+  # Soong's default for device code (as aosp/cmake/android-elf.cmake);
+  # modules that opt out pass their own flag after this one.
+  -ftrivial-auto-var-init=zero
   -fno-strict-aliasing
   -fdebug-prefix-map=${AOSP}=aosp
   $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>

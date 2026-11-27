@@ -36,7 +36,7 @@ foreach(s ${_libs_first} ${_others})
     add_executable(${n} "${s}")
     guest_executable(${n})
   endif()
-  target_compile_options(${n} PRIVATE -O2 -g -fPIC -funwind-tables -fstack-protector-strong
+  target_compile_options(${n} PRIVATE -O2 -g -fPIC -funwind-tables -fstack-protector-strong -ftrivial-auto-var-init=zero
     $<$<COMPILE_LANGUAGE:CXX>:-nostdinc++>
     "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-isystem ${ANDRUNA_LIBCXX_DIR}/include/c++/v1>")
   target_link_options(${n} PRIVATE "-L${CMAKE_CURRENT_BINARY_DIR}")

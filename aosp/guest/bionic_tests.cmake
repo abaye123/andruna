@@ -61,7 +61,7 @@ target_include_directories(bionic_tests PRIVATE
   "${AOSP}/external/gwp_asan"
   "${AOSP}/external/tinyxml2")
 target_compile_options(bionic_tests PRIVATE
-  -fstack-protector-all -fno-builtin -fexceptions
+  -fstack-protector-all -fno-builtin -fexceptions -ftrivial-auto-var-init=zero
   -Wno-deprecated-declarations -Wno-invalid-offsetof)
 # libtinyxml2 (aosp/modules/libartbase.cmake): malloc_test parses
 # malloc_info's XML.
