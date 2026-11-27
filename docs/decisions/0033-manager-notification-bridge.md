@@ -42,8 +42,10 @@ that does not change the framing.
 - Notifications show "Andruna" as the source, with the app as attribution;
   per-app sources, channels in Windows settings, actions and inline reply
   (rest of D-14) need per-package registration later.
-- The manager process (about 60 MB working set) runs while apps run. A
-  smaller notifier remains possible later without protocol changes.
+- The manager process runs while apps run: measured once in the background
+  with no window, a Debug x64 build used 104 MB working set, 50 MB private
+  (Release not measured yet). A smaller notifier remains possible later
+  without protocol changes.
 - No producer of notification events exists yet: the notification service
   arrives with the framework and calls `Events::publish`. Crash events are
   real: a host that ends on its own with a non-zero code.
