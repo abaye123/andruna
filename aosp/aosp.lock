@@ -28,6 +28,12 @@ commit = "06356e41c5ed7b12220b24c05ba4fdb873b126a7"
 purpose = "libc headers and the bionic sources (spike S4)"
 
 [[project]]
+name = "platform/external/angle"
+path = "external/angle"
+commit = "1f4500d3906c24de59eec5b9cda17a2ad2a8ba2d"
+purpose = "OpenGL ES and EGL on Direct3D 11 for guest code, built as Windows DLLs (BSD-3-Clause; ADR 0029)"
+
+[[project]]
 name = "platform/external/arm-optimized-routines"
 path = "external/arm-optimized-routines"
 commit = "498b3de1a06e8cd87b2f9d49d1d8a23ebba5cc5a"
