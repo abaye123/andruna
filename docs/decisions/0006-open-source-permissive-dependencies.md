@@ -14,6 +14,12 @@ Public domain code with an explicit dedication in its source (for example
 dlmalloc and the LZMA SDK used by AOSP) is allowed. It is recorded in
 `THIRD_PARTY_NOTICES` like any other dependency.
 
+## Amendment, 2026-11-27
+The Windows App SDK (WinUI 3 and its runtime parts), under Microsoft's
+redistributable license terms, is allowed as a named exception: it is the
+platform of the management app chosen in ADR 0005 and has no permissive
+alternative. It ships only with the management app.
+
 ## Consequences
 - `cargo deny` and a notices file are enforced in CI.
 - Contribution terms (CLA or DCO) must be decided before outside

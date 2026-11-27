@@ -1,6 +1,6 @@
 # 0015 - ART's x64 thread register is the bionic TLS slot behind FS
 
-**Status:** proposed, 2026-11-27
+**Status:** accepted, 2026-11-27
 
 ## Context
 ART on x86_64 sets the GS base to the current `Thread*`
