@@ -28,6 +28,8 @@ work in parallel without breaking each other or the product.
   `THIRD_PARTY_NOTICES` with its source. Andruna's own code is
   AGPL-3.0-only ([LICENSING.md](LICENSING.md), ADR 0018); this does not
   relax the rule above for third-party code.
+  Build and test tools that never ship (for example JUnit) may be under any
+  OSI-approved license (ADR 0006, amendment of 2026-11-27).
 - **No references to other projects.** Specs, plans, docs, comments and
   commit messages in this repository do not mention or link to other
   repositories or similar projects. Dependencies we actually use (AOSP,
