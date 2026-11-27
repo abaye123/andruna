@@ -95,7 +95,8 @@ pub unsafe fn dispatch(n: i64, a: [i64; 6]) -> i64 {
     let t0 = crate::profile::start();
     // SAFETY: forwarded from this function's contract.
     let r = unsafe { dispatch_inner(n, a) };
-    crate::profile::syscall(n, t0);
+    // SAFETY: the arguments the call was made with (contract).
+    unsafe { crate::profile::syscall(n, &a, t0) };
     if trace() {
         crate::debug::report(format_args!(
             "syscall {n}({:#x}, {:#x}, {:#x}, {:#x}) = {r}",

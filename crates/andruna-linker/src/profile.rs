@@ -89,13 +89,43 @@ pub fn start() -> Option<Instant> {
     enabled().then(Instant::now)
 }
 
-/// End of a timed system call `n` started at `t0`.
+/// System calls that take a path as their second argument (`openat`,
+/// `newfstatat`/`fstatat`, `faccessat`, `readlinkat`).
+#[cfg(target_arch = "x86_64")]
+const PATH_CALLS: [i64; 4] = [257, 262, 269, 267];
+#[cfg(target_arch = "aarch64")]
+const PATH_CALLS: [i64; 4] = [56, 79, 48, 78];
+
+/// The slowest calls: (ns, number, path argument).
+static SLOWEST: std::sync::Mutex<Vec<(u64, i64, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// End of a timed system call `n` with arguments `a`, started at `t0`.
+///
+/// # Safety
+///
+/// For the calls in `PATH_CALLS`, `a[1]` is NULL or the NUL-terminated
+/// path the call was made with (the system call's own contract).
 #[inline]
-pub fn syscall(n: i64, t0: Option<Instant>) {
+pub unsafe fn syscall(n: i64, a: &[i64; 6], t0: Option<Instant>) {
     if let Some(t0) = t0 {
+        let ns = t0.elapsed().as_nanos() as u64;
         let i = (n as usize).min(NR - 1);
         COUNT[i].fetch_add(1, Ordering::Relaxed);
-        TICKS[i].fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        TICKS[i].fetch_add(ns, Ordering::Relaxed);
+        if ns > 200_000 {
+            let path = if PATH_CALLS.contains(&n) && a[1] != 0 {
+                // SAFETY: the caller's path argument (contract).
+                unsafe { core::ffi::CStr::from_ptr(a[1] as *const core::ffi::c_char) }
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                String::new()
+            };
+            let mut v = SLOWEST.lock().unwrap_or_else(|e| e.into_inner());
+            v.push((ns, n, path));
+            v.sort_by_key(|x| std::cmp::Reverse(x.0));
+            v.truncate(15);
+        }
     }
 }
 
@@ -180,6 +210,14 @@ pub fn report() {
             "[andruna-profile]   {i:<5} {c:>8} {:>12.3} {:>9.2}",
             *t as f64 / 1e6,
             *t as f64 / 1e3 / *c as f64
+        );
+    }
+    let _ = writeln!(s, "[andruna-profile] slowest calls (over 0.2 ms):");
+    for (ns, n, path) in SLOWEST.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+        let _ = writeln!(
+            s,
+            "[andruna-profile]   {:>9.3} ms  nr {n} {path}",
+            *ns as f64 / 1e6
         );
     }
     use std::io::Write as _;
