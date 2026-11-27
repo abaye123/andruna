@@ -143,7 +143,7 @@ impl Section {
 
     /// The 8-byte aligned word at `offset`.
     pub fn word(&self, offset: usize) -> &AtomicU64 {
-        assert!(offset % 8 == 0 && offset + 8 <= self.len);
+        assert!(offset.is_multiple_of(8) && offset + 8 <= self.len);
         // SAFETY: in bounds and aligned (the view is page aligned and
         // `offset` a multiple of 8); `AtomicU64` has the layout of `u64`.
         unsafe { &*((self.view.Value as *const u8).add(offset) as *const AtomicU64) }

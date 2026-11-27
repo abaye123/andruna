@@ -170,6 +170,20 @@ fn run(shared: Arc<(Mutex<Shared>, Condvar)>) {
     }
 }
 
+/// Waits for `n` events and returns their mean period, for tests and the
+/// host.
+pub fn measure(rx: &Receiver<VsyncEvent>, n: usize) -> Option<(Duration, Vec<VsyncEvent>)> {
+    let mut v = Vec::with_capacity(n);
+    while v.len() < n {
+        v.push(rx.recv_timeout(Duration::from_secs(2)).ok()?);
+    }
+    let span = v.last()?.timestamp_ns - v.first()?.timestamp_ns;
+    Some((
+        Duration::from_nanos((span / (n as i64 - 1).max(1)) as u64),
+        v,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::extrapolate;
@@ -189,18 +203,4 @@ mod tests {
         );
         assert_eq!(extrapolate(1000, 1100, 0, 5000), (1000, 1100, 0));
     }
-}
-
-/// Waits for `n` events and returns their mean period, for tests and the
-/// host.
-pub fn measure(rx: &Receiver<VsyncEvent>, n: usize) -> Option<(Duration, Vec<VsyncEvent>)> {
-    let mut v = Vec::with_capacity(n);
-    while v.len() < n {
-        v.push(rx.recv_timeout(Duration::from_secs(2)).ok()?);
-    }
-    let span = v.last()?.timestamp_ns - v.first()?.timestamp_ns;
-    Some((
-        Duration::from_nanos((span / (n as i64 - 1).max(1)) as u64),
-        v,
-    ))
 }

@@ -16,6 +16,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use super::win::Hwnd;
 use crate::input::kcm::{KeyOutput, Mods};
 
+/// A composition: text, caret (UTF-16 units) and the converted clause.
+pub type Composing = (String, i32, Option<(i32, i32)>);
+
 /// What one `WM_IME_COMPOSITION` carries.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Composition {
@@ -23,7 +26,7 @@ pub struct Composition {
     pub result: Option<String>,
     /// The new composition: text, caret (UTF-16 units) and the clause being
     /// converted.
-    pub composing: Option<(String, i32, Option<(i32, i32)>)>,
+    pub composing: Option<Composing>,
 }
 
 struct Ctx(Hwnd, HIMC);
