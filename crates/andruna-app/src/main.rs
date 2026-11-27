@@ -1,7 +1,7 @@
 //! `andruna-app`: starts ART on andruna-linker (see the library
 //! documentation and the crate README).
 
-use andruna_app::{Action, ArtRoot, Layout, USAGE, execute, exe_dir, parse, plan};
+use andruna_app::{Action, ArtRoot, Layout, USAGE, exe_dir, execute, parse, plan};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

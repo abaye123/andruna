@@ -27,6 +27,7 @@ pub mod nr {
     pub const FORK: i64 = 57;
     pub const VFORK: i64 = 58;
     pub const EXIT: i64 = 60;
+    pub const GETPID: i64 = 39;
     pub const GETUID: i64 = 102;
     pub const GETGID: i64 = 104;
     pub const GETEUID: i64 = 107;
@@ -47,6 +48,7 @@ pub mod nr {
     pub const EXIT: i64 = 93;
     pub const EXIT_GROUP: i64 = 94;
     pub const SET_TID_ADDRESS: i64 = 96;
+    pub const GETPID: i64 = 172;
     pub const GETUID: i64 = 174;
     pub const GETEUID: i64 = 175;
     pub const GETGID: i64 = 176;
@@ -145,6 +147,7 @@ unsafe fn dispatch_inner(n: i64, a: [i64; 6]) -> i64 {
         nr::CLONE | nr::CLONE3 => -i64::from(ENOSYS),
         #[cfg(target_arch = "x86_64")]
         nr::FORK | nr::VFORK => -i64::from(ENOSYS),
+        nr::GETPID => i64::from(crate::process::guest_pid()),
         nr::GETUID | nr::GETEUID => i64::from(andruna_lx::process::uid()),
         nr::GETGID | nr::GETEGID => i64::from(andruna_lx::process::gid()),
         nr::GETRANDOM => getrandom(a[0] as *mut u8, a[1] as usize, a[2]),
@@ -153,7 +156,39 @@ unsafe fn dispatch_inner(n: i64, a: [i64; 6]) -> i64 {
         // SAFETY: as above.
         nr::READV => unsafe { iov(a[0] as i32, a[1] as *const [u64; 2], a[2] as i32, false) },
         // SAFETY: forwarded from this function's contract.
-        _ => unsafe { lx_raw(n, a) },
+        _ => unsafe { forward(n, a) },
+    }
+}
+
+/// Sends a call to lx, with the loader's interim answers
+/// ([`crate::interim`]) before it and where lx reports `ENOSYS`.
+///
+/// # Safety
+///
+/// As for [`dispatch`].
+unsafe fn forward(n: i64, a: [i64; 6]) -> i64 {
+    // SAFETY: forwarded from this function's contract.
+    if let Some(r) = unsafe { crate::interim::before(n, a) } {
+        return r;
+    }
+    // SAFETY: as above.
+    let r = unsafe { lx_raw(n, a) };
+    if r < 0
+        // SAFETY: as above.
+        && let Some(v) = unsafe { crate::interim::after_error(n, a) }
+    {
+        return v;
+    }
+    if r != -i64::from(ENOSYS) {
+        return r;
+    }
+    // SAFETY: as above.
+    match unsafe { crate::interim::after_enosys(n, a) } {
+        Some(r) => r,
+        None => {
+            crate::interim::report_enosys(n, a);
+            r
+        }
     }
 }
 

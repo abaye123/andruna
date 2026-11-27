@@ -18,7 +18,6 @@ use windows::Win32::System::Diagnostics::Debug::{AddVectoredExceptionHandler, EX
 
 use crate::object::Object;
 
-#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 const EXCEPTION_CONTINUE_EXECUTION: i32 = -1;
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 
@@ -134,6 +133,16 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     // Guest signal handlers (andruna-lx) come before the crash report.
     // SAFETY: called from the vectored handler with the system's records.
     if unsafe { andruna_lx::signal::handle_exception(info) } {
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if crate::signal::deliver_fault(
+        code,
+        &rec.ExceptionInformation,
+        rec.NumberParameters,
+        // SAFETY: the context record is the thread's, owned by this
+        // dispatch; execution continues with what the handler leaves.
+        unsafe { &mut *(*info).ContextRecord },
+    ) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     let fatal = matches!(
