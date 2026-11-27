@@ -117,6 +117,20 @@ else()
     utils/arm64/jni_macro_assembler_arm64.cc
     utils/arm64/managed_register_arm64.cc)
   target_compile_definitions(libart_compiler PUBLIC ART_ENABLE_CODEGEN_arm64)
+
+  # external/vixl (BSD-3-Clause): the AArch64 assembler, disassembler and
+  # macro assembler the arm64 code generator is built on. Sources and flags
+  # from external/vixl/Android.bp ("libvixl", release, arm64 target).
+  set(_v "${AOSP}/external/vixl/src")
+  file(GLOB _vixl_srcs "${_v}/*.cc" "${_v}/aarch64/*.cc")
+  add_library(libvixl STATIC ${_vixl_srcs})
+  target_include_directories(libvixl PUBLIC "${_v}")
+  target_compile_definitions(libvixl PUBLIC
+    VIXL_INCLUDE_TARGET_A64 VIXL_INCLUDE_SIMULATOR_AARCH64 VIXL_CODE_BUFFER_MALLOC
+    VIXL_GENERATE_SIMULATOR_INSTRUCTIONS_VALUE=0)
+  target_compile_options(libvixl PRIVATE -O3)
+  target_link_libraries(libvixl PRIVATE aosp_android)
+  target_link_libraries(libart_compiler PUBLIC libvixl)
 endif()
 art_operator_out(libart_compiler art/compiler
   art/compiler/linker/linker_patch.h

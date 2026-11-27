@@ -232,6 +232,40 @@ math2! {
 }
 
 gfn! { pub unsafe fn m_expf(x: f32) -> f32 { x.exp() } }
+gfn! { pub unsafe fn m_fmodf(x: f32, y: f32) -> f32 { x % y } }
+
+gfn! {
+    /// `ftruncate`. lx has no truncation yet: growing a file writes a zero
+    /// byte at the new end (the gap reads as zeros, as on Linux), the same
+    /// length succeeds, shrinking fails with EINVAL and is reported (spike
+    /// limit; dex2oat only grows the files it creates).
+    pub unsafe fn h_ftruncate(fd: i32, len: i64) -> i32 {
+        guard(|| {
+            if len < 0 {
+                return super::fail_with(andruna_lx::linux::errno::EINVAL);
+            }
+            let mut st = [0u8; 144];
+            // SAFETY: a 144-byte struct stat buffer (x86_64 and arm64 fit).
+            if unsafe { super::lx::h_fstat(fd, st.as_mut_ptr() as *mut c_void) } != 0 {
+                return -1;
+            }
+            let off = if cfg!(target_arch = "x86_64") { 48 } else { 48 };
+            let size = i64::from_le_bytes(st[off..off + 8].try_into().unwrap());
+            if len == size {
+                return 0;
+            }
+            if len < size {
+                eprintln!("[s1] ftruncate({fd}, {len}) would shrink a {size}-byte file: EINVAL");
+                return super::fail_with(andruna_lx::linux::errno::EINVAL);
+            }
+            let z = 0u8;
+            // SAFETY: one byte from a local.
+            let r = unsafe { super::lx::h_pwrite(fd, &z as *const u8 as *const c_void, 1, len - 1) };
+            if r == 1 { 0 } else { -1 }
+        })
+    }
+}
+
 gfn! { pub unsafe fn m_tanhf(x: f32) -> f32 { x.tanh() } }
 gfn! {
     pub unsafe fn m_modf(x: f64, ip: *mut f64) -> f64 {
@@ -293,7 +327,6 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("getrlimit", h_getrlimit as usize),
         ("prctl", h_ok as usize),
         ("setpriority", h_ok as usize),
-        ("msync", h_ok as usize),
         ("fsync", h_ok as usize),
         ("fdatasync", h_ok as usize),
         ("setpgid", h_ok as usize),
@@ -331,6 +364,11 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("pow", m_pow as usize),
         ("hypot", m_hypot as usize),
         ("fmod", m_fmod as usize),
+        ("fmodf", m_fmodf as usize),
+        ("ftruncate", h_ftruncate as usize),
+        ("ftruncate64", h_ftruncate as usize),
+        ("sched_setaffinity", h_ok as usize),
+        ("pthread_condattr_destroy", h_ok as usize),
         ("remainder", m_remainder as usize),
         ("expf", m_expf as usize),
         ("tanhf", m_tanhf as usize),

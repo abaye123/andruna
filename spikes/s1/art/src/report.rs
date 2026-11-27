@@ -71,6 +71,7 @@ pub fn initialized(l: &Linker) {
 }
 
 pub fn at_guest_exit(status: i32) {
+    crate::host::lx::flush_shared_maps();
     if !quiet() {
         #[cfg(target_arch = "x86_64")]
         eprintln!(

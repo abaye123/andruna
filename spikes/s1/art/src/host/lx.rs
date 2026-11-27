@@ -321,6 +321,8 @@ gfn! {
                 return unsafe { sys::mmap(a, len, prot, flags, fd, off) };
             }
             let anon = (flags & !MAP_SHARED) | 2 /* MAP_PRIVATE */ | MAP_ANONYMOUS;
+            // Only writable shared mappings can change the file.
+            let shared = flags & 3 == MAP_SHARED && prot & PROT_WRITE != 0;
             // SAFETY: a new anonymous mapping, writable while it is filled.
             let p = unsafe { sys::mmap(a, len, prot | PROT_WRITE, anon, -1, 0) };
             if p as isize == -1 {
@@ -340,6 +342,14 @@ gfn! {
             if prot & PROT_WRITE == 0 {
                 // SAFETY: the mapping just made.
                 unsafe { sys::mprotect(p, len, prot) };
+            }
+            if shared {
+                // SAFETY: lx's dup; the copy keeps the file open for the
+                // write-back even if the guest closes `fd`.
+                let dfd = unsafe { sys::dup(fd) };
+                if dfd >= 0 {
+                    SHARED_MAPS.lock().unwrap().push(SharedMap { addr: p as usize, len, fd: dfd, off });
+                }
             }
             p
         })
@@ -451,6 +461,105 @@ pub fn dump_futex_waits(e: &mut impl std::io::Write) {
     }
 }
 
+// --- MAP_SHARED file mappings ------------------------------------------------
+//
+// lx has no file mappings, so a shared mapping is a private copy (see
+// `h_mmap`). To keep what the guest writes, the copy is written back to the
+// file with pwrite on msync, munmap and process exit (spike limit: other
+// mappings of the same file and read() do not see changes before that, and
+// pages are written back whole, whether dirty or not). dex2oat writes its
+// vdex files this way.
+
+struct SharedMap {
+    addr: usize,
+    len: usize,
+    fd: i32,
+    off: i64,
+}
+
+static SHARED_MAPS: Mutex<Vec<SharedMap>> = Mutex::new(Vec::new());
+
+/// Writes back the part of `m` inside [from, from + len), up to the end of
+/// the file (a mapping beyond the end of a file cannot extend it).
+fn write_back(m: &SharedMap, from: usize, len: usize) {
+    let start = from.max(m.addr);
+    let end = (from + len).min(m.addr + m.len);
+    if start >= end {
+        return;
+    }
+    let mut st = [0u8; 144];
+    // SAFETY: a struct stat buffer large enough for both architectures.
+    if unsafe { sys::fstat(m.fd, st.as_mut_ptr() as *mut c_void) } != 0 {
+        return;
+    }
+    let size = i64::from_le_bytes(st[48..56].try_into().unwrap());
+    let file_off = m.off + (start - m.addr) as i64;
+    let n = ((end - start) as i64).min(size - file_off);
+    let mut done = 0i64;
+    while done < n {
+        // SAFETY: inside the guest mapping, which is still mapped.
+        let r = unsafe {
+            sys::pwrite64(
+                m.fd,
+                (start + done as usize) as *const c_void,
+                (n - done) as usize,
+                file_off + done,
+            )
+        };
+        if r <= 0 {
+            eprintln!(
+                "[s1] write-back of a shared mapping failed at offset {}",
+                file_off + done
+            );
+            return;
+        }
+        done += r as i64;
+    }
+}
+
+/// Writes back every shared mapping (at guest exit).
+pub fn flush_shared_maps() {
+    for m in SHARED_MAPS.lock().unwrap().iter() {
+        write_back(m, m.addr, m.len);
+    }
+}
+
+gfn! {
+    pub unsafe fn h_munmap(a: *mut c_void, len: usize) -> i32 {
+        guard(|| {
+            let mut maps = SHARED_MAPS.lock().unwrap();
+            let (a0, a1) = (a as usize, a as usize + len);
+            maps.retain(|m| {
+                if m.addr + m.len <= a0 || m.addr >= a1 {
+                    return true;
+                }
+                write_back(m, a0, len);
+                if a0 <= m.addr && a1 >= m.addr + m.len {
+                    // SAFETY: the duplicate made by h_mmap.
+                    unsafe { sys::close(m.fd) };
+                    false
+                } else {
+                    true
+                }
+            });
+            drop(maps);
+            // SAFETY: forwarded.
+            unsafe { sys::munmap(a, len) }
+        })
+    }
+}
+
+gfn! {
+    pub unsafe fn h_msync(a: *mut c_void, len: usize, _flags: i32) -> i32 {
+        guard(|| {
+            for m in SHARED_MAPS.lock().unwrap().iter() {
+                write_back(m, a as usize, len);
+            }
+            0
+        })
+    }
+}
+
 /// Defines plain forwards: same arguments, same result.
 macro_rules! forward {
     ($($name:ident => $target:ident ( $($a:ident : $t:ty),* ) -> $r:ty;)*) => {$(
@@ -472,7 +581,6 @@ forward! {
     h_stat => stat(p: *const c_char, st: *mut c_void) -> i32;
     h_lstat => lstat(p: *const c_char, st: *mut c_void) -> i32;
     h_fstatat => fstatat(d: i32, p: *const c_char, st: *mut c_void, flags: i32) -> i32;
-    h_munmap => munmap(a: *mut c_void, len: usize) -> i32;
     h_mprotect => mprotect(a: *mut c_void, len: usize, prot: i32) -> i32;
     h_madvise => madvise(a: *mut c_void, len: usize, advice: i32) -> i32;
     h_clock_gettime => clock_gettime(clk: i32, ts: *mut c_void) -> i32;
@@ -517,6 +625,7 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("mmap", h_mmap as usize),
         ("mmap64", h_mmap as usize),
         ("munmap", h_munmap as usize),
+        ("msync", h_msync as usize),
         ("mprotect", h_mprotect as usize),
         ("madvise", h_madvise as usize),
         ("syscall", h_syscall as usize),

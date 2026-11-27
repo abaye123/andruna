@@ -341,7 +341,24 @@ pub fn deliver(
     let f: Handler = unsafe { core::mem::transmute(h) };
     // The handler is guest code: its thread pointer must be in FS base.
     crate::tls::wrfsbase(crate::tls::current_tp());
+    let probe = if *LOG.get().unwrap_or(&false) {
+        StackProbe::paint()
+    } else {
+        None
+    };
     f(sig, &mut si, &mut *uc);
+    if let Some(p) = probe {
+        let here = &p as *const _ as u64;
+        eprintln!(
+            "[s1]   stack: faulting sp {:#x}; dispatch to this handler used {} bytes; \
+             the guest handler {} more; lowest {:#x} ({} bytes below the faulting sp)",
+            ctx.Rsp,
+            ctx.Rsp - here,
+            here - p.lowest(),
+            p.lowest(),
+            ctx.Rsp - p.lowest()
+        );
+    }
     from_uc(&uc, ctx);
     DELIVERED.fetch_add(1, Ordering::Relaxed);
     true
@@ -536,6 +553,60 @@ pub fn deliver(
     from_uc(&uc, ctx);
     DELIVERED.fetch_add(1, Ordering::Relaxed);
     true
+}
+
+/// S1_SIGLOG stack measurement: fills the unused stack below the current
+/// frame (down to 32 KiB or the first page that is not readable and
+/// writable, such as ART's protected region) with a pattern, and finds the
+/// lowest word a handler changed.
+#[cfg(target_arch = "x86_64")]
+struct StackProbe {
+    low: u64,
+    high: u64,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl StackProbe {
+    const PATTERN: u64 = 0x5a5a_a5a5_5a5a_a5a5;
+
+    #[inline(never)]
+    fn paint() -> Option<StackProbe> {
+        use windows::Win32::System::Memory::{
+            MEMORY_BASIC_INFORMATION, PAGE_READWRITE, VirtualQuery,
+        };
+        let marker = 0u64;
+        let high = (&marker as *const u64 as u64 - 512) & !7;
+        let mut low = high;
+        while low > high - (32 << 10) {
+            let mut m = MEMORY_BASIC_INFORMATION::default();
+            let a = (low - 8) & !0xfff;
+            // SAFETY: queries the address space only.
+            let n = unsafe {
+                VirtualQuery(Some(a as *const c_void), &mut m, core::mem::size_of_val(&m))
+            };
+            if n == 0 || m.Protect != PAGE_READWRITE {
+                break;
+            }
+            low = a.max(high - (32 << 10));
+        }
+        let mut p = low;
+        while p < high {
+            // SAFETY: committed, writable, unused stack below this frame.
+            unsafe { core::ptr::write_volatile(p as *mut u64, Self::PATTERN) };
+            p += 8;
+        }
+        Some(StackProbe { low, high })
+    }
+
+    fn lowest(&self) -> u64 {
+        let mut p = self.low;
+        // SAFETY: the range painted above, still mapped.
+        while p < self.high && unsafe { core::ptr::read_volatile(p as *const u64) } == Self::PATTERN
+        {
+            p += 8;
+        }
+        p
+    }
 }
 
 fn mapped(addr: u64) -> bool {

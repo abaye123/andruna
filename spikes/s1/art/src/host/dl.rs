@@ -267,6 +267,19 @@ gfn! {
     }
 }
 
+/// The one linker namespace the runner pretends to have. ART asks for the
+/// "system" namespace before it dlopens an oat file and aborts without
+/// one; the dlopen of an oat file then fails (oat files are not in the
+/// library path), and ART loads the oat file with its own ELF loader, as
+/// on a host build.
+static SYSTEM_NAMESPACE: u64 = 0;
+
+gfn! {
+    pub unsafe fn h_exported_namespace(_name: *const c_char) -> *mut c_void {
+        &SYSTEM_NAMESPACE as *const u64 as *mut c_void
+    }
+}
+
 gfn! {
     pub unsafe fn h_null_namespace() -> *mut c_void {
         core::ptr::null_mut()
@@ -289,7 +302,10 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("dlerror", h_dlerror as usize),
         ("dladdr", h_dladdr as usize),
         ("dl_iterate_phdr", h_dl_iterate_phdr as usize),
-        ("android_get_exported_namespace", h_null_namespace as usize),
+        (
+            "android_get_exported_namespace",
+            h_exported_namespace as usize,
+        ),
         ("android_create_namespace", h_null_namespace as usize),
         ("android_link_namespaces", h_false as usize),
         ("android_init_anonymous_namespace", h_false as usize),
