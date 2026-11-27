@@ -25,10 +25,10 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-JAVA = ROOT / "out" / "s1" / "java"
-GUEST = ROOT / "out" / "s1art" / "x64"
+JAVA = Path(os.environ.get("S1_JAVA", ROOT / "out" / "s1" / "java"))
+GUEST = Path(os.environ.get("S1_GUEST", ROOT / "out" / "s1art" / "x64"))
 RUNNER = Path(__file__).resolve().parent / "target" / "x86_64-pc-windows-gnullvm" / "release" / "andruna-spike-s1-art.exe"
-AOSP = ROOT / "third_party" / "aosp"
+AOSP = Path(os.environ.get("S1_AOSP", ROOT / "third_party" / "aosp"))
 BOOT_JARS = ["core-oj.jar", "core-libart.jar", "core-icu4j.jar"]
 JAVALIB = "/apex/com.android.art/javalib"
 

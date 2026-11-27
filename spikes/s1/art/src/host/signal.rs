@@ -101,6 +101,13 @@ gfn! {
 static PENDING: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
 static PENDING_CV: std::sync::Condvar = std::sync::Condvar::new();
 
+/// Queues a process-directed signal for `sigwait*` (the watchdog's
+/// SIGQUIT, which makes ART's signal catcher dump every thread).
+pub fn queue_signal(sig: i32) {
+    PENDING.lock().unwrap().push(sig);
+    PENDING_CV.notify_all();
+}
+
 fn take_pending() -> i32 {
     let mut p = PENDING.lock().unwrap();
     loop {

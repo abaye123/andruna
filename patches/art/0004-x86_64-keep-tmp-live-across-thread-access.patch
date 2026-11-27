@@ -1,0 +1,97 @@
+Keep R11 (TMP) live where an x86_64 Thread access follows in the ANDRUNA build.
+
+Under ANDRUNA, gs() loads the Thread* into R11 (patch 0002). Three code
+generator sites have TMP live across such an access:
+
+- The read barrier slow path of the System.arraycopy intrinsic marks the
+  reference in TMP with art_quick_read_barrier_mark_reg11; gs()->call
+  replaced the reference with the Thread*, so the GC marked the Thread
+  as an object (its lock word is the thread's suspend count) and the
+  copied element became the Thread*. Threads then kept a suspend request
+  that no ResumeAll could clear. The Thread* now goes through
+  src_stop_addr, saved around the call.
+- The class initialization check at method entry compares TMP (the
+  initializing thread id) with Thread::tid; TMP is kept on the stack.
+- The method trace fast path keeps the buffer entry in TMP; the Thread*
+  goes through init_entry.
+
+Without ANDRUNA the code is unchanged.
+
+diff --git a/compiler/optimizing/code_generator_x86_64.cc b/compiler/optimizing/code_generator_x86_64.cc
+index 5194af0..e8fe43b 100644
+--- a/compiler/optimizing/code_generator_x86_64.cc
++++ b/compiler/optimizing/code_generator_x86_64.cc
+@@ -1810,15 +1810,28 @@ void InstructionCodeGeneratorX86_64::GenerateMethodEntryExitHook(HInstruction* i
+   __ gs()->movq(CpuRegister(curr_entry),
+                 Address::Absolute(trace_buffer_curr_entry_offset, /* no_rip= */ true));
+   __ subq(CpuRegister(curr_entry), Immediate(slots_required * sizeof(void*)));
++#if defined(ANDRUNA)
++  // `curr_entry` is TMP, which gs() would use for the Thread*: use
++  // `init_entry` instead (its value is only needed for the comparison).
++  __ gs(init_entry)->movq(init_entry,
++                Address::Absolute(Thread::TraceBufferPtrOffset<kX86_64PointerSize>().SizeValue(),
++                                  /* no_rip= */ true));
++#else
+   __ gs()->movq(init_entry,
+                 Address::Absolute(Thread::TraceBufferPtrOffset<kX86_64PointerSize>().SizeValue(),
+                                   /* no_rip= */ true));
++#endif
+   __ cmpq(curr_entry, init_entry);
+   __ j(kLess, slow_path->GetEntryLabel());
+ 
+   // Update the index in the `Thread`.
++#if defined(ANDRUNA)
++  __ gs(init_entry)->movq(Address::Absolute(trace_buffer_curr_entry_offset, /* no_rip= */ true),
++                CpuRegister(curr_entry));
++#else
+   __ gs()->movq(Address::Absolute(trace_buffer_curr_entry_offset, /* no_rip= */ true),
+                 CpuRegister(curr_entry));
++#endif
+ 
+   // Record method pointer only for method enter events.
+   CpuRegister method = init_entry;
+@@ -1963,9 +1976,20 @@ void CodeGeneratorX86_64::GenerateFrameEntry() {
+ 
+     __ movl(CpuRegister(TMP),
+             Address(CpuRegister(TMP), mirror::Class::ClinitThreadIdOffset().Int32Value()));
++#if defined(ANDRUNA)
++    // gs() needs a register for the Thread* and TMP is the value compared:
++    // keep it on the stack (POP does not change the flags).
++    __ pushq(CpuRegister(TMP));
++    __ gs()->movl(
++        CpuRegister(TMP),
++        Address::Absolute(Thread::TidOffset<kX86_64PointerSize>().Int32Value(), /*no_rip=*/ true));
++    __ cmpl(CpuRegister(TMP), Address(CpuRegister(RSP), 0));
++    __ popq(CpuRegister(TMP));
++#else
+     __ gs()->cmpl(
+         CpuRegister(TMP),
+         Address::Absolute(Thread::TidOffset<kX86_64PointerSize>().Int32Value(), /*no_rip=*/ true));
++#endif
+     __ j(kEqual, &frame_entry_label_);
+     __ Bind(&resolution);
+ 
+diff --git a/compiler/optimizing/intrinsics_x86_64.cc b/compiler/optimizing/intrinsics_x86_64.cc
+index 01368ff..d098b25 100644
+--- a/compiler/optimizing/intrinsics_x86_64.cc
++++ b/compiler/optimizing/intrinsics_x86_64.cc
+@@ -131,8 +131,19 @@ class ReadBarrierSystemArrayCopySlowPathX86_64 : public SlowPathCode {
+     // entrypoint. Also, there is no need to update the stack mask,
+     // as this runtime call will not trigger a garbage collection.
+     int32_t entry_point_offset = Thread::ReadBarrierMarkEntryPointsOffset<kX86_64PointerSize>(TMP);
++#if defined(ANDRUNA)
++    // The reference to mark is in TMP, which gs() would overwrite with the
++    // Thread*: load the Thread* into `src_stop_addr`, saved around the call
++    // (twice, to keep the stack 16-byte aligned for the entrypoint).
++    __ pushq(src_stop_addr);
++    __ pushq(src_stop_addr);
++    __ gs(src_stop_addr)->call(Address::Absolute(entry_point_offset, /* no_rip= */ true));
++    __ popq(src_stop_addr);
++    __ popq(src_stop_addr);
++#else
+     // This runtime call does not require a stack map.
+     x86_64_codegen->InvokeRuntimeWithoutRecordingPcInfo(entry_point_offset, instruction_, this);
++#endif
+     __ MaybePoisonHeapReference(CpuRegister(TMP));
+     __ movl(Address(dst_curr_addr, 0), CpuRegister(TMP));
+     __ addl(src_curr_addr, Immediate(element_size));

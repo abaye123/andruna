@@ -74,4 +74,15 @@ target_link_libraries(dalvikvm PRIVATE aosp_android art_defaults libnativehelper
 target_link_options(dalvikvm PRIVATE -Wl,--export-dynamic-symbol=main
   -Wl,--unresolved-symbols=ignore-all)
 
+# dex2oat (art/dex2oat), an Android PIE linked against libart.so (which
+# holds the runtime, the compiler, libprofile and libelffile) and
+# libart-dex2oat. The archive is named by file, not as a target, so that
+# its static dependencies already in libart.so are not linked again.
+add_executable(dex2oat $<TARGET_OBJECTS:dex2oat_main>)
+add_dependencies(dex2oat dex2oat_main libart_dex2oat)
+target_link_libraries(dex2oat PRIVATE
+  -Wl,--whole-archive "$<TARGET_FILE:libart_dex2oat>" -Wl,--no-whole-archive
+  art_so sigchain_so nativehelper_so base_so log_so ${GUEST_LINK})
+target_link_options(dex2oat PRIVATE -Wl,--export-dynamic-symbol=main)
+
 include(natives.cmake)

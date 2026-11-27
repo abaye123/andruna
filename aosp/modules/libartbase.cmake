@@ -36,7 +36,11 @@ target_compile_definitions(art_defaults INTERFACE
   ART_PAGE_SIZE_AGNOSTIC=1
   USE_D8_DESUGAR=1
   ART_FRAME_SIZE_LIMIT=1744
-  ART_BASE_ADDRESS=0x70000000
+  # S2: on Windows nothing but KUSER_SHARED_DATA (0x7FFE0000) is mapped
+  # below 4 GiB, so Android's 0x70000000 leaves only 256 MiB for the boot
+  # image, its oat files and the spaces ART places after them. 0x60000000
+  # (the base S2 probed) leaves 512 MiB (spike S1 round 4).
+  ART_BASE_ADDRESS=0x60000000
   ART_BASE_ADDRESS_MIN_DELTA=-0x1000000
   ART_BASE_ADDRESS_MAX_DELTA=0x1000000)
 

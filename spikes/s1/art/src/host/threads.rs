@@ -60,6 +60,9 @@ thread_local! {
     static THREAD_DTORS: RefCell<Vec<(DtorFn, usize)>> = const { RefCell::new(Vec::new()) };
 }
 
+/// (tid, thread pointer) of every guest thread started, for the watchdog.
+pub static GUEST_TPS: Mutex<Vec<(i32, u64)>> = Mutex::new(Vec::new());
+
 const MAX_KEYS: usize = 256;
 static KEYS: Mutex<[(bool, usize); MAX_KEYS]> = Mutex::new([(false, 0); MAX_KEYS]);
 
@@ -68,6 +71,10 @@ static KEYS: Mutex<[(bool, usize); MAX_KEYS]> = Mutex::new([(false, 0); MAX_KEYS
 pub fn enter_guest_thread(t: *mut GuestThread) -> ThreadArea {
     let area = ThreadArea::new();
     area.activate();
+    GUEST_TPS
+        .lock()
+        .unwrap()
+        .push((andruna_lx::process::gettid(), area.tp));
     SELF.with(|c| c.set(t as usize));
     // SAFETY: `t` is a live thread record.
     unsafe {

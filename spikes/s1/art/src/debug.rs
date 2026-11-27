@@ -162,6 +162,54 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     EXCEPTION_CONTINUE_SEARCH
 }
 
+/// For each guest thread: ART's `Thread*` from bionic's
+/// `TLS_SLOT_ART_THREAD_SELF` (slot 7) and the head of its `tls32_`
+/// (state_and_flags: flags in the low bits, state in the top byte;
+/// suspend_count; thin lock id; tid).
+fn dump_art_threads(e: &mut impl std::io::Write) {
+    let tps = crate::host::threads::GUEST_TPS.lock().unwrap().clone();
+    for (tid, tp) in tps {
+        let Some((t, _)) = read_frame(tp + 7 * 8) else {
+            continue;
+        };
+        if t == 0 {
+            continue;
+        }
+        let (Some((w0, w1)), Some((w2, _))) = (read_frame(t), read_frame(t + 16)) else {
+            continue;
+        };
+        let _ = writeln!(
+            e,
+            "[s1] art thread tid {tid} Thread*={t:#x} state_and_flags={:#010x} suspend_count={} thin_id={} tid={} daemon={} oom={}",
+            w0 as u32,
+            (w0 >> 32) as i32,
+            w1 as u32,
+            (w1 >> 32) as u32,
+            w2 as u32,
+            (w2 >> 32) as u32
+        );
+    }
+}
+
+/// A NUL-terminated printable string pointed to by the pointer at `at`,
+/// when both are readable (diagnostics only).
+pub fn guest_cstr_at(at: usize) -> Option<String> {
+    let (p, _) = read_frame(at as u64)?;
+    let mut out = String::new();
+    for i in 0..64u64 {
+        let (w, _) = read_frame((p + i) & !7)?;
+        let b = (w >> (((p + i) & 7) * 8)) as u8;
+        if b == 0 {
+            return (!out.is_empty()).then_some(out);
+        }
+        if !(0x20..0x7f).contains(&b) {
+            return None;
+        }
+        out.push(b as char);
+    }
+    None
+}
+
 pub fn walk(e: &mut impl std::io::Write, pc: u64, mut fp: u64, _sp: u64) {
     let _ = writeln!(
         e,
@@ -241,9 +289,22 @@ pub fn start_watchdog() {
     };
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(secs));
+        // S1_WATCHDOG_QUIT=<s>: first send SIGQUIT, so that ART's signal
+        // catcher prints its own thread dump (states, suspend counts,
+        // held locks, Java stacks), and wait that long.
+        if let Some(q) = std::env::var("S1_WATCHDOG_QUIT")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            eprintln!("[s1] watchdog after {secs} s: SIGQUIT to the signal catcher");
+            crate::host::signal::queue_signal(3);
+            std::thread::sleep(std::time::Duration::from_secs(q));
+        }
         let me = unsafe { GetCurrentThreadId() };
         let pid = unsafe { GetCurrentProcessId() };
         let mut e = std::io::stderr().lock();
+        crate::host::lx::dump_futex_waits(&mut e);
+        dump_art_threads(&mut e);
         let _ = writeln!(e, "[s1] watchdog after {secs} s: thread stacks");
         // SAFETY: snapshot APIs with valid arguments; threads of this process.
         unsafe {
