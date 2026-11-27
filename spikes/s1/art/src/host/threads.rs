@@ -654,6 +654,7 @@ gfn! {
                     Ok(_) => {
                         // SAFETY: the guest's init routine (no arguments, so
                         // the convention does not matter for the call).
+                        #[allow(clippy::useless_transmute)] // the same type on arm64
                         let g: GuestVoidFn = unsafe { core::mem::transmute(f) };
                         g();
                         w.store(2, Ordering::Release);

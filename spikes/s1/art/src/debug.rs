@@ -188,6 +188,7 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     EXCEPTION_CONTINUE_SEARCH
 }
 
+#[cfg(target_arch = "x86_64")]
 static WATCH_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// 32 bytes before `pc` (the writing instruction ends at `pc`).

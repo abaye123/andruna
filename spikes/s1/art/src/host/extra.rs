@@ -249,7 +249,8 @@ gfn! {
             if unsafe { super::lx::h_fstat(fd, st.as_mut_ptr() as *mut c_void) } != 0 {
                 return -1;
             }
-            let off = if cfg!(target_arch = "x86_64") { 48 } else { 48 };
+            // st_size is at 48 in both the x86_64 and the arm64 layout.
+            let off = 48;
             let size = i64::from_le_bytes(st[off..off + 8].try_into().unwrap());
             if len == size {
                 return 0;
