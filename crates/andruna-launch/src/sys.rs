@@ -13,12 +13,12 @@ use windows::Win32::System::Threading::{
     CreateEventW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE, WaitForMultipleObjects,
 };
 use windows::Win32::UI::Controls::{
-    TASKDIALOG_FLAGS, TASKDIALOGCONFIG, TD_ERROR_ICON, TDCBF_CLOSE_BUTTON,
-    TDF_ALLOW_DIALOG_CANCELLATION, TDF_RTL_LAYOUT,
+    TASKDIALOG_FLAGS, TASKDIALOGCONFIG, TD_ERROR_ICON, TD_WARNING_ICON, TDCBF_CLOSE_BUTTON,
+    TDCBF_NO_BUTTON, TDCBF_YES_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION, TDF_RTL_LAYOUT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, MB_ICONERROR, MB_OK, MB_RIGHT, MB_RTLREADING, MB_SETFOREGROUND,
-    MessageBoxW,
+    AllowSetForegroundWindow, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_RIGHT, MB_RTLREADING,
+    MB_SETFOREGROUND, MB_YESNO, MessageBoxW,
 };
 use windows::core::{BOOL, HRESULT, PCWSTR, s, w};
 
@@ -197,5 +197,85 @@ pub fn show_error(title: &str, instruction: &str, content: &str, rtl: bool) {
             PCWSTR(title_w.as_ptr()),
             style,
         );
+    }
+}
+
+/// The answer to [`confirm`].
+pub struct Confirmation {
+    pub yes: bool,
+    /// The state of the verification check box.
+    pub checked: bool,
+}
+
+/// Asks a yes/no question with a check box (task dialog), or a plain
+/// yes/no message box where the task dialog is not available (the check
+/// box then counts as checked, the safer answer for "keep data").
+pub fn confirm(
+    title: &str,
+    instruction: &str,
+    content: &str,
+    check: &str,
+    rtl: bool,
+) -> Confirmation {
+    let title_w = wide(title);
+    let instruction_w = wide(instruction);
+    let content_w = wide(content);
+    let check_w = wide(check);
+    let mut button = 0i32;
+    let mut checked = BOOL(0);
+    // SAFETY: as in `show_error`; the out pointers are valid locals.
+    let shown = unsafe {
+        LoadLibraryW(w!("comctl32.dll"))
+            .ok()
+            .and_then(|m| GetProcAddress(m, s!("TaskDialogIndirect")))
+            .map(|f| {
+                let f: TaskDialogIndirectFn = std::mem::transmute(f);
+                let mut flags = TDF_ALLOW_DIALOG_CANCELLATION;
+                if rtl {
+                    flags = TASKDIALOG_FLAGS(flags.0 | TDF_RTL_LAYOUT.0);
+                }
+                let mut cfg = TASKDIALOGCONFIG {
+                    cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
+                    dwFlags: flags,
+                    dwCommonButtons: TDCBF_YES_BUTTON | TDCBF_NO_BUTTON,
+                    pszWindowTitle: PCWSTR(title_w.as_ptr()),
+                    pszMainInstruction: PCWSTR(instruction_w.as_ptr()),
+                    pszContent: PCWSTR(content_w.as_ptr()),
+                    pszVerificationText: PCWSTR(check_w.as_ptr()),
+                    nDefaultButton: IDYES.0,
+                    ..Default::default()
+                };
+                cfg.Anonymous1.pszMainIcon = TD_WARNING_ICON;
+                f(&cfg, &mut button, std::ptr::null_mut(), &mut checked).is_ok()
+            })
+            .unwrap_or(false)
+    };
+    if shown {
+        return Confirmation {
+            yes: button == IDYES.0,
+            checked: checked.as_bool(),
+        };
+    }
+    let text = wide(&format!(
+        "{instruction}
+
+{content}"
+    ));
+    let mut style = MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND;
+    if rtl {
+        style |= MB_RTLREADING | MB_RIGHT;
+    }
+    // SAFETY: both strings are NUL-terminated and live through the call.
+    let r = unsafe {
+        MessageBoxW(
+            None::<HWND>,
+            PCWSTR(text.as_ptr()),
+            PCWSTR(title_w.as_ptr()),
+            style,
+        )
+    };
+    Confirmation {
+        yes: r == IDYES,
+        checked: true,
     }
 }

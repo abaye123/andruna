@@ -12,7 +12,7 @@ use andruna_ipc::{
 
 use crate::activity::Activity;
 use crate::supervisor::Supervisor;
-use crate::{Layout, diagnostics, info, packages, warn};
+use crate::{Layout, diagnostics, info, pkg, warn};
 
 /// Most client connections served at once.
 pub const MAX_CONNECTIONS: u32 = 64;
@@ -22,6 +22,8 @@ pub struct Context {
     pub layout: Layout,
     pub activity: Arc<Activity>,
     pub supervisor: Arc<Supervisor>,
+    /// The package store (andruna-pkg).
+    pub store: Arc<andruna_pkg::store::Store>,
     pub started: Instant,
 }
 
@@ -67,13 +69,13 @@ impl Context {
                 Ok(()) => Response::Focused,
                 Err(f) => Response::error(f.code, f.message),
             },
-            Request::ListPackages => match packages::installed(&self.layout.app_dir()) {
-                Ok(packages) => Response::Packages { packages },
-                Err(e) => Response::error(
-                    ErrorCode::Internal,
-                    format!("cannot read the package directory: {e}"),
-                ),
-            },
+            Request::ListPackages => pkg::list_names(&self.store),
+            Request::InspectPackage { paths, locale } => pkg::inspect(&self.store, &paths, &locale),
+            Request::InstallPackage { paths } => pkg::install(self, &paths),
+            Request::UninstallPackage { package, keep_data } => {
+                pkg::uninstall(self, &package, keep_data)
+            }
+            Request::ListPackageInfo { locale } => pkg::list_info(&self.store, &locale),
             Request::WaitEvents {
                 epoch,
                 after,
@@ -137,13 +139,6 @@ impl Context {
                     }
                 }
             }
-            Request::InspectPackage { .. }
-            | Request::InstallPackage { .. }
-            | Request::UninstallPackage { .. }
-            | Request::ListPackageInfo { .. } => Response::error(
-                ErrorCode::UnknownRequest,
-                "package manager requests are not wired yet",
-            ),
         }
     }
 

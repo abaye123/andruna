@@ -1,10 +1,11 @@
-//! The installed-package list.
+//! Package directories, as the supervisor sees them.
 //!
-//! The package database (`system\`, owned by andruna-pkg) does not exist
-//! yet. Until it does, a package counts as installed when its install
-//! directory `app\<package>\` exists ([file layout](../../docs/spec/02-architecture.md#data-on-disk)),
-//! which is where andruna-pkg puts the APK. Nothing installs packages yet,
-//! so on a real machine the list is empty, and that is what is reported.
+//! The installed packages are the records of andruna-pkg's database
+//! (`system\packages.json`, served by [`crate::pkg`]). The supervisor checks
+//! the install directory `app\<package>\`
+//! ([file layout](../../docs/spec/02-architecture.md#data-on-disk)) before
+//! starting a host: andruna-pkg creates it with the record and removes it
+//! with the record, so both agree outside an install in progress.
 
 use std::fs;
 use std::io;

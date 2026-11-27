@@ -617,8 +617,10 @@ mod tests {
     #[test]
     fn density_matching() {
         let t = table();
-        let mut p = Preferences::default();
-        p.density = 640;
+        let mut p = Preferences {
+            density: 640,
+            ..Preferences::default()
+        };
         let r = t.resolve(0x7f02_0000, &p).unwrap();
         assert_eq!(
             r.value.as_str(),

@@ -259,7 +259,7 @@ pub fn verify_pkcs7(block: &[u8], content: &[u8]) -> Result<Vec<u8>> {
     let mut cert_der = None;
     if let Some(certs) = certs {
         let mut r = certs.reader();
-        while let Some(c) = r.next() {
+        while let Some(c) = r.read_tlv() {
             if let Some(parsed) = asn1::certificate(c.raw)
                 && parsed.issuer == issuer
                 && parsed.serial == serial
@@ -279,7 +279,7 @@ pub fn verify_pkcs7(block: &[u8], content: &[u8]) -> Result<Vec<u8>> {
             // The messageDigest attribute must be the content's digest.
             let mut r = attrs.reader();
             let mut digest = None;
-            while let Some(a) = r.next() {
+            while let Some(a) = r.read_tlv() {
                 let mut a = a.reader();
                 let oid = a.expect(asn1::OID).ok_or_else(m)?.value;
                 if oid == asn1::oid(OID_MESSAGE_DIGEST) {

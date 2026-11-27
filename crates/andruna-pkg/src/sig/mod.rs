@@ -66,8 +66,9 @@ pub struct SigningDetails {
     /// SHA-256 of each signer's DER certificate, lowercase hex, sorted.
     /// Android packages normally have exactly one.
     pub signers: Vec<String>,
-    /// The signers' DER certificates, in the order of `signers`.
-    #[serde(skip)]
+    /// The signers' DER certificates, in the order of `signers` (stored as
+    /// hex; Android's `PackageInfo.signatures` returns them).
+    #[serde(with = "hex_list")]
     pub certificates: Vec<Vec<u8>>,
     /// The v3 rotation lineage, oldest first, ending with the current
     /// signer; empty without rotation.
@@ -114,6 +115,31 @@ impl Default for VerifyOptions {
 
 pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Serializes a list of byte strings as hex strings.
+mod hex_list {
+    use serde::de::Error as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(v.iter().map(|b| super::hex(b)))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<u8>>, D::Error> {
+        let v: Vec<String> = Vec::deserialize(d)?;
+        v.iter()
+            .map(|s| {
+                if s.len() % 2 != 0 {
+                    return Err(D::Error::custom("odd hex length"));
+                }
+                (0..s.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(D::Error::custom))
+                    .collect()
+            })
+            .collect()
+    }
 }
 
 /// SHA-256 of a certificate, lowercase hex.

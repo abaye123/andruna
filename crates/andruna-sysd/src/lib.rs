@@ -26,6 +26,7 @@ pub mod host;
 pub mod l10n;
 pub mod log;
 pub mod packages;
+pub mod pkg;
 pub mod server;
 pub mod supervisor;
 mod sys;
@@ -228,6 +229,42 @@ fn run_server(cfg: ServerConfig) -> i32 {
     }
 }
 
+/// Opens the package store. The product (no `--root`) integrates with the
+/// user's Start menu and "Installed apps"; a development or test root
+/// writes shortcuts to `<root>\start-menu` and no uninstall entries, so it
+/// never touches the user's real Start menu or registry.
+pub fn open_store(layout: &Layout, product: bool) -> std::io::Result<andruna_pkg::store::Store> {
+    use andruna_pkg::desktop::Desktop;
+    use andruna_pkg::store::{Store, StoreConfig};
+    let exe_dir = std::env::current_exe()?
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    let launch_exe = exe_dir.join("andruna-launch.exe");
+    let mut cfg = StoreConfig::new(layout.root.clone());
+    cfg.compiler.app_exe = Some(exe_dir.join("andruna-app.exe"));
+    cfg.ui_locale = match l10n::Lang::current() {
+        l10n::Lang::He => "he".into(),
+        l10n::Lang::En => "en".into(),
+    };
+    cfg.desktop = if product {
+        match Desktop::for_current_user(launch_exe) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                warn!("start_menu_unavailable", error = e);
+                None
+            }
+        }
+    } else {
+        Some(Desktop {
+            shortcuts_dir: layout.root.join("start-menu"),
+            uninstall_root: None,
+            launch_exe,
+        })
+    };
+    Store::open(cfg).map_err(|e| std::io::Error::other(format!("package store: {e}")))
+}
+
 fn serve(cfg: &ServerConfig, layout: Layout) -> std::io::Result<i32> {
     let endpoint = Endpoint::for_current_user(&cfg.instance)?;
     let Some(instance_mutex) = sys::create_single_instance_mutex(&endpoint.mutex_name())? else {
@@ -247,10 +284,12 @@ fn serve(cfg: &ServerConfig, layout: Layout) -> std::io::Result<i32> {
     // andruna-app exists.
     let host_exe = std::env::current_exe()?;
     let supervisor = Arc::new(Supervisor::new(host_exe, layout.clone(), activity.clone())?);
+    let store = Arc::new(open_store(&layout, cfg.root.is_none())?);
     let ctx = Arc::new(Context {
         layout,
         activity: activity.clone(),
         supervisor: supervisor.clone(),
+        store,
         started: Instant::now(),
     });
     let server = Server::spawn(listener, ctx)?;

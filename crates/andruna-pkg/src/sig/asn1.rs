@@ -28,7 +28,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads the next TLV (single-byte tags, definite lengths only).
-    pub fn next(&mut self) -> Option<Tlv<'a>> {
+    pub fn read_tlv(&mut self) -> Option<Tlv<'a>> {
         let d = self.0;
         let tag = *d.first()?;
         if tag & 0x1f == 0x1f {
@@ -60,14 +60,14 @@ impl<'a> Reader<'a> {
 
     /// Reads the next TLV and checks its tag.
     pub fn expect(&mut self, tag: u8) -> Option<Tlv<'a>> {
-        let t = self.next()?;
+        let t = self.read_tlv()?;
         (t.tag == tag).then_some(t)
     }
 
     /// Reads the next TLV if it has the given tag.
     pub fn optional(&mut self, tag: u8) -> Option<Tlv<'a>> {
         if self.0.first() == Some(&tag) {
-            self.next()
+            self.read_tlv()
         } else {
             None
         }
@@ -159,8 +159,8 @@ mod tests {
         assert!(r.is_empty());
         for cut in 0..d.len() {
             let mut r = Reader(&d[..cut]);
-            while r.next().is_some() {}
+            while r.read_tlv().is_some() {}
         }
-        assert!(Reader(&[0x30, 0x85, 1, 1, 1, 1, 1]).next().is_none());
+        assert!(Reader(&[0x30, 0x85, 1, 1, 1, 1, 1]).read_tlv().is_none());
     }
 }

@@ -17,12 +17,18 @@
 //! - [`icon`]: the launcher icon rendered to `.ico` and `.png`.
 //! - `sys`: Windows API wrappers; all `unsafe` code of the crate.
 
+pub mod apk;
 pub mod arsc;
 pub mod axml;
+pub mod compile;
+pub mod db;
+pub mod desktop;
 pub mod error;
+pub mod hooks;
 pub mod icon;
 pub mod manifest;
 pub mod sig;
+pub mod store;
 pub mod sys;
 pub mod zip;
 

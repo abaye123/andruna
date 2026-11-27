@@ -17,6 +17,10 @@ path = "src/main.rs"
 
 [dependencies]
 andruna-ipc = { path = "../andruna-ipc" }
+andruna-pkg = { path = "../andruna-pkg" }
+
+[dev-dependencies]
+andruna-pkg = { path = "../andruna-pkg", features = ["testkit"] }
 
 [dependencies.windows]
 version = "0.62"
