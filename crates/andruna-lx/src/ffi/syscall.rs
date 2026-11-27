@@ -24,7 +24,7 @@ use crate::linux::fcntl::{AT_FDCWD, AT_SYMLINK_NOFOLLOW};
 use crate::linux::signal::{KernelSigaction, SigInfo, SigSet, StackT};
 use crate::linux::syscall_nr::{NATIVE, Sysno};
 use crate::linux::time::Timespec;
-use crate::{fs, futex, mem, process, signal};
+use crate::{fs, futex, mem, process, sched, signal};
 
 /// Dispatches one system call. Arguments are the raw 64-bit values.
 ///
@@ -72,7 +72,7 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
             Sysno::ClockGettime => sys_clock_gettime(int(0), ptr(1) as _),
             Sysno::ClockGetres => sys_clock_getres(int(0), ptr(1) as _),
             Sysno::ClockNanosleep => sys_clock_nanosleep(int(0), int(1), ptr(2) as _).map(|()| 0),
-            Sysno::Futex => sys_futex(ptr(0), int(1), uint(2), ptr(3), uint(5)),
+            Sysno::Futex => sys_futex(ptr(0), int(1), uint(2), ptr(3), ptr(4), uint(5)),
             Sysno::Mremap => mem::mremap(ptr(0), ptr(1), ptr(2), uint(3)).map(|a| a as i64),
             Sysno::Getcwd => sys_getcwd(ptr(0) as *mut u8, ptr(1)),
             Sysno::Chdir => fs::chdir(super::path_arg(ptr(0) as *const c_char)?).map(|()| 0),
@@ -130,6 +130,36 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
             Sysno::Faccessat => fs::faccessat(int(0), path(ptr(1))?, int(2), 0).map(|()| 0),
             Sysno::Faccessat2 => fs::faccessat(int(0), path(ptr(1))?, int(2), uint(3)).map(|()| 0),
             Sysno::Access => fs::faccessat(AT_FDCWD, path(ptr(0))?, int(1), 0).map(|()| 0),
+            Sysno::SchedGetscheduler => sched::getscheduler(int(0)).map(i64::from),
+            Sysno::SchedSetscheduler => {
+                let prio = read_arg(ptr(2) as *const i32)?;
+                sched::setscheduler(int(0), int(1), prio).map(|()| 0)
+            }
+            Sysno::SchedGetparam => {
+                let prio = sched::getparam(int(0))?;
+                write_arg(ptr(1) as *mut i32, prio).map(|()| 0)
+            }
+            Sysno::SchedSetparam => {
+                let prio = read_arg(ptr(1) as *const i32)?;
+                sched::setparam(int(0), prio).map(|()| 0)
+            }
+            Sysno::SchedGetPriorityMax => sched::priority_max(int(0)).map(i64::from),
+            Sysno::SchedGetPriorityMin => sched::priority_min(int(0)).map(i64::from),
+            Sysno::SchedGetaffinity => {
+                let m = sched::getaffinity(int(0), ptr(1))?;
+                if ptr(2) == 0 {
+                    return Err(Errno::EFAULT);
+                }
+                core::ptr::copy_nonoverlapping(m.as_ptr(), ptr(2) as *mut u8, m.len());
+                Ok(m.len() as i64)
+            }
+            Sysno::SchedSetaffinity => {
+                if ptr(2) == 0 {
+                    return Err(Errno::EFAULT);
+                }
+                let m = core::slice::from_raw_parts(ptr(2) as *const u8, ptr(1).min(1024));
+                sched::setaffinity(int(0), m).map(|()| 0)
+            }
         }
     }
 }
@@ -326,12 +356,32 @@ unsafe fn sys_getcwd(buf: *mut u8, size: usize) -> SysResult<i64> {
 /// `uaddr` is a futex word the caller owns, or NULL / misaligned (which is
 /// rejected); `timeout` is NULL or a readable `struct timespec` for the wait
 /// operations.
-unsafe fn sys_futex(uaddr: usize, op: i32, val: u32, timeout: usize, val3: u32) -> SysResult<i64> {
+unsafe fn sys_futex(
+    uaddr: usize,
+    op: i32,
+    val: u32,
+    timeout: usize,
+    uaddr2: usize,
+    val3: u32,
+) -> SysResult<i64> {
+    use crate::linux::futex::{FUTEX_CMP_REQUEUE, FUTEX_REQUEUE, FUTEX_WAKE_OP};
     futex::check_uaddr(uaddr)?;
     // SAFETY: `uaddr` is non-NULL and 4-byte aligned, and the caller passes
     // a live futex word, which C code accesses atomically like `AtomicU32`.
     let word = unsafe { &*(uaddr as *const AtomicU32) };
     let cmd = op & crate::linux::futex::FUTEX_CMD_MASK;
+    if matches!(cmd, FUTEX_REQUEUE | FUTEX_CMP_REQUEUE | FUTEX_WAKE_OP) {
+        futex::check_uaddr(uaddr2)?;
+        // SAFETY: as for `uaddr`.
+        let word2 = unsafe { &*(uaddr2 as *const AtomicU32) };
+        // The timeout argument carries `val2` for these operations.
+        let val2 = timeout as u32;
+        return match cmd {
+            FUTEX_REQUEUE => futex::requeue(word, word2, val, val2, None),
+            FUTEX_CMP_REQUEUE => futex::requeue(word, word2, val, val2, Some(val3)),
+            _ => futex::wake_op(word, word2, val, val2, val3),
+        };
+    }
     let waits = matches!(
         cmd,
         crate::linux::futex::FUTEX_WAIT | crate::linux::futex::FUTEX_WAIT_BITSET

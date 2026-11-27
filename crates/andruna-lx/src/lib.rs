@@ -30,6 +30,7 @@ pub mod futex;
 pub mod linux;
 pub mod mem;
 pub mod process;
+pub mod sched;
 pub mod signal;
 mod sys;
 pub mod time;

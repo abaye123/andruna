@@ -2,9 +2,11 @@
 
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetCurrentThreadId,
-    GetExitCodeThread, GetProcessIdOfThread, GetProcessTimes, GetThreadTimes, OpenThread,
-    SwitchToThread, THREAD_QUERY_LIMITED_INFORMATION, TerminateProcess,
+    GetActiveProcessorCount, GetCurrentProcess, GetCurrentProcessId, GetCurrentThread,
+    GetCurrentThreadId, GetExitCodeThread, GetProcessAffinityMask, GetProcessIdOfThread,
+    GetProcessTimes, GetThreadTimes, OpenThread, SetThreadAffinityMask, SwitchToThread,
+    THREAD_QUERY_INFORMATION, THREAD_QUERY_LIMITED_INFORMATION, THREAD_SET_INFORMATION,
+    TerminateProcess,
 };
 
 use super::OwnedHandle;
@@ -19,6 +21,55 @@ pub fn current_process_id() -> u32 {
 pub fn current_thread_id() -> u32 {
     // SAFETY: no arguments; returns a value.
     unsafe { GetCurrentThreadId() }
+}
+
+/// Logical processors in the calling thread's processor group.
+pub fn processor_count() -> usize {
+    // SAFETY: no pointer arguments.
+    let n = unsafe { GetActiveProcessorCount(0) };
+    (n as usize).max(1)
+}
+
+fn open_for_affinity(tid: u32) -> SysResult<OwnedHandle> {
+    // SAFETY: opens a new handle that the result owns.
+    let h = unsafe {
+        OpenThread(
+            THREAD_SET_INFORMATION | THREAD_QUERY_INFORMATION,
+            false,
+            tid,
+        )
+    }
+    .map_err(|_| Errno::ESRCH)?;
+    Ok(OwnedHandle::from_raw(h))
+}
+
+/// The affinity mask of thread `tid` of this process.
+pub fn affinity(tid: u32) -> SysResult<u64> {
+    let h = open_for_affinity(tid)?;
+    let (mut process, mut system) = (0usize, 0usize);
+    // SAFETY: valid out pointers; the pseudo handle is always valid.
+    unsafe { GetProcessAffinityMask(GetCurrentProcess(), &mut process, &mut system) }
+        .map_err(Errno::from)?;
+    // Windows has no getter: setting returns the previous mask, which is
+    // then put back.
+    // SAFETY: `h` is a live thread handle with set access.
+    let old = unsafe { SetThreadAffinityMask(h.raw(), process) };
+    if old == 0 {
+        return Err(Errno::EINVAL);
+    }
+    // SAFETY: as above.
+    unsafe { SetThreadAffinityMask(h.raw(), old) };
+    Ok(old as u64)
+}
+
+/// Sets the affinity mask of thread `tid` of this process.
+pub fn set_affinity(tid: u32, mask: u64) -> SysResult<()> {
+    let h = open_for_affinity(tid)?;
+    // SAFETY: `h` is a live thread handle with set access.
+    if unsafe { SetThreadAffinityMask(h.raw(), mask as usize) } == 0 {
+        return Err(Errno::EINVAL);
+    }
+    Ok(())
 }
 
 /// Whether `tid` is a running thread of this process.
