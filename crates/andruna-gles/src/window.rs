@@ -164,6 +164,9 @@ pub struct WindowSurface {
     format: DXGI_FORMAT,
     /// The ANGLE surface the guest renders to.
     pub pbuffer: usize,
+    /// `pbuffer`, readable without the surface's lock (handle mapping
+    /// on other threads must not wait for a swap).
+    pub shared_pbuffer: Arc<std::sync::atomic::AtomicUsize>,
     pub width: u32,
     pub height: u32,
     pub interval: u32,
@@ -271,6 +274,7 @@ impl WindowSurface {
                 waitable,
                 format,
                 pbuffer: 0,
+                shared_pbuffer: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 width,
                 height,
                 interval: w
@@ -281,7 +285,7 @@ impl WindowSurface {
             };
             match s.make_pbuffer() {
                 Ok(p) => {
-                    s.pbuffer = p;
+                    s.set_pbuffer(p);
                     s.wait_for_buffer();
                     if crate::tracing() {
                         crate::log(format_args!(
@@ -295,6 +299,12 @@ impl WindowSurface {
             }
         }
         Err(last)
+    }
+
+    fn set_pbuffer(&mut self, p: usize) {
+        self.pbuffer = p;
+        self.shared_pbuffer
+            .store(p, std::sync::atomic::Ordering::Release);
     }
 
     fn make_pbuffer(&self) -> Result<usize, EglError> {
@@ -359,7 +369,7 @@ impl WindowSurface {
             egl::make_current_raw(cur.dpy, 0, 0, cur.ctx);
         }
         egl::destroy_surface_raw(self.dpy, self.pbuffer);
-        self.pbuffer = 0;
+        self.set_pbuffer(0);
         egl::flush();
         self.width = w;
         self.height = h;
@@ -387,7 +397,7 @@ impl WindowSurface {
             }
         };
         if let Ok(p) = r {
-            self.pbuffer = p;
+            self.set_pbuffer(p);
         }
         self.wait_for_buffer();
         if uses {

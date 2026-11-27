@@ -117,22 +117,28 @@ fn angle_error() -> i32 {
 
 type Shared = Arc<Mutex<WindowSurface>>;
 
-static SURFACES: Mutex<Option<HashMap<usize, Shared>>> = Mutex::new(None);
+/// A registered window surface and its current ANGLE pbuffer.
+struct Entry {
+    surface: Shared,
+    pbuffer: Arc<std::sync::atomic::AtomicUsize>,
+}
 
-fn surfaces() -> std::sync::MutexGuard<'static, Option<HashMap<usize, Shared>>> {
+static SURFACES: Mutex<Option<HashMap<usize, Entry>>> = Mutex::new(None);
+
+fn surfaces() -> std::sync::MutexGuard<'static, Option<HashMap<usize, Entry>>> {
     SURFACES.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn ours(s: usize) -> Option<Shared> {
-    surfaces().as_ref()?.get(&s).cloned()
+    surfaces().as_ref()?.get(&s).map(|e| e.surface.clone())
 }
 
 /// The ANGLE surface for a guest handle.
 fn map(s: usize) -> usize {
-    match ours(s) {
-        Some(w) => w.lock().unwrap_or_else(|e| e.into_inner()).pbuffer,
-        None => s,
-    }
+    surfaces()
+        .as_ref()
+        .and_then(|m| m.get(&s))
+        .map_or(s, |e| e.pbuffer.load(std::sync::atomic::Ordering::Acquire))
 }
 
 /// The guest handle for an ANGLE surface.
@@ -142,8 +148,8 @@ fn unmap(p: usize) -> usize {
     }
     let g = surfaces();
     if let Some(m) = g.as_ref() {
-        for (h, w) in m {
-            if w.lock().unwrap_or_else(|e| e.into_inner()).pbuffer == p {
+        for (h, e) in m {
+            if e.pbuffer.load(std::sync::atomic::Ordering::Acquire) == p {
                 return *h;
             }
         }
@@ -478,9 +484,16 @@ fn create_window_surface(dpy: usize, config: usize, win: usize, list: Vec<(i64, 
     }
     match WindowSurface::create(dpy, config, win, extra) {
         Ok(s) => {
+            let pbuffer = s.shared_pbuffer.clone();
             let s = Arc::new(Mutex::new(s));
             let h = Arc::as_ptr(&s) as usize;
-            surfaces().get_or_insert_with(HashMap::new).insert(h, s);
+            surfaces().get_or_insert_with(HashMap::new).insert(
+                h,
+                Entry {
+                    surface: s,
+                    pbuffer,
+                },
+            );
             h
         }
         Err(e) => {
