@@ -36,7 +36,9 @@ impl ArtRoot {
                     .ok_or("cannot find the ART root; give --art-root")?,
             },
         };
-        let r = ArtRoot { dir };
+        let r = ArtRoot {
+            dir: absolute(&dir)?,
+        };
         r.validate()?;
         Ok(r)
     }
@@ -165,6 +167,9 @@ impl Layout {
             std::fs::create_dir_all(self.data.join(d))
                 .map_err(|e| format!("cannot create {}: {e}", self.data.join(d).display()))?;
         }
+        // The dalvik-cache of this architecture, as on Android.
+        std::fs::create_dir_all(self.data.join("data/dalvik-cache").join(ISA))
+            .map_err(|e| e.to_string())?;
         std::fs::create_dir_all(self.art.javalib().join(ISA)).map_err(|e| e.to_string())?;
         for (guest, host) in self.mounts(classpath)? {
             let host = absolute(&host)?;

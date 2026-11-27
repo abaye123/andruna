@@ -23,6 +23,7 @@ pub mod nr {
     pub const WRITE: i64 = 1;
     pub const READV: i64 = 19;
     pub const WRITEV: i64 = 20;
+    pub const MADVISE: i64 = 28;
     pub const CLONE: i64 = 56;
     pub const FORK: i64 = 57;
     pub const VFORK: i64 = 58;
@@ -45,6 +46,7 @@ pub mod nr {
     pub const WRITE: i64 = 64;
     pub const READV: i64 = 65;
     pub const WRITEV: i64 = 66;
+    pub const MADVISE: i64 = 233;
     pub const EXIT: i64 = 93;
     pub const EXIT_GROUP: i64 = 94;
     pub const SET_TID_ADDRESS: i64 = 96;
@@ -151,6 +153,10 @@ unsafe fn dispatch_inner(n: i64, a: [i64; 6]) -> i64 {
         nr::GETUID | nr::GETEUID => i64::from(andruna_lx::process::uid()),
         nr::GETGID | nr::GETEGID => i64::from(andruna_lx::process::gid()),
         nr::GETRANDOM => getrandom(a[0] as *mut u8, a[1] as usize, a[2]),
+        nr::MADVISE if matches!(a[2], 4 | 8) => {
+            // SAFETY: forwarded from this function's contract.
+            unsafe { discard_below_sp(a) }
+        }
         nr::WRITEV if crate::logd::is_socket(a[0] as i32) && a[2] >= 0 => {
             // SAFETY: the caller's iovec array (contract).
             let d = unsafe { crate::logd::gather(a[1] as *const [u64; 2], a[2] as usize) };
@@ -196,6 +202,45 @@ unsafe fn forward(n: i64, a: [i64; 6]) -> i64 {
             r
         }
     }
+}
+
+/// Host code below a guest frame that `madvise(MADV_DONTNEED / MADV_FREE)`
+/// is called from must keep its stack. System calls normally run on the
+/// thread's Windows stack (`__andruna_syscall`), but nested ones and those
+/// of threads the loader did not start run on the current stack. Threads release the
+/// unused part of their stack this way (ART does, below the stack
+/// pointer), and lx implements the advice by decommitting the pages, which
+/// would free the host frames handling the call. The pages from 64 KiB
+/// below the current stack pointer up are kept (their contents stay, which
+/// only matters to code reading its own stack below the stack pointer).
+///
+/// # Safety
+///
+/// As for [`dispatch`].
+unsafe fn discard_below_sp(mut a: [i64; 6]) -> i64 {
+    const MARGIN: u64 = 64 << 10;
+    let local = 0u8;
+    let sp = (&local as *const u8 as u64) & !(crate::image::PAGE - 1);
+    let (keep_lo, keep_hi) = (sp.saturating_sub(MARGIN), sp + MARGIN);
+    let start = a[0] as u64;
+    let end = start.saturating_add(a[1] as u64);
+    if end <= keep_lo || start >= keep_hi {
+        // SAFETY: forwarded from this function's contract.
+        return unsafe { forward(nr::MADVISE, a) };
+    }
+    // The parts below and above the kept range.
+    for (lo, hi) in [(start, keep_lo.min(end)), (keep_hi.max(start), end)] {
+        if lo < hi {
+            a[0] = lo as i64;
+            a[1] = (hi - lo) as i64;
+            // SAFETY: as above, on a part of the caller's range.
+            let r = unsafe { forward(nr::MADVISE, a) };
+            if r < 0 {
+                return r;
+            }
+        }
+    }
+    0
 }
 
 fn getrandom(buf: *mut u8, len: usize, flags: i64) -> i64 {
@@ -264,8 +309,29 @@ gfn! {
     }
 }
 
+gfn! {
+    /// Before a system call: on a guest thread that is not already in one,
+    /// switches the TEB to the thread's Windows stack and returns its top
+    /// (the entry moves the stack pointer there); otherwise 0.
+    unsafe fn stack_enter() -> u64 {
+        crate::thread::enter_host_stack()
+    }
+}
+
+gfn! {
+    /// After a system call that [`stack_enter`] moved to the Windows stack.
+    unsafe fn stack_leave() -> () {
+        crate::thread::leave_host_stack()
+    }
+}
+
 /// `__andruna_syscall` (x64): number in `rax`, arguments in the System V
 /// argument registers.
+///
+/// The call runs on the thread's Windows stack, as a kernel runs on its
+/// own stack: guest code leaves little stack below its frames in places
+/// (ART's stack overflow handling, a thread discarding its unused stack
+/// with `madvise`), and host code must not depend on it.
 ///
 /// # Safety
 ///
@@ -275,12 +341,49 @@ gfn! {
 #[unsafe(naked)]
 pub unsafe extern "sysv64" fn andruna_syscall() {
     core::arch::naked_asm!(
-        // The number becomes the seventh (stack) argument; the stack is
-        // 16-byte aligned again at the call.
+        "push rbp",
+        "mov rbp, rsp",
+        "push rbx",
         "push rax",
+        "push rdi",
+        "push rsi",
+        "push rdx",
+        "push rcx",
+        "push r8",
+        "push r9",
+        // 16-byte aligned here (entry 8 mod 16, eight pushes).
+        "call {enter}",
+        "mov rbx, rax",
+        "mov rdi, [rbp - 24]",
+        "mov rsi, [rbp - 32]",
+        "mov rdx, [rbp - 40]",
+        "mov rcx, [rbp - 48]",
+        "mov r8, [rbp - 56]",
+        "mov r9, [rbp - 64]",
+        "mov r10, [rbp - 16]",
+        "test rbx, rbx",
+        "jz 2f",
+        "mov rsp, rbx",
+        "and rsp, -16",
+        "2:",
+        // The number becomes the seventh (stack) argument; aligned at the
+        // call.
+        "sub rsp, 8",
+        "push r10",
         "call {entry}",
-        "add rsp, 8",
+        "test rbx, rbx",
+        "jz 3f",
+        "mov [rbp - 16], rax",
+        "add rsp, 16",
+        "call {leave}",
+        "mov rax, [rbp - 16]",
+        "3:",
+        "lea rsp, [rbp - 8]",
+        "pop rbx",
+        "pop rbp",
         "ret",
+        enter = sym stack_enter,
+        leave = sym stack_leave,
         entry = sym raw_entry,
     )
 }
@@ -293,7 +396,39 @@ pub unsafe extern "sysv64" fn andruna_syscall() {
 #[cfg(target_arch = "aarch64")]
 #[unsafe(naked)]
 pub unsafe extern "C" fn andruna_syscall() {
-    core::arch::naked_asm!("mov x6, x8", "b {entry}", entry = sym raw_entry)
+    core::arch::naked_asm!(
+        "stp x29, x30, [sp, #-16]!",
+        "mov x29, sp",
+        "stp x19, x20, [sp, #-16]!",
+        "sub sp, sp, #64",
+        "stp x0, x1, [sp]",
+        "stp x2, x3, [sp, #16]",
+        "stp x4, x5, [sp, #32]",
+        "str x8, [sp, #48]",
+        "bl {enter}",
+        "mov x19, x0",
+        "ldp x0, x1, [sp]",
+        "ldp x2, x3, [sp, #16]",
+        "ldp x4, x5, [sp, #32]",
+        "ldr x6, [sp, #48]",
+        "cbz x19, 2f",
+        "and x9, x19, #-16",
+        "mov sp, x9",
+        "2:",
+        "bl {entry}",
+        "cbz x19, 3f",
+        "mov x20, x0",
+        "bl {leave}",
+        "mov x0, x20",
+        "3:",
+        "sub sp, x29, #16",
+        "ldp x19, x20, [sp], #16",
+        "ldp x29, x30, [sp], #16",
+        "ret",
+        enter = sym stack_enter,
+        leave = sym stack_leave,
+        entry = sym raw_entry,
+    )
 }
 
 pub fn symbols() -> Vec<(&'static str, u64)> {

@@ -16,7 +16,7 @@ pub const SIGNTOOL_VAR: &str = "ANDRUNA_SIGNTOOL";
 pub const TIMESTAMP_URL: &str = "http://timestamp.digicert.com";
 
 /// The executables of the workspace that ship.
-pub const SHIPPED: &[&str] = &["andruna-sysd.exe", "andruna-launch.exe"];
+pub const SHIPPED: &[&str] = &["andruna-sysd.exe", "andruna-launch.exe", "andruna-app.exe"];
 
 const KITS_BIN: &str = r"C:\Program Files (x86)\Windows Kits\10\bin";
 

@@ -49,6 +49,41 @@ thread_local! {
     static SAVED_BOUNDS: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
 }
 
+thread_local! {
+    /// The TEB stack bounds of the guest stack while a system call runs on
+    /// the Windows stack ((0, 0): not in a system call).
+    static IN_SYSCALL: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+}
+
+/// Bytes kept free below the saved Windows stack pointer.
+const HOST_STACK_RED_ZONE: u64 = 256;
+
+/// Moves a system call of a guest thread to its Windows stack (see
+/// `__andruna_syscall`): sets the TEB bounds to that stack and returns the
+/// stack pointer to use, or 0 when the thread has no Windows stack saved
+/// or is already in a system call (nested calls stay where they are).
+pub(crate) fn enter_host_stack() -> u64 {
+    let sp = HOST_SP.with(|c| c.get());
+    if sp == 0 || IN_SYSCALL.with(|c| c.get()) != (0, 0) {
+        return 0;
+    }
+    let (base, limit) = SAVED_BOUNDS.with(|c| c.get());
+    if base == 0 {
+        return 0;
+    }
+    IN_SYSCALL.with(|c| c.set(stack_bounds()));
+    set_stack_bounds(base, limit);
+    sp - HOST_STACK_RED_ZONE
+}
+
+/// Back to the guest stack after [`enter_host_stack`].
+pub(crate) fn leave_host_stack() {
+    let (base, limit) = IN_SYSCALL.with(|c| c.replace((0, 0)));
+    if base != 0 {
+        set_stack_bounds(base, limit);
+    }
+}
+
 /// The TEB of the current thread.
 fn teb() -> *mut u64 {
     let t: *mut u64;
@@ -66,14 +101,14 @@ fn teb() -> *mut u64 {
 }
 
 /// The TEB's `NT_TIB` stack base and limit.
-fn stack_bounds() -> (u64, u64) {
+pub(crate) fn stack_bounds() -> (u64, u64) {
     let t = teb();
     // SAFETY: NT_TIB.StackBase and StackLimit are the second and third
     // words of the TEB.
     unsafe { (*t.add(1), *t.add(2)) }
 }
 
-fn set_stack_bounds(base: u64, limit: u64) {
+pub(crate) fn set_stack_bounds(base: u64, limit: u64) {
     let t = teb();
     // SAFETY: as in `stack_bounds`; the thread writes only its own TEB.
     unsafe {

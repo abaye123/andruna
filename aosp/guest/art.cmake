@@ -24,8 +24,23 @@ function(art_so target soname)
   set_target_properties(${target} PROPERTIES OUTPUT_NAME "${soname}")
   guest_shared(${target} ${soname})
   # As Soong links shared objects: every reference resolved at link time.
-  target_link_options(${target} PRIVATE -Wl,--no-undefined)
+  if(NOT target IN_LIST ART_UNDEFINED_OK)
+    target_link_options(${target} PRIVATE -Wl,--no-undefined)
+  endif()
 endfunction()
+
+set(ART_UNDEFINED_OK)
+
+# libunwindstack.so: an Andruna stand-in that reports every unwind as
+# unsupported (unwindstack_unavailable.cpp) until AOSP's libunwindstack is
+# built. Only ART's native stack dumps use it.
+add_library(unwindstack_so SHARED "${CMAKE_CURRENT_SOURCE_DIR}/unwindstack_unavailable.cpp")
+target_include_directories(unwindstack_so PRIVATE
+  "${AOSP}/system/unwinding/libunwindstack/include")
+target_link_libraries(unwindstack_so PRIVATE aosp_android)
+set_target_properties(unwindstack_so PROPERTIES OUTPUT_NAME libunwindstack.so)
+guest_shared(unwindstack_so libunwindstack.so)
+target_link_options(unwindstack_so PRIVATE -Wl,--no-undefined)
 
 art_so(log_so liblog.so liblog)
 
@@ -36,7 +51,7 @@ art_so(nativehelper_so libnativehelper.so libnativehelper)
 target_link_libraries(nativehelper_so PRIVATE log_so)
 
 art_so(sigchain_so libsigchain.so libsigchain_static art_async_safe)
-target_link_libraries(sigchain_so PRIVATE base_so log_so)
+target_link_libraries(sigchain_so PRIVATE unwindstack_so base_so log_so)
 
 # libart.so: the runtime with the optimizing compiler, libartbase,
 # libdexfile, libprofile and the smaller libraries folded in.
@@ -45,7 +60,7 @@ art_so(art_so libart.so
   libnativebridge libnativeloader libcpu_features libprocinfo liblzma)
 target_link_libraries(art_so PRIVATE
   libziparchive libtinyxml2 liblz4 libz libcutils libutils
-  sigchain_so nativehelper_so base_so log_so "${SYSLIB}/libdl_android.so")
+  sigchain_so nativehelper_so base_so log_so unwindstack_so "${SYSLIB}/libdl_android.so")
 
 # dalvikvm (art/dalvikvm): finds libart.so through libnativehelper's
 # JniInvocation, as on Android.
@@ -53,7 +68,7 @@ add_executable(dalvikvm "${AOSP}/art/dalvikvm/dalvikvm.cc")
 target_include_directories(dalvikvm PRIVATE "${AOSP}/art/libartbase" "${AOSP}/bionic/libc/platform")
 target_include_directories(dalvikvm PRIVATE $<TARGET_PROPERTY:libbase,INTERFACE_INCLUDE_DIRECTORIES>)
 target_link_libraries(dalvikvm PRIVATE aosp_android art_defaults libnativehelper_headers
-  nativehelper_so base_so log_so)
+  nativehelper_so base_so log_so "${SYSLIB}/libdl_android.so")
 guest_executable(dalvikvm)
 
 # dex2oat (art/dex2oat), linked against libart.so (which holds the runtime,
@@ -119,9 +134,9 @@ add_custom_target(art_install ALL
     $<TARGET_FILE:dex2oat> $<TARGET_FILE:icuuc_so> $<TARGET_FILE:icui18n_so>
     $<TARGET_FILE:icu_so> $<TARGET_FILE:icu_jni_so> $<TARGET_FILE:expat_so>
     $<TARGET_FILE:androidio_so> $<TARGET_FILE:javacore_so>
-    $<TARGET_FILE:openjdkjvm_so> $<TARGET_FILE:openjdk_so>
+    $<TARGET_FILE:openjdkjvm_so> $<TARGET_FILE:openjdk_so> $<TARGET_FILE:unwindstack_so>
     "${ART_OUT}"
   DEPENDS log_so base_so nativehelper_so sigchain_so art_so dalvikvm dex2oat
     icuuc_so icui18n_so icu_so icu_jni_so expat_so androidio_so javacore_so
-    openjdkjvm_so openjdk_so
+    openjdkjvm_so openjdk_so unwindstack_so
   VERBATIM)

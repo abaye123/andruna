@@ -680,10 +680,114 @@ pub fn deliver_fault(
         // Not a guest thread.
         return false;
     }
+    let fault = Fault {
+        code,
+        sig,
+        si_code,
+        addr,
+        write,
+        pc,
+        k,
+        ctx,
+    };
+    let (alt_sp, alt_size, alt_flags) = ALTSTACK.with(|c| c.get());
+    let sp = arch::sp(fault.ctx);
+    let on_alt = sp > alt_sp && sp <= alt_sp + alt_size;
+    if k.flags & SA_ONSTACK != 0 && alt_flags & SS_DISABLE == 0 && alt_size != 0 && !on_alt {
+        // As the kernel: the handler runs on the alternate stack, so a
+        // fault near the end of the thread's stack (ART's stack overflow
+        // check) leaves the handler room. The TEB describes that stack
+        // meanwhile, as Windows requires of the stack in use.
+        let saved = crate::thread::stack_bounds();
+        crate::thread::set_stack_bounds(alt_sp + alt_size, alt_sp);
+        let mut job = (fault, false);
+        // SAFETY: the alternate stack is the guest's, registered for this
+        // thread and not in use (checked above); `run_on_alt` returns.
+        unsafe {
+            call_on_stack(
+                &mut job as *mut (Fault, bool) as u64,
+                run_on_alt as usize as u64,
+                alt_sp + alt_size,
+            )
+        };
+        crate::thread::set_stack_bounds(saved.0, saved.1);
+        return job.1;
+    }
+    deliver(fault)
+}
+
+const SA_ONSTACK: u64 = 0x0800_0000;
+
+struct Fault<'a> {
+    code: u32,
+    sig: i32,
+    si_code: i32,
+    addr: u64,
+    write: bool,
+    pc: u64,
+    k: KernelSigaction,
+    ctx: &'a mut windows::Win32::System::Diagnostics::Debug::CONTEXT,
+}
+
+gfn! {
+    /// Delivery on the alternate stack.
+    unsafe fn run_on_alt(job: u64) -> () {
+        // SAFETY: the pair `deliver_fault` passes, alive across the call.
+        let job = unsafe { &mut *(job as *mut (Fault<'static>, bool)) };
+        // SAFETY: moves the fault out once; the slot is not used again.
+        let f = unsafe { core::ptr::read(&job.0) };
+        job.1 = crate::host::guard(false, move || deliver(f));
+    }
+}
+
+/// Calls `f(arg)` (guest convention) with the stack pointer at `top`.
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+unsafe extern "sysv64" fn call_on_stack(arg: u64, f: u64, top: u64) {
+    core::arch::naked_asm!(
+        "push rbp",
+        "mov rbp, rsp",
+        "mov rsp, rdx",
+        "and rsp, -16",
+        "call rsi",
+        "mov rsp, rbp",
+        "pop rbp",
+        "ret",
+    )
+}
+
+#[cfg(target_arch = "aarch64")]
+#[unsafe(naked)]
+unsafe extern "C" fn call_on_stack(arg: u64, f: u64, top: u64) {
+    core::arch::naked_asm!(
+        "stp x29, x30, [sp, #-16]!",
+        "mov x29, sp",
+        "and x9, x2, #-16",
+        "mov sp, x9",
+        "blr x1",
+        "mov sp, x29",
+        "ldp x29, x30, [sp], #16",
+        "ret",
+    )
+}
+
+fn deliver(f: Fault<'_>) -> bool {
+    let Fault {
+        code,
+        sig,
+        si_code,
+        addr,
+        write,
+        pc,
+        k,
+        ctx,
+    } = f;
     if siglog() {
         crate::debug::report(format_args!(
-            "signal {sig} (exception {code:#x}) at {pc:#x} {} address {addr:#x}",
-            crate::debug::describe(pc).unwrap_or_default()
+            "signal {sig} (exception {code:#x}) at {pc:#x} {} address {addr:#x}, sp {:#x}, handler stack {:#x}",
+            crate::debug::describe(pc).unwrap_or_default(),
+            arch::sp(ctx),
+            &si_code as *const i32 as u64
         ));
     }
     let mut si = SigInfo::new(sig, si_code);
