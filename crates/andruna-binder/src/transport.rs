@@ -14,6 +14,8 @@
 //!   one `SignalObjectAndWait`; the broker thread answers the same way.
 
 use core::mem::size_of;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 /// The pipe name a guest connects to, from the environment variable
 /// [`PIPE_ENV`] (set by sysd for the processes it starts).
@@ -119,6 +121,189 @@ pub const LANE_READ: usize = LANE_WRITE + LANE_WRITE_MAX;
 pub const LANE_READ_MAX: usize = 64 << 10;
 /// Size of a lane section.
 pub const LANE_SIZE: usize = LANE_READ + LANE_READ_MAX;
+
+/// Offsets of the wake words in a lane (after the [`LaneHeader`]).
+const REQ_SEQ: usize = 40;
+const REQ_WAITING: usize = 44;
+const RESP_SEQ: usize = 48;
+const RESP_WAITING: usize = 52;
+
+/// One direction of a lane: a sequence number and a "sleeping" flag in
+/// shared memory, and an auto-reset event (S3's wake mechanism). The
+/// producer publishes the sequence and sets the event only when the
+/// consumer announced that it sleeps; the consumer spins for a bounded
+/// time, then announces, re-checks and sleeps. A stale event causes at
+/// most one spurious wake-up, after which the sequence is checked again.
+#[derive(Clone, Copy, Debug)]
+pub struct Wake {
+    seq: *const AtomicU32,
+    waiting: *const AtomicU32,
+    event: windows::Win32::Foundation::HANDLE,
+}
+
+// SAFETY: the words live in a lane mapping that outlives every `Wake`
+// (the owner keeps the view mapped while its threads use it).
+unsafe impl Send for Wake {}
+
+impl Wake {
+    /// The request (`req`) or response direction of the lane at `base`.
+    ///
+    /// # Safety
+    ///
+    /// `base` is a mapped lane of [`LANE_SIZE`] bytes that stays mapped
+    /// while the value is used; `event` stays open as long.
+    pub unsafe fn new(base: *mut u8, req: bool, event: windows::Win32::Foundation::HANDLE) -> Self {
+        let (s, w) = if req {
+            (REQ_SEQ, REQ_WAITING)
+        } else {
+            (RESP_SEQ, RESP_WAITING)
+        };
+        // SAFETY: inside the lane header area (contract).
+        unsafe {
+            Self {
+                seq: base.add(s).cast(),
+                waiting: base.add(w).cast(),
+                event,
+            }
+        }
+    }
+
+    fn seq(&self) -> &AtomicU32 {
+        // SAFETY: see `new`; 4-byte aligned in a page-aligned mapping.
+        unsafe { &*self.seq }
+    }
+
+    fn waiting(&self) -> &AtomicU32 {
+        // SAFETY: as above.
+        unsafe { &*self.waiting }
+    }
+
+    /// The current sequence number (read before sending, to wait for the
+    /// next one).
+    pub fn current(&self) -> u32 {
+        self.seq().load(Ordering::SeqCst)
+    }
+
+    /// Publishes a message and wakes the consumer if it sleeps.
+    pub fn post(&self) {
+        self.seq().fetch_add(1, Ordering::SeqCst);
+        if self.waiting().swap(0, Ordering::SeqCst) != 0 {
+            crate::sys::set_event(self.event);
+        }
+    }
+
+    /// Publishes a message on this direction and waits for the next one
+    /// on `reply` (whose number was `seen`). Without spinning, waking the
+    /// peer and sleeping is one `SignalObjectAndWait`.
+    pub fn post_then_wait(
+        &self,
+        reply: &Wake,
+        seen: u32,
+        spin: Duration,
+        slice_ms: u32,
+        alive: &dyn Fn() -> bool,
+    ) -> bool {
+        if !spin.is_zero() {
+            self.post();
+            return reply.wait(seen, spin, slice_ms, alive);
+        }
+        reply.waiting().store(1, Ordering::SeqCst);
+        self.seq().fetch_add(1, Ordering::SeqCst);
+        if self.waiting().swap(0, Ordering::SeqCst) != 0 {
+            crate::sys::signal_and_wait(self.event, reply.event, slice_ms);
+        } else if reply.current() == seen {
+            crate::sys::wait(reply.event, Some(slice_ms));
+        }
+        reply.current() != seen || reply.wait(seen, Duration::ZERO, slice_ms, alive)
+    }
+
+    /// Waits until the sequence number differs from `seen`: spins for up
+    /// to `spin`, then sleeps on the event in slices of `slice_ms`
+    /// (calling `alive` after each empty slice; `false` ends the wait).
+    pub fn wait(&self, seen: u32, spin: Duration, slice_ms: u32, alive: &dyn Fn() -> bool) -> bool {
+        if !spin.is_zero() {
+            let start = Instant::now();
+            loop {
+                for _ in 0..64 {
+                    if self.current() != seen {
+                        return true;
+                    }
+                    core::hint::spin_loop();
+                }
+                if start.elapsed() >= spin {
+                    break;
+                }
+            }
+        }
+        loop {
+            self.waiting().store(1, Ordering::SeqCst);
+            if self.current() != seen {
+                return true;
+            }
+            crate::sys::wait(self.event, Some(slice_ms));
+            if self.current() != seen {
+                return true;
+            }
+            if !alive() {
+                return false;
+            }
+        }
+    }
+}
+
+/// How long a waiting side spins before it sleeps: bounded, only while the
+/// lane is busy (a message within the last 2 ms), and never on machines
+/// with fewer than four logical processors, where a spinning thread takes
+/// the processor the thread it waits for needs (S3, ARM64 runner).
+/// `ANDRUNA_BINDER_SPIN_US` overrides the budget (0 disables spinning).
+pub fn spin_budget(hot: &Hot) -> Duration {
+    if hot.recent() {
+        spin_budget_when_hot()
+    } else {
+        Duration::ZERO
+    }
+}
+
+/// The spin budget of a busy side (see [`spin_budget`]).
+pub fn spin_budget_when_hot() -> Duration {
+    static CFG: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *CFG.get_or_init(|| {
+        let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+        match std::env::var("ANDRUNA_BINDER_SPIN_US")
+            .ok()
+            .and_then(|v| v.parse().ok())
+        {
+            Some(us) => Duration::from_micros(us),
+            None if cpus >= 4 => SPIN,
+            None => Duration::ZERO,
+        }
+    })
+}
+
+/// When a side last got a message.
+#[derive(Debug, Default)]
+pub struct Hot(std::sync::atomic::AtomicU64);
+
+fn epoch() -> Instant {
+    static E: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    *E.get_or_init(Instant::now)
+}
+
+impl Hot {
+    pub fn mark(&self) {
+        let us = epoch().elapsed().as_micros() as u64 + 1;
+        self.0.store(us, Ordering::Relaxed);
+    }
+
+    /// A message within the last 2 ms.
+    pub fn recent(&self) -> bool {
+        let t = self.0.load(Ordering::Relaxed);
+        t != 0 && (epoch().elapsed().as_micros() as u64 + 1).saturating_sub(t) < 2000
+    }
+}
+
+/// The default spin budget per wait.
+pub const SPIN: Duration = Duration::from_micros(30);
 
 #[cfg(test)]
 mod tests {

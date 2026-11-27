@@ -9,6 +9,7 @@ use std::os::windows::io::OwnedHandle;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use crate::broker::{Broker, BufferMap, ProcEnv, ProcId, errno::*};
 use crate::sys;
@@ -93,8 +94,10 @@ impl Server {
     /// Starts serving the pipe `name` (`\\.\pipe\...`). Returns once the
     /// first pipe instance exists, so clients can connect.
     pub fn start(name: &str, identity: Box<Identity>) -> io::Result<Arc<Self>> {
+        let broker = Broker::new();
+        broker.set_spin(crate::transport::spin_budget_when_hot());
         let s = Arc::new(Self {
-            broker: Broker::new(),
+            broker,
             name: name.to_string(),
             identity,
         });
@@ -348,11 +351,26 @@ fn lane_loop(
     quit: &AtomicBool,
 ) {
     let base = view.0;
-    let mut woken = sys::wait(sys::raw(req), None);
+    // SAFETY: the lane stays mapped and the events open while this thread
+    // runs (the client joins it before dropping them).
+    let (reqw, respw) = unsafe {
+        (
+            Wake::new(base, true, sys::raw(req)),
+            Wake::new(base, false, sys::raw(resp)),
+        )
+    };
+    let hot = Hot::default();
+    // A new lane starts at 0; the guest may already have posted.
+    let mut seen = 0;
+    let alive = || !quit.load(Ordering::SeqCst);
+    if !reqw.wait(seen, Duration::ZERO, 1000, &alive) {
+        return;
+    }
     loop {
-        if quit.load(Ordering::SeqCst) || !woken {
+        if !alive() {
             return;
         }
+        seen = reqw.current();
         // SAFETY: the header is at the start of the lane; copied out once.
         let h = unsafe { base.cast::<LaneHeader>().read_volatile() };
         let wl = (h.write_len as usize).min(LANE_WRITE_MAX);
@@ -389,6 +407,9 @@ fn lane_loop(
         }
         // SAFETY: the header at the start of the lane.
         unsafe { base.cast::<LaneHeader>().write_volatile(out) };
-        woken = sys::signal_and_wait(sys::raw(resp), sys::raw(req), u32::MAX);
+        hot.mark();
+        if !respw.post_then_wait(&reqw, seen, spin_budget(&hot), 1000, &alive) {
+            return;
+        }
     }
 }

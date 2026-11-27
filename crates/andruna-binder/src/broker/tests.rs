@@ -775,7 +775,18 @@ fn thread_exit_and_cleanup() {
 /// threads: every call gets its own reply.
 #[test]
 fn concurrent_calls() {
+    concurrent(Duration::ZERO);
+}
+
+/// The same with broker threads spinning before they sleep.
+#[test]
+fn concurrent_calls_spinning() {
+    concurrent(Duration::from_micros(30));
+}
+
+fn concurrent(spin: Duration) {
     let b = Broker::new();
+    b.set_spin(spin);
     let sm = Arc::new(ctx_mgr(&b));
     let mut servers = Vec::new();
     for tid in 1..=2 {

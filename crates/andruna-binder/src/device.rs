@@ -65,6 +65,7 @@ fn open(_flags: u32) -> SysResult<Box<dyn FileOps>> {
 /// One lane of this process (one per guest thread).
 struct Lane {
     view: *mut u8,
+    hot: Hot,
     _section: OwnedHandle,
     req: OwnedHandle,
     resp: OwnedHandle,
@@ -144,6 +145,7 @@ impl Conn {
         let view = sys::map_view(&section, LANE_SIZE).map_err(|_| Errno::ENOMEM)?;
         let l = Arc::new(Lane {
             view,
+            hot: Hot::default(),
             _section: section,
             req,
             resp,
@@ -194,6 +196,14 @@ impl Conn {
         let read_cap =
             (bwr.read_size.saturating_sub(bwr.read_consumed) as usize).min(LANE_READ_MAX);
         let base = lane.view;
+        // SAFETY: the lane is mapped and its events open while `lane` lives.
+        let (reqw, respw) = unsafe {
+            (
+                Wake::new(base, true, sys::raw(&lane.req)),
+                Wake::new(base, false, sys::raw(&lane.resp)),
+            )
+        };
+        let seen = respw.current();
         // SAFETY: the lane holds the header and LANE_WRITE_MAX bytes of
         // write stream; the broker thread does not touch it until woken.
         unsafe {
@@ -213,21 +223,11 @@ impl Conn {
                 ..LaneHeader::default()
             });
         }
-        let mut signal = true;
-        loop {
-            let done = if signal {
-                sys::signal_and_wait(sys::raw(&lane.req), sys::raw(&lane.resp), 2000)
-            } else {
-                sys::wait(sys::raw(&lane.resp), Some(2000))
-            };
-            signal = false;
-            if done {
-                break;
-            }
-            if !self.broker_alive() {
-                return Err(Errno::EIO);
-            }
+        let alive = || self.broker_alive();
+        if !reqw.post_then_wait(&respw, seen, spin_budget(&lane.hot), 2000, &alive) {
+            return Err(Errno::EIO);
         }
+        lane.hot.mark();
         // SAFETY: the broker thread wrote the reply and is waiting again.
         let h = unsafe { base.cast::<LaneHeader>().read_volatile() };
         bwr.write_consumed += packed.original_consumed(h.write_consumed as usize) as u64;

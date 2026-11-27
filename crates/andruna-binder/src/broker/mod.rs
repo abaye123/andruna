@@ -30,7 +30,9 @@ pub mod alloc;
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use crate::uapi::*;
 use alloc::{Allocator, align8};
@@ -124,7 +126,9 @@ struct Thread {
     /// with the reply.
     deferred_complete: bool,
     return_error: Option<u32>,
-    cv: Arc<Condvar>,
+    wake: Arc<ThreadWake>,
+    /// When the thread last got work (it spins briefly while busy).
+    last: Option<Instant>,
     /// Blocked in a read.
     waiting: bool,
     dead: bool,
@@ -139,10 +143,26 @@ impl Thread {
             need_return: true,
             deferred_complete: false,
             return_error: None,
-            cv: Arc::new(Condvar::new()),
+            wake: Arc::default(),
+            last: None,
             waiting: false,
             dead: false,
         }
+    }
+}
+
+/// Wakes a thread blocked in a read: its condition variable, and a
+/// counter it watches while it spins with the lock released.
+#[derive(Debug, Default)]
+struct ThreadWake {
+    cv: Condvar,
+    kick: AtomicU64,
+}
+
+impl ThreadWake {
+    fn notify(&self) {
+        self.kick.fetch_add(1, Ordering::SeqCst);
+        self.cv.notify_all();
     }
 }
 
@@ -277,6 +297,8 @@ struct State {
 #[derive(Debug, Default)]
 pub struct Broker {
     state: Mutex<State>,
+    /// Spin budget of a thread waiting for work, in microseconds.
+    spin_us: AtomicU64,
 }
 
 /// Statistics for tests and diagnostics.
@@ -302,6 +324,13 @@ const TR_SIZE: usize = core::mem::size_of::<binder_transaction_data>();
 impl Broker {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// How long a broker thread that got work within the last 2 ms spins
+    /// (with the lock released) before it sleeps on its condition
+    /// variable. Zero (the default) never spins.
+    pub fn set_spin(&self, d: Duration) {
+        self.spin_us.store(d.as_micros() as u64, Ordering::Relaxed);
     }
 
     /// Adds a process with the identity sysd assigned to it: `pid` and
@@ -521,7 +550,7 @@ impl Broker {
         }
         let proc = s.procs.remove(&p).unwrap();
         for t in proc.threads.values() {
-            t.cv.notify_all();
+            t.wake.notify();
         }
     }
 
@@ -617,6 +646,7 @@ impl Broker {
             }
             out.extend_from_slice(&BR_NOOP.to_ne_bytes());
         }
+        let mut spun = false;
         loop {
             let Some(proc) = g.procs.get_mut(&p) else {
                 return Err((g, ESRCH));
@@ -646,11 +676,32 @@ impl Broker {
                 return Err((g, EAGAIN));
             }
             t.waiting = true;
-            if for_proc {
+            if for_proc && !proc.waiting.contains(&tid) {
                 proc.waiting.push_back(tid);
             }
-            let cv = t.cv.clone();
-            g = cv.wait(g).unwrap_or_else(|e| e.into_inner());
+            let wake = t.wake.clone();
+            let spin_us = self.spin_us.load(Ordering::Relaxed);
+            let hot = t
+                .last
+                .is_some_and(|l| l.elapsed() < Duration::from_millis(2));
+            if !spun && spin_us > 0 && hot {
+                // Bounded spin with the lock released; work queued for
+                // this thread meanwhile bumps `kick`. The state is checked
+                // again under the lock before sleeping.
+                spun = true;
+                let seen = wake.kick.load(Ordering::SeqCst);
+                drop(g);
+                let start = Instant::now();
+                let budget = Duration::from_micros(spin_us);
+                while wake.kick.load(Ordering::SeqCst) == seen && start.elapsed() < budget {
+                    for _ in 0..64 {
+                        core::hint::spin_loop();
+                    }
+                }
+                g = lock(&self.state);
+            } else {
+                g = wake.cv.wait(g).unwrap_or_else(|e| e.into_inner());
+            }
             if let Some(proc) = g.procs.get_mut(&p) {
                 proc.waiting.retain(|&w| w != tid);
                 if let Some(t) = proc.threads.get_mut(&tid) {
@@ -660,6 +711,11 @@ impl Broker {
         }
         // Ask for another looper thread when none is left waiting.
         if let Some(proc) = g.procs.get_mut(&p) {
+            if out.len() > usize::from(first) * 4
+                && let Some(t) = proc.threads.get_mut(&tid)
+            {
+                t.last = Some(Instant::now());
+            }
             let looper = proc.threads[&tid].looper & (LOOPER_REGISTERED | LOOPER_ENTERED) != 0;
             if proc.requested_threads == 0
                 && proc.waiting.is_empty()
@@ -695,7 +751,7 @@ fn wake_thread(s: &State, p: ProcId, tid: i32) {
         && let Some(t) = proc.threads.get(&tid)
     {
         if t.waiting {
-            t.cv.notify_one();
+            t.wake.notify();
         } else {
             proc.env.notify_work();
         }
@@ -718,7 +774,7 @@ fn enqueue_proc(s: &mut State, p: ProcId, w: Work) {
     if let Some(tid) = proc.waiting.pop_front() {
         let t = proc.threads.get_mut(&tid).unwrap();
         t.todo.push_back(w);
-        t.cv.notify_one();
+        t.wake.notify();
     } else {
         proc.todo.push_back(w);
         proc.env.notify_work();
@@ -950,7 +1006,7 @@ fn release_thread(s: &mut State, p: ProcId, tid: i32) {
         return;
     };
     t.dead = true;
-    t.cv.notify_all();
+    t.wake.notify();
     let mut cur = t.stack.take();
     let todo: Vec<Work> = t.todo.drain(..).collect();
     s.procs.get_mut(&p).unwrap().waiting.retain(|&w| w != tid);
