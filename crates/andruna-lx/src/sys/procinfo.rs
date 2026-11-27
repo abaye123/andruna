@@ -7,6 +7,8 @@ use windows::Win32::System::WindowsProgramming::{
     SYSTEM_PROCESS_INFORMATION, SYSTEM_THREAD_INFORMATION,
 };
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use super::thread::current_process_id;
 use crate::errno::{Errno, SysResult};
 
@@ -51,8 +53,14 @@ pub const WAIT_WR_PAGE_IN: u32 = 9;
 
 /// Reads the scheduler's information about this process.
 pub fn current_process() -> SysResult<ProcessInfo> {
+    // The buffer holds every process and thread of the system (about 1 MB
+    // on a desktop). It starts at the size the last call needed, so a call
+    // normally queries once, and grows by an eighth over what Windows asks
+    // for: zeroing a much larger buffer cost more than the query itself
+    // (`/proc/self/stat`, which bionic reads at start-up, took 11 ms).
+    static LAST: AtomicUsize = AtomicUsize::new(64 * 1024);
     let pid = current_process_id() as usize;
-    let mut buf: Vec<u64> = vec![0; 64 * 1024];
+    let mut buf: Vec<u64> = vec![0; LAST.load(Ordering::Relaxed)];
     loop {
         let bytes = (buf.len() * 8) as u32;
         let mut needed = 0u32;
@@ -67,7 +75,9 @@ pub fn current_process() -> SysResult<ProcessInfo> {
             )
         };
         if st == STATUS_INFO_LENGTH_MISMATCH {
-            let want = (needed as usize).max(buf.len() * 16) / 8 + 4096;
+            let bytes = (needed as usize).max(buf.len() * 8);
+            let want = (bytes + bytes / 8) / 8 + 512;
+            LAST.store(want, Ordering::Relaxed);
             buf = vec![0; want];
             continue;
         }
