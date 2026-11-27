@@ -88,8 +88,12 @@ Regression check of the loader changes on bionic's and libbase's suites
 (`crates/andruna-linker/tools/run_gtest.py`), before the lx merge:
 bionic_tests 1117 of 1327 pass (S4 round 2: 1104), 124 fail, 13 skipped,
 34 end the process; libbase_test 302 of 367 (S4 round 2: 297), the
-`WaitForProperty*` tests time out as before. The results after the merge
-are in the branch's final report.
+`WaitForProperty*` tests time out as before. After the merge (30 s per
+run, machine loaded): libbase_test 307 of 367 (the lx conformance record:
+307), bionic_tests 1127 of 1327, 113 fail, 13 skipped, 35 end the process
+(the lx record: 1129). Among the 35 is
+`pthread_CondWakeupTest.signal_clockwait_monotonic_monotonic`, which timed
+out in the suite but passed 20 of 20 runs of its test case alone.
 
 ## What the loader gained (andruna-linker)
 
