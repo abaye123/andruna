@@ -74,11 +74,14 @@ and the finished ones excluded (`--exclude-file`).
 `expectations.txt` has one line per known failure:
 
 ```
-<class>#<method> | <category> | <reason> [| <only>]
+<class>#<method> | <category> | <reason> [| <only> [| <match>]]
 ```
 
 The test may be a whole class (`<class>`) or a glob. `<only>` limits the
-line to runners (`s1`, `app`) and modes (`int`, `jit`, `jit0`). Categories
+line to runners (`s1`, `app`) and modes (`int`, `jit`, `jit0`). `<match>`
+makes the line apply only when the failure reason contains that text; with
+the test `*` it describes an intermittent failure that can hit any test (a
+known crash signature). Categories
 are listed in `run.py` (`CATEGORIES`): `lx-syscall`, `s1-libc`,
 `missing-native`, `bootclasspath`, `tzdata`, `icu-data`, `environment`, `art`, `slow`,
 `harness`, `triage`. A listed test that passes

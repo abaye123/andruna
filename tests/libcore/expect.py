@@ -30,6 +30,12 @@ OVERRIDES = [
      "tcgetattr on a non-terminal must fail with ENOTTY"),
     ("libcore.java.lang.OldSystemTest#test_load", "", "environment",
      "ClassLoader.findLibrary(\"log\") finds no liblog.so on java.library.path"),
+    ("libcore.java.lang.OldSystemTest#test_currentTimeMillis", "", "lx-syscall",
+     "System.currentTimeMillis() is 0: the wall clock (gettimeofday) reads the epoch"),
+    ("libcore.java.lang.OldThreadTest#test_sleep*", "", "lx-syscall",
+     "measures Thread.sleep with System.currentTimeMillis(), which is 0 (wall clock reads the epoch)"),
+    ("libcore.java.lang.OldRuntimeTest#test_exec*", "", "environment",
+     "Runtime.exec starts a child process (fork/exec), not provided in phase 1"),
     ("libcore.java.util.TimeZoneTest#*", "", "tzdata",
      "no time zone data (/apex/com.android.tzdata is not provided): every zone is GMT"),
     ("libcore.java.util.PropertiesTest#*", "xalan", "bootclasspath",
@@ -38,18 +44,25 @@ OVERRIDES = [
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     spec = importlib.util.spec_from_file_location("run", HERE / "run.py")
     run = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(run)
+    # Matched against the current expectations, not those of the run.
+    exps = run.load_expectations(HERE / "expectations.txt")
     runs = []
     fails = {}
     for p in sys.argv[1:]:
         r = json.loads(Path(p).read_text(encoding="utf-8"))
-        key = (r["summary"]["runner"], r["summary"]["mode"])
+        runner, mode = r["summary"]["runner"], r["summary"]["mode"]
+        key = (runner, mode)
         runs.append(key)
         for t in r["tests"]:
-            if t.get("outcome") == "unexpected-failure":
-                fails.setdefault(t["id"], {})[key] = t
+            if t["status"] not in ("fail", "crash", "timeout"):
+                continue
+            if any(e.matches(t["id"], mode, runner, t["reason"]) for e in exps):
+                continue
+            fails.setdefault(t["id"], {})[key] = t
     all_runners = sorted({k[0] for k in runs})
     all_modes = sorted({k[1] for k in runs})
     for tid in sorted(fails):

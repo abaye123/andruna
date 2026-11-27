@@ -147,7 +147,7 @@ public final class Main {
             cause = cause.getCause();
         }
         if (cause != null && cause != t) {
-            sb.append(" | root cause ").append(cause.getClass().getName());
+            sb.append("; root cause ").append(cause.getClass().getName());
             if (cause.getMessage() != null) {
                 sb.append(": ").append(cause.getMessage());
             }

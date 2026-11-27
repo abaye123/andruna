@@ -144,23 +144,28 @@ RUNNERS = {"s1": S1Runner, "app": AppRunner}
 
 
 class Expectation:
-    def __init__(self, pattern, category, reason, modes, line):
+    def __init__(self, pattern, category, reason, modes, line, match=""):
         self.pattern = pattern
+        self.match = match
         self.category = category
         self.reason = reason
         self.modes = modes
         self.line = line
         self.used = False
 
-    def matches(self, test_id, mode, runner):
+    def matches(self, test_id, mode, runner, reason=""):
         # "only" holds runner names and mode names; each kind that is
         # present must match.
         runners = self.modes & set(RUNNERS)
         modes = self.modes - set(RUNNERS)
         if (runners and runner not in runners) or (modes and mode not in modes):
             return False
+        if self.match and self.match not in reason:
+            return False
         cls = test_id.split("#", 1)[0]
-        return fnmatch.fnmatchcase(test_id, self.pattern) or self.pattern == cls
+        # Exact names first: parameterized names hold "[...]", which globs
+        # read as character sets.
+        return (self.pattern in (test_id, cls)) or fnmatch.fnmatchcase(test_id, self.pattern)
 
 
 CATEGORIES = {
@@ -192,14 +197,16 @@ def load_expectations(path):
             continue
         parts = [p.strip() for p in line.split("|")]
         if len(parts) < 3:
-            raise SystemExit(f"{path}:{n}: expected '<test> | <category> | <reason> [| runners and modes]'")
+            raise SystemExit(f"{path}:{n}: expected "
+                             "'<test> | <category> | <reason> [| <only> [| <match>]]'")
         if parts[1] not in CATEGORIES:
             raise SystemExit(f"{path}:{n}: unknown category {parts[1]}")
         modes = set(m.strip() for m in parts[3].split(",")) if len(parts) > 3 and parts[3] else set()
         unknown = modes - set(RUNNERS) - {"int", "jit", "jit0"}
         if unknown:
             raise SystemExit(f"{path}:{n}: unknown runner or mode {sorted(unknown)}")
-        exps.append(Expectation(parts[0], parts[1], parts[2], modes, n))
+        match = parts[4] if len(parts) > 4 else ""
+        exps.append(Expectation(parts[0], parts[1], parts[2], modes, n, match))
     return exps
 
 
@@ -213,6 +220,9 @@ def categorize(reason):
         # FilesSetup's tearDown after createTempDirectory failed for lack of
         # SecureRandom; the NullPointerException hides that first failure.
         return "bootclasspath"
+    if "guest fault in artJniMethod" in r:
+        # Compiled JNI stubs (boot image or JIT) reading a null Thread*.
+        return "art"
     if "libjavacoretests.so" in r:
         return "harness"
     if "UnsatisfiedLinkError" in r or "No implementation found" in r:
@@ -449,7 +459,7 @@ def main():
     tests = []
     for cls in classes:
         for t in all_results.get(cls, []):
-            exp = next((e for e in exps if e.matches(t["id"], a.mode, a.runner)), None)
+            exp = next((e for e in exps if e.matches(t["id"], a.mode, a.runner, t["reason"])), None)
             if exp:
                 exp.used = True
                 t["expected"] = {"category": exp.category, "reason": exp.reason, "line": exp.line}
