@@ -10,8 +10,9 @@
 ;   SIGN_CMD       signing command with %1 for the file (optional; unsigned without it)
 ;
 ; Per-user install into %LOCALAPPDATA%\Programs\Andruna without administrator
-; rights (P-1). The installer picks the files that match the PC's processor (P-2)
-; and registers an uninstaller under HKCU (P-4).
+; rights (P-1). The installer picks the files that match the PC's processor (P-2),
+; registers the Android package file types for the manager's install dialog
+; (P-3) and an uninstaller under HKCU (P-4).
 
 Unicode true
 ManifestDPIAware true
@@ -43,6 +44,9 @@ SetCompressor /SOLID zlib
 !define MANAGER_EXE "Andruna.Manager.exe"
 !define UNINSTALLER "Uninstall Andruna.exe"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Andruna"
+; The file type of Android packages (P-3); per user, in HKCU\Software\Classes.
+!define PROGID "Andruna.Package"
+!define CLASSES "Software\Classes"
 
 !ifdef SIGN_CMD
   !uninstfinalize '${SIGN_CMD}' = 0
@@ -103,8 +107,39 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 
+; Ends Andruna processes of this user that run from the install folder (the
+; manager, sysd and the apps it started), so their files can be replaced or
+; removed. Processes of other users are not touched.
+!macro StopAndruna
+  nsExec::Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "Get-Process -Name Andruna.Manager,andruna-sysd,andruna-launch -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"$INSTDIR\*\" } | Stop-Process -Force"'
+  Pop $0
+!macroend
+
+; Registers the package file types: the ProgID opens the manager's install
+; dialog; each extension lists it under OpenWithProgids and gets it as its
+; default only when no other program is the default.
+!macro RegisterType EXT
+  WriteRegStr HKCU "${CLASSES}\${EXT}\OpenWithProgids" "${PROGID}" ""
+  ReadRegStr $0 HKCU "${CLASSES}\${EXT}" ""
+  ${If} $0 == ""
+    WriteRegStr HKCU "${CLASSES}\${EXT}" "" "${PROGID}"
+  ${EndIf}
+  WriteRegStr HKCU "${CLASSES}\Applications\${MANAGER_EXE}\SupportedTypes" "${EXT}" ""
+!macroend
+
+!macro UnregisterType EXT
+  DeleteRegValue HKCU "${CLASSES}\${EXT}\OpenWithProgids" "${PROGID}"
+  DeleteRegKey /ifempty HKCU "${CLASSES}\${EXT}\OpenWithProgids"
+  ReadRegStr $0 HKCU "${CLASSES}\${EXT}" ""
+  ${If} $0 == "${PROGID}"
+    DeleteRegValue HKCU "${CLASSES}\${EXT}" ""
+  ${EndIf}
+  DeleteRegKey /ifempty HKCU "${CLASSES}\${EXT}"
+!macroend
+
 Section "Andruna"
   SetShellVarContext current
+  !insertmacro StopAndruna
   SetOutPath "$INSTDIR"
 
   ; Files of the matching architecture. Slots filled by build.ps1:
@@ -123,6 +158,20 @@ Section "Andruna"
 
   WriteUninstaller "$INSTDIR\${UNINSTALLER}"
   CreateShortcut "$SMPROGRAMS\${PRODUCT}.lnk" "$INSTDIR\${MANAGER_EXE}"
+
+  ; .apk, .apks, .xapk and .apkm open the install dialog (P-3).
+  WriteRegStr HKCU "${CLASSES}\${PROGID}" "" "$(PackageFileType)"
+  WriteRegStr HKCU "${CLASSES}\${PROGID}\DefaultIcon" "" "$INSTDIR\${MANAGER_EXE},0"
+  WriteRegStr HKCU "${CLASSES}\${PROGID}\shell\open" "" "$(InstallVerb)"
+  WriteRegStr HKCU "${CLASSES}\${PROGID}\shell\open\command" "" '"$INSTDIR\${MANAGER_EXE}" --install "%1"'
+  WriteRegStr HKCU "${CLASSES}\Applications\${MANAGER_EXE}" "FriendlyAppName" "${PRODUCT}"
+  WriteRegStr HKCU "${CLASSES}\Applications\${MANAGER_EXE}\shell\open\command" "" '"$INSTDIR\${MANAGER_EXE}" --install "%1"'
+  !insertmacro RegisterType ".apk"
+  !insertmacro RegisterType ".apks"
+  !insertmacro RegisterType ".xapk"
+  !insertmacro RegisterType ".apkm"
+  ; SHCNE_ASSOCCHANGED: Explorer picks up the new file types.
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${PRODUCT}"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
@@ -147,9 +196,22 @@ FunctionEnd
 
 Section "Uninstall"
   SetShellVarContext current
+  !insertmacro StopAndruna
+  ; The manager removes its Windows notification registration.
+  ${If} ${FileExists} "$INSTDIR\${MANAGER_EXE}"
+    ExecWait '"$INSTDIR\${MANAGER_EXE}" --unregister'
+  ${EndIf}
   Delete "$SMPROGRAMS\${PRODUCT}.lnk"
   RMDir /r "$INSTDIR"
   DeleteRegKey HKCU "${UNINST_KEY}"
+
+  !insertmacro UnregisterType ".apk"
+  !insertmacro UnregisterType ".apks"
+  !insertmacro UnregisterType ".xapk"
+  !insertmacro UnregisterType ".apkm"
+  DeleteRegKey HKCU "${CLASSES}\${PROGID}"
+  DeleteRegKey HKCU "${CLASSES}\Applications\${MANAGER_EXE}"
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 
   ; Installed Android apps and their data live in %LOCALAPPDATA%\Andruna (P-4).
   ; They are kept unless the user asks to remove them; a silent uninstall keeps them.

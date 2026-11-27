@@ -97,8 +97,8 @@ public sealed class InstallViewModel : ObservableObject
 
     public string VersionText => Details is { } d
         ? d.InstalledVersionCode == 0
-            ? _strings.Format("InstallVersionNew", d.VersionName, d.VersionCode)
-            : _strings.Format("InstallVersionUpdate", d.VersionName, d.VersionCode, d.InstalledVersionCode)
+            ? _strings.Format("InstallVersionNew", Ltr(d.VersionName), d.VersionCode)
+            : _strings.Format("InstallVersionUpdate", Ltr(d.VersionName), d.VersionCode, d.InstalledVersionCode)
         : string.Empty;
 
     /// <summary>The signing certificate's SHA-256 in groups of four, so it can be compared by eye.</summary>
@@ -140,6 +140,8 @@ public sealed class InstallViewModel : ObservableObject
         InstallStage.Done when Outcome is { } o => DoneText(o),
         _ => string.Empty,
     };
+
+    private static string Ltr(string text) => "\u2066" + text + "\u2069";
 
     public static string FormatFingerprint(string hex) =>
         string.Join(' ', Enumerable.Range(0, (hex.Length + 3) / 4).Select(i => hex.Substring(i * 4, Math.Min(4, hex.Length - (i * 4))).ToUpperInvariant()));

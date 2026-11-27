@@ -31,7 +31,7 @@ public partial class App : Application
     private DispatcherQueue _dispatcher = null!;
     private Mutex? _runningMutex;
     private CancellationTokenSource? _bridgeStop;
-    private Task? _bridge;
+    private volatile bool _bridgeRunning;
     private ToastPresenter? _toasts;
 
     public App(AppActivationArguments activation)
@@ -102,14 +102,6 @@ public partial class App : Application
         var culture = CultureInfo.GetCultureInfo(Language);
         CultureInfo.DefaultThreadCurrentUICulture = culture;
         CultureInfo.CurrentUICulture = culture;
-
-        if (Environment.GetCommandLineArgs().Contains("--unregister"))
-        {
-            // The uninstaller removes the notification registration before deleting the files.
-            ToastPresenter.Unregister();
-            Exit();
-            return;
-        }
 
         // andruna-launch checks this mutex to see whether the manager runs.
         _runningMutex = new Mutex(false, $@"Local\Andruna.Manager.{SysdEndpoint.CurrentUserSid().Value}");
@@ -197,10 +189,12 @@ public partial class App : Application
     /// <summary>Starts the notification and crash bridge once per process.</summary>
     private void EnsureBridge()
     {
-        if (_bridge is { IsCompleted: false })
+        if (_bridgeRunning)
         {
             return;
         }
+
+        _bridgeRunning = true;
 
         var labels = new LabelCache(PipeName, Language);
         var crashes = new CrashPresenter(_dispatcher);
@@ -209,7 +203,7 @@ public partial class App : Application
         var pump = new EventPump(client, sink);
         _bridgeStop = new CancellationTokenSource();
         var stop = _bridgeStop.Token;
-        _bridge = Task.Run(async () =>
+        _ = Task.Run(async () =>
         {
             try
             {
@@ -218,6 +212,7 @@ public partial class App : Application
             finally
             {
                 client.Dispose();
+                _bridgeRunning = false;
                 _dispatcher.TryEnqueue(ExitIfIdle);
             }
         });
@@ -237,7 +232,7 @@ public partial class App : Application
     /// <summary>Ends the process when there is no window, no crash dialog and the bridge has ended.</summary>
     public void ExitIfIdle()
     {
-        if (_window is null && !CrashPresenter.AnyShowing && _bridge is null or { IsCompleted: true })
+        if (_window is null && !CrashPresenter.AnyShowing && !_bridgeRunning)
         {
             _bridgeStop?.Cancel();
             _runningMutex?.Dispose();

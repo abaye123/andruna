@@ -113,7 +113,7 @@ internal sealed class CrashWindow : Window
         {
             Text = Loc.Get("CrashHint"),
             TextWrapping = TextWrapping.Wrap,
-            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+            Opacity = 0.75,
             Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
         });
         Grid.SetRow(body, 1);
@@ -127,5 +127,8 @@ internal sealed class CrashWindow : Window
         root.Children.Add(buttons);
 
         Content = root;
+#if DEBUG
+        DebugSnapshot.ScheduleIfRequested(root, "ANDRUNA_MANAGER_SNAPSHOT_CRASH");
+#endif
     }
 }

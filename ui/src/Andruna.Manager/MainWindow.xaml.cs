@@ -103,7 +103,15 @@ public sealed partial class MainWindow : Window
             Nav.SelectedItem = LibraryItem;
         }
 
-        await InstallDialog.ShowAsync(Root.XamlRoot ?? Content.XamlRoot, path, Root.ActualTheme);
+        // Started with a file (the file association): the dialog needs the loaded window.
+        if (Root.XamlRoot is null || !Root.IsLoaded)
+        {
+            var loaded = new TaskCompletionSource();
+            Root.Loaded += (_, _) => loaded.TrySetResult();
+            await loaded.Task;
+        }
+
+        await InstallDialog.ShowAsync(Root.XamlRoot!, path, Root.ActualTheme);
         if (ContentFrame.Content is LibraryPage library)
         {
             await library.Vm.RefreshCommand.ExecuteAsync();

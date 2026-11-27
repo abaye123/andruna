@@ -98,15 +98,15 @@ internal static class InstallDialog
         private readonly Image _icon = new() { Width = 64, Height = 64 };
         private readonly FontIcon _placeholder = new() { Glyph = "", FontSize = 32 };
         private readonly TextBlock _label = new() { Style = Style("SubtitleTextBlockStyle"), TextWrapping = TextWrapping.Wrap };
-        private readonly TextBlock _version = new() { Foreground = Brush("TextFillColorSecondaryBrush") };
-        private readonly TextBlock _file = new() { Style = Style("CaptionTextBlockStyle"), Foreground = Brush("TextFillColorTertiaryBrush"), TextTrimming = TextTrimming.CharacterEllipsis };
+        private readonly TextBlock _version = new() { Opacity = 0.8 };
+        private readonly TextBlock _file = new() { Style = Style("CaptionTextBlockStyle"), Opacity = 0.6, TextTrimming = TextTrimming.CharacterEllipsis };
         private readonly ProgressRing _ring = new() { Width = 20, Height = 20, IsActive = true };
         private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
         private readonly InfoBar _problem = new() { IsClosable = false, Severity = InfoBarSeverity.Error };
         private readonly TextBlock _signer = new() { Style = Style("CaptionTextBlockStyle"), TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
         private readonly TextBlock _permissionsHeader = new() { Text = Loc.Get("InstallPermissionsHeader"), Style = Style("BodyStrongTextBlockStyle"), Margin = new Thickness(0, 8, 0, 0) };
         private readonly StackPanel _permissions = new() { Spacing = 6 };
-        private readonly TextBlock _trust = new() { Text = Loc.Get("InstallTrustNote"), Style = Style("CaptionTextBlockStyle"), TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextFillColorSecondaryBrush") };
+        private readonly TextBlock _trust = new() { Text = Loc.Get("InstallTrustNote"), Style = Style("CaptionTextBlockStyle"), TextWrapping = TextWrapping.Wrap, Opacity = 0.8 };
         private readonly StackPanel _busy = new() { Orientation = Orientation.Horizontal, Spacing = 12 };
         private readonly TextBlock _done = new() { TextWrapping = TextWrapping.Wrap };
 
@@ -171,7 +171,7 @@ internal static class InstallDialog
             {
                 if (_vm.PermissionList.Count == 0)
                 {
-                    _permissions.Children.Add(new TextBlock { Text = Loc.Get("InstallNoPermissions"), Foreground = Brush("TextFillColorSecondaryBrush") });
+                    _permissions.Children.Add(new TextBlock { Text = Loc.Get("InstallNoPermissions"), Opacity = 0.8 });
                 }
 
                 foreach (var p in _vm.PermissionList)
@@ -197,7 +197,7 @@ internal static class InstallDialog
             {
                 Text = p.Name,
                 Style = Style("CaptionTextBlockStyle"),
-                Foreground = Brush("TextFillColorTertiaryBrush"),
+                Opacity = 0.6,
                 FlowDirection = FlowDirection.LeftToRight,
                 HorizontalAlignment = App.IsRightToLeft ? HorizontalAlignment.Right : HorizontalAlignment.Left,
             });

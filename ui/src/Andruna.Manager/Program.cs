@@ -20,6 +20,15 @@ public static class Program
     private static int Main()
     {
         WinRT.ComWrappersSupport.InitializeComWrappers();
+
+        // The uninstaller removes the Windows notification registration; this
+        // must not reach a running instance.
+        if (Environment.GetCommandLineArgs().Contains("--unregister"))
+        {
+            Notifications.ToastPresenter.Unregister();
+            return 0;
+        }
+
         var current = AppInstance.GetCurrent();
         var activation = current.GetActivatedEventArgs();
         var main = AppInstance.FindOrRegisterForKey(InstanceKey);

@@ -44,7 +44,11 @@ public static class PackageList
             : string.Format(culture, "{0:0.#} {1}", value, units[unit]);
     }
 
-    /// <summary>"1.2 (7)": the version name with the version code.</summary>
-    public static string FormatVersion(PackageInfo info) =>
-        string.IsNullOrEmpty(info.VersionName) ? info.VersionCode.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"{info.VersionName} ({info.VersionCode})";
+    /// <summary>
+    /// "1.2 (7)": the version name with the version code, isolated as left to
+    /// right text (U+2066 ... U+2069) so it reads the same inside Hebrew text.
+    /// </summary>
+    public static string FormatVersion(PackageInfo info) => "\u2066" +
+        (string.IsNullOrEmpty(info.VersionName) ? info.VersionCode.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"{info.VersionName} ({info.VersionCode})") +
+        "\u2069";
 }

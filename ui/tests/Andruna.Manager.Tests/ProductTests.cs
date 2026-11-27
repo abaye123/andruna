@@ -283,7 +283,7 @@ public class InstallViewModelTests
         Assert.Equal(InstallStage.Confirm, vm.Stage);
         Assert.True(vm.CanInstall);
         Assert.Equal("Example", vm.Label);
-        Assert.Equal("InstallVersionNew:1.2|7", vm.VersionText);
+        Assert.Equal("InstallVersionNew:\u20661.2\u2069|7", vm.VersionText);
         Assert.StartsWith("InstallSigner:ABAB ABAB", vm.SignerText, StringComparison.Ordinal);
         Assert.Equal("InstallActionInstall", vm.ActionText);
 
@@ -310,7 +310,7 @@ public class InstallViewModelTests
         await vm.InspectAsync();
 
         Assert.Equal("InstallActionUpdate", vm.ActionText);
-        Assert.Equal("InstallVersionUpdate:1.2|7|5", vm.VersionText);
+        Assert.Equal("InstallVersionUpdate:\u20661.2\u2069|7|5", vm.VersionText);
     }
 
     [Fact]
@@ -382,7 +382,7 @@ public sealed class AppPageProductTests : IDisposable
         await vm.LoadAsync();
 
         Assert.Equal("Example", vm.Title);
-        Assert.Equal("AppVersionFormat:1.2 (7)", vm.VersionText);
+        Assert.Equal("AppVersionFormat:\u20661.2 (7)\u2069", vm.VersionText);
         Assert.Equal("2.5 MB", vm.SizeText.Replace(',', '.'));
         Assert.Equal("1.5 KB", vm.DataSizeText.Replace(',', '.'));
         Assert.Equal([Path.Combine(paths.AppDir("com.example.app"), "base.apk")], Assert.Single(inspected));
@@ -459,7 +459,7 @@ public class LibraryProductTests
 
         Assert.False(vm.NamesOnly);
         Assert.Equal(["Alpha Notes", "Zeta Maps"], vm.Packages.Select(p => p.Label));
-        Assert.Equal("1.2 (7)", vm.Packages[0].VersionText);
+        Assert.Equal("\u20661.2 (7)\u2069", vm.Packages[0].VersionText);
 
         vm.SearchText = "maps";
         Assert.Equal(["org.example.alpha"], vm.Packages.Select(p => p.PackageName));
