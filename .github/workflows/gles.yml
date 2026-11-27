@@ -1,0 +1,144 @@
+name: GLES
+
+# ANGLE (D3D11) as Windows DLLs, the andruna-gles guest stubs and test, and
+# andruna-gles's tests on WARP (Direct3D 11's software rasterizer; hosted
+# runners have no GPU). ANGLE's build is cached by the glue and the lock.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "aosp/angle/**"
+      - "aosp/aosp.lock"
+      - "crates/andruna-gles/**"
+      - "crates/andruna-linker/**"
+      - "crates/andruna-lx/**"
+      - "xtask/**"
+      - ".github/workflows/gles.yml"
+  pull_request:
+    paths:
+      - "aosp/angle/**"
+      - "aosp/aosp.lock"
+      - "crates/andruna-gles/**"
+      - "crates/andruna-linker/**"
+      - "crates/andruna-lx/**"
+      - "xtask/**"
+      - ".github/workflows/gles.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gles-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  ANDRUNA_LLVM_MINGW: C:\tools\llvm-mingw
+
+jobs:
+  gles:
+    name: gles (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-gnullvm
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-gnullvm
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+            Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe" -OutFile rustup-init.exe
+            ./rustup-init.exe -y --default-toolchain none --profile minimal
+            Remove-Item rustup-init.exe
+            "$env:USERPROFILE\.cargo\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+          }
+          rustup show active-toolchain
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: gles-cargo-${{ matrix.target }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: gles-cargo-${{ matrix.target }}-
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: cargo xtask toolchain
+
+      - name: CMake and Ninja
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { python -m pip install ninja }
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { python -m pip install cmake }
+          cmake --version
+          ninja --version
+
+      - name: Restore ANGLE sources
+        id: src-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            third_party/aosp/external/angle
+            third_party/aosp/external/zlib
+          key: angle-src-${{ hashFiles('aosp/aosp.lock') }}
+
+      - name: Fetch
+        run: cargo xtask fetch --project external/angle --project external/zlib
+
+      - name: Save ANGLE sources
+        if: steps.src-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            third_party/aosp/external/angle
+            third_party/aosp/external/zlib
+          key: angle-src-${{ hashFiles('aosp/aosp.lock') }}
+
+      - name: Cache ANGLE build
+        uses: actions/cache@v4
+        with:
+          path: out/angle/${{ matrix.arch }}
+          key: angle-build-${{ matrix.arch }}-${{ hashFiles('aosp/aosp.lock', 'aosp/angle/**', 'xtask/src/angle.rs', 'xtask/src/toolchain.rs') }}
+
+      - name: Build ANGLE
+        run: cargo xtask angle-build --arch ${{ matrix.arch }}
+
+      - name: Guest stubs and test
+        run: python crates/andruna-gles/tools/build_guest.py --arch ${{ matrix.arch }}
+
+      - name: Test (WARP)
+        env:
+          ANDRUNA_REQUIRE_GLES: "1"
+        run: |
+          $env:PATH = "C:\tools\llvm-mingw\bin;$env:PATH"
+          cargo test -p andruna-gles --target ${{ matrix.target }} -- --nocapture --test-threads=1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: angle-${{ matrix.arch }}
+          path: out/angle/${{ matrix.arch }}/bin/*.dll
+          if-no-files-found: error
