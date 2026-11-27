@@ -138,6 +138,24 @@ pub fn write_at(h: HANDLE, buf: UserBuf, at: WriteAt) -> SysResult<usize> {
     }
 }
 
+/// A new handle to the file `h` refers to, with `access` (Linux-like
+/// sharing, as [`create`]).
+pub fn reopen(h: HANDLE, access: u32) -> SysResult<OwnedHandle> {
+    use windows::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, ReOpenFile};
+    // SAFETY: `h` is a live file handle; the new handle is owned by the
+    // result.
+    let n = unsafe {
+        ReOpenFile(
+            h,
+            access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_FLAG_BACKUP_SEMANTICS,
+        )
+    }
+    .map_err(Errno::from)?;
+    Ok(OwnedHandle::from_raw(n))
+}
+
 /// Metadata of an open file.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Info {

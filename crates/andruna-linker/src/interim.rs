@@ -8,7 +8,7 @@
 //! dex2oat, libcore's natives and bionic still need on the paths of
 //! docs/plan/phase1/art-on-linker.md:
 //!
-//! - `uname`, `getrusage`, `sysinfo`, `getppid`, `getpriority`/
+//! - `uname`, `getrusage`, `sysinfo`, `getpriority`/
 //!   `setpriority` (accepted without effect), `getcpu`, `membarrier`,
 //!   `mincore`, `msync` (shared file mappings already reach the file
 //!   through their section; nothing is forced to disk).
@@ -35,7 +35,6 @@ mod nr {
     pub const UNAME: i64 = 63;
     pub const GETRUSAGE: i64 = 98;
     pub const SYSINFO: i64 = 99;
-    pub const GETPPID: i64 = 110;
     pub const GETPRIORITY: i64 = 140;
     pub const SETPRIORITY: i64 = 141;
     pub const GETCPU: i64 = 309;
@@ -54,7 +53,6 @@ mod nr {
     pub const UNAME: i64 = 160;
     pub const GETRUSAGE: i64 = 165;
     pub const SYSINFO: i64 = 179;
-    pub const GETPPID: i64 = 173;
     pub const GETPRIORITY: i64 = 141;
     pub const SETPRIORITY: i64 = 140;
     pub const GETCPU: i64 = 168;
@@ -108,7 +106,6 @@ pub unsafe fn after_enosys(n: i64, a: [i64; 6]) -> Option<i64> {
         nr::UNAME => uname(ptr(0) as *mut u8),
         nr::GETRUSAGE => getrusage(int(0), ptr(1) as *mut u8),
         nr::SYSINFO => sysinfo(ptr(0) as *mut u8),
-        nr::GETPPID => 1,
         nr::GETPRIORITY => 20,
         nr::SETPRIORITY => 0,
         nr::GETCPU => getcpu(ptr(0) as *mut u32, ptr(1) as *mut u32),

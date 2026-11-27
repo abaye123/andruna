@@ -282,6 +282,7 @@ pub(crate) unsafe fn dispatch(sysno: Sysno, a: [i64; 6]) -> SysResult<i64> {
                 }
                 Ok(r.len as i64)
             }
+            Sysno::Getppid => Ok(i64::from(crate::process::getppid())),
             Sysno::Readv => sys_iov(int(0), ptr(1), int(2), false),
             Sysno::Writev => sys_iov(int(0), ptr(1), int(2), true),
             Sysno::Sendmsg => sys_sendmsg(int(0), ptr(1), int(2)),

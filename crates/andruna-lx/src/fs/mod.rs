@@ -170,6 +170,9 @@ fn proc_lookup(
 /// Opens a `/proc` node.
 fn proc_open(dirfd: i32, path: &[u8], flags: u32) -> SysResult<Option<i32>> {
     let nofollow = flags & O_NOFOLLOW != 0;
+    if !nofollow && let Some(fd) = reopen_fd(dirfd, path, flags)? {
+        return Ok(Some(fd));
+    }
     let Some((linux, node)) = proc_lookup(dirfd, path, nofollow)? else {
         return Ok(None);
     };
@@ -210,6 +213,68 @@ fn proc_open(dirfd: i32, path: &[u8], flags: u32) -> SysResult<Option<i32>> {
             }
             Box::new(proc::ProcFile::new(content, comm_of))
         }
+    };
+    let file = Arc::new(OpenFile::new(ops, flags));
+    FDS.insert(file, flags & O_CLOEXEC != 0, 0).map(Some)
+}
+
+/// Opening `/proc/self/fd/N` (or `/proc/<pid>/fd/N`) of a file or
+/// directory opens that same file again, as Linux does, also when its name
+/// was removed or now names another file. `None` for other paths.
+fn reopen_fd(dirfd: i32, path: &[u8], flags: u32) -> SysResult<Option<i32>> {
+    let linux = linux_at(dirfd, path)?;
+    let c = &linux.components;
+    let pid = crate::process::getpid().to_string();
+    if c.len() != 4 || c[0] != b"proc" || c[2] != b"fd" {
+        return Ok(None);
+    }
+    if c[1] != b"self" && c[1] != pid.as_bytes() {
+        return Ok(None);
+    }
+    let Some(n) = std::str::from_utf8(&c[3])
+        .ok()
+        .and_then(|s| s.parse::<i32>().ok())
+    else {
+        return Ok(None);
+    };
+    let Ok(f) = FDS.get(n) else {
+        return Ok(None);
+    };
+    let (h, path, dir) = if let Some(r) = f.downcast::<RegularFile>() {
+        (r.raw_handle(), f.ops().path().unwrap_or_default(), false)
+    } else if let Some(d) = f.downcast::<Directory>() {
+        (
+            d.raw_handle(),
+            f.ops().dir_path().unwrap_or_default().to_vec(),
+            true,
+        )
+    } else {
+        return Ok(None);
+    };
+    let path: Vec<u8> = path.strip_suffix(b" (deleted)").unwrap_or(&path).to_vec();
+    let acc = flags & O_ACCMODE;
+    if dir && flags & O_PATH == 0 && (acc != O_RDONLY || flags & O_TRUNC != 0) {
+        return Err(Errno::EISDIR);
+    }
+    if !dir && flags & O_DIRECTORY != 0 {
+        return Err(Errno::ENOTDIR);
+    }
+    let mut access = FILE_READ_ATTRIBUTES.0 | FILE_READ_EA.0 | SYNCHRONIZE.0;
+    if flags & O_PATH == 0 {
+        access |= match acc {
+            O_RDONLY => GENERIC_READ.0,
+            O_WRONLY => GENERIC_WRITE.0,
+            _ => GENERIC_READ.0 | GENERIC_WRITE.0,
+        };
+    }
+    let nh = os::reopen(h, access)?;
+    if !dir && flags & O_TRUNC != 0 && flags & O_PATH == 0 && acc != O_RDONLY {
+        os::set_len(nh.raw(), 0)?;
+    }
+    let ops: Box<dyn crate::fd::FileOps> = if dir {
+        Box::new(Directory::new(nh, path))
+    } else {
+        Box::new(RegularFile::with_path(nh, path))
     };
     let file = Arc::new(OpenFile::new(ops, flags));
     FDS.insert(file, flags & O_CLOEXEC != 0, 0).map(Some)
@@ -590,6 +655,13 @@ pub(crate) mod tests {
             "{}",
             String::from_utf8_lossy(&link)
         );
+        // Opening it through /proc/self/fd opens the same file again.
+        let again = open(&format!("/proc/self/fd/{fd}"), O_RDONLY).unwrap();
+        assert_eq!(fstat(again).unwrap().ino, fstat(fd).unwrap().ino);
+        let mut b = [0u8; 3];
+        assert_eq!(read(again, UserBuf::from_mut(&mut b)), Ok(3));
+        assert_eq!(&b, b"tmp");
+        close(again).unwrap();
         close(fd).unwrap();
         assert_eq!(open(&format!("{p}/"), O_RDONLY), Err(Errno::ENOTDIR));
         assert_eq!(open(&p, O_RDONLY | O_DIRECTORY), Err(Errno::ENOTDIR));

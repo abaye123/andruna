@@ -130,6 +130,7 @@ pub enum Sysno {
     Getsockopt,
     Readv,
     Writev,
+    Getppid,
     // Round 2, only on x86_64.
     Pipe,
     Poll,
@@ -233,6 +234,7 @@ pub const X86_64: Table = Table(&[
     (439, Sysno::Faccessat2),
     (7, Sysno::Poll),
     (19, Sysno::Readv),
+    (110, Sysno::Getppid),
     (20, Sysno::Writev),
     (22, Sysno::Pipe),
     (23, Sysno::Select),
@@ -356,6 +358,7 @@ pub const AARCH64: Table = Table(&[
     (439, Sysno::Faccessat2),
     (19, Sysno::Eventfd2),
     (65, Sysno::Readv),
+    (173, Sysno::Getppid),
     (66, Sysno::Writev),
     (20, Sysno::EpollCreate1),
     (21, Sysno::EpollCtl),
