@@ -16,8 +16,9 @@ Output (out/libcore-tests/<runner>-<mode>/):
 Exit status: 0 when every failure is expected, 1 otherwise (2 on a harness
 error). Unexpected passes are reported but do not fail the run.
 
-The ART launcher is pluggable (RUNNERS below): "s1" is the spike S1 runner
-(spikes/s1/art/run_art.py), "app" is andruna-app. DEFAULT_RUNNER selects one;
+The ART launcher is pluggable (RUNNERS below): "app" is andruna-app (ART on
+andruna-linker, the default), "s1" the spike S1 runner
+(spikes/s1/art/run_art.py), kept as a fallback. DEFAULT_RUNNER selects one;
 --runner or LIBCORE_RUNNER override it.
 """
 
@@ -27,6 +28,7 @@ import fnmatch
 import importlib.util
 import json
 import os
+import platform
 import queue
 import re
 import shutil
@@ -48,7 +50,7 @@ TAG = "##lt "
 UNRESOLVED_RE = re.compile(r"unresolved guest import called: (\S+)")
 FAULT_RE = re.compile(r"guest fault \S+ at \S+ (?:\S+ )?\(([^)+]+)")
 
-DEFAULT_RUNNER = "s1"
+DEFAULT_RUNNER = "app"
 
 # Options every runner passes to the VM. The temporary directory is a
 # writable directory inside the guest tree (tests create files there).
@@ -97,25 +99,41 @@ class S1Runner:
 
 
 class AppRunner:
-    """andruna-app (crates/andruna-app): ART on andruna-linker. The executable
-    is ANDRUNA_APP (default target/release/andruna-app.exe); the ART root comes
-    from ANDRUNA_ART_ROOT as andruna-app documents."""
+    """andruna-app (crates/andruna-app): ART on andruna-linker with bionic, the
+    production path. The executable is ANDRUNA_APP (default: the release build
+    of `cargo xtask build`, else of `cargo build`); the ART root is
+    ANDRUNA_ART_ROOT (default out/guest/<arch>/art-root from
+    aosp/tools/build_guest.py). Extra andruna-app options (for example
+    --no-boot-image) come from LIBCORE_APP_ARGS."""
 
     def __init__(self, mode, root, jar):
-        self.exe = Path(os.environ.get("ANDRUNA_APP", ROOT / "target" / "release" / "andruna-app.exe"))
+        arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
+        target = {"x64": "x86_64", "arm64": "aarch64"}[arch] + "-pc-windows-gnullvm"
+        default = ROOT / "target" / target / "release" / "andruna-app.exe"
+        if not default.exists():
+            default = ROOT / "target" / "release" / "andruna-app.exe"
+        self.exe = Path(os.environ.get("ANDRUNA_APP", default))
+        self.art_root = Path(os.environ.get("ANDRUNA_ART_ROOT",
+                                            ROOT / "out" / "guest" / arch / "art-root"))
+        self.extra = os.environ.get("LIBCORE_APP_ARGS", "").split()
         self.mode = mode
         self.root = root
         self.jar = jar
         root.mkdir(parents=True, exist_ok=True)
-        if mode not in ("int", "jit"):
-            raise SystemExit(f"andruna-app has no mode {mode}")
+        if not self.exe.exists():
+            raise SystemExit(f"{self.exe} not found: cargo xtask build --release (or set ANDRUNA_APP)")
+        if not (self.art_root / "bin" / "dalvikvm").exists():
+            raise SystemExit(f"{self.art_root} is not an ART root: python aosp/tools/build_guest.py "
+                             "--arch <arch> art (or set ANDRUNA_ART_ROOT)")
 
     def guest_root(self):
         return self.root
 
     def command(self, args):
-        cmd = [str(self.exe), "--mode", self.mode, "--data", str(self.root)] + VM_PROPS + \
-              ["--classpath", str(self.jar), MAIN] + args
+        mode = {"int": ["--mode", "int"], "jit": ["--mode", "jit"],
+                "jit0": ["--mode", "jit", "-Xjitthreshold:0"]}[self.mode]
+        cmd = [str(self.exe), "--art-root", str(self.art_root), "--data", str(self.root)] + \
+            mode + self.extra + VM_PROPS + ["--classpath", str(self.jar), MAIN] + args
         return cmd, dict(os.environ)
 
 
@@ -153,6 +171,8 @@ CATEGORIES = {
     "bootclasspath": "a module the minimal boot class path leaves out (Conscrypt and "
                      "Bouncy Castle: no security providers, so no SecureRandom, digests, "
                      "temporary files or serialization hashes)",
+    "tzdata": "no time zone data: /apex/com.android.tzdata is not provided, so every "
+              "zone behaves as GMT",
     "icu-data": "ICU data or locale data missing or different",
     "environment": "the test assumes a device environment (users, paths, properties, network)",
     "art": "an ART runtime problem (crash, hang, wrong result) to investigate",
@@ -203,6 +223,9 @@ def categorize(reason):
         return "lx-syscall"
     if re.search(r"ErrnoException|ENOENT|EACCES|EPERM|EINVAL", r):
         return "lx-syscall"
+    if re.search(r"\b(America|Europe|Asia|Australia|Africa|Pacific)/\w+|TimeZone|GMT[+-]|"
+                 r"tzdata|ZoneInfo", r):
+        return "tzdata"
     if re.search(r"icu|ICU|MissingResourceException|Locale", r):
         return "icu-data"
     return "triage"

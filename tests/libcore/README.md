@@ -14,12 +14,14 @@ Results and failure analysis: [docs/plan/phase1/libcore-tests.md](../../docs/pla
 
 ## Running
 
-Prerequisites: `cargo xtask fetch` and `cargo xtask patch`, the boot class
-path (`python spikes/s1/java/build_boot.py`), the x64 ART guest
-(`python spikes/s1/art/guest/build.py --arch x64`), the S1 runner
-(`cargo build --release --target x86_64-pc-windows-gnullvm` in
-`spikes/s1/art`), JDK 21 or newer, and llvm-mingw's
-`x86_64-w64-mingw32\bin` on `PATH` (the runner's runtime DLLs).
+Prerequisites (as in the CI job, `.github/workflows/libcore-tests.yml`):
+`cargo xtask fetch` and `cargo xtask patch`, the boot class path
+(`python spikes/s1/java/build_boot.py`), the ART root
+(`python aosp/tools/build_guest.py --arch x64 sysroot bionic libcxx aosp art`),
+andruna-app (`cargo build -p andruna-app --release --target
+x86_64-pc-windows-gnullvm`), optionally its boot image
+(`andruna-app --art-root out\guest\x64\art-root --compile-boot`), JDK 21 or
+newer, and llvm-mingw's `x86_64-w64-mingw32\bin` on `PATH`.
 
 ```
 cargo xtask libcore-tests --mode int          # build, then run with the interpreter
@@ -33,18 +35,22 @@ test with status, time, reason and matching expectation), `summary.txt`,
 guessed category) and `logs/<class>.log` (the VM output). It exits with 1 when
 a test fails that `expectations.txt` does not list.
 
-The inputs can be taken from another checkout with the variables of
-`spikes/s1/art/run_art.py` (`S1_AOSP`, `S1_JAVA`, `S1_GUEST`, `S1_RUNNER`),
-and `LIBCORE_D8` for `d8.jar`.
+Inputs can come from another checkout: `S1_AOSP` (AOSP tree), `S1_JAVA`
+(boot class path build), `LIBCORE_D8` (`d8.jar`), `ANDRUNA_APP`,
+`ANDRUNA_ART_ROOT`.
 
 ## The ART launcher
 
-`run.py` starts the VM through a runner class (`RUNNERS`). `s1` is the spike
-S1 runner (`dalvikvm` with the boot class path, no boot image, `-Xint` or
-`-Xusejit:true`). `app` runs
-`andruna-app --mode <mode> --data <dir> --classpath <jar> andruna.libcoretest.Main`
-(`ANDRUNA_APP`, `ANDRUNA_ART_ROOT`). To switch, change `DEFAULT_RUNNER`, or
-pass `--runner app` (or set `LIBCORE_RUNNER=app`).
+`run.py` starts the VM through a runner class (`RUNNERS`, default
+`DEFAULT_RUNNER`, or `--runner` / `LIBCORE_RUNNER`):
+
+- `app` (default): `andruna-app --art-root <root> --data <dir> --mode int|jit
+  --classpath <jar> andruna.libcoretest.Main ...`, ART on andruna-linker with
+  bionic, the production path. It uses the boot image when the ART root has
+  one; `LIBCORE_APP_ARGS` adds options (for example `--no-boot-image`).
+- `s1`: the spike S1 runner (`spikes/s1/art/run_art.py`: `dalvikvm` with no
+  boot image, on the spike's own small guest libc), kept as a fallback
+  (`S1_GUEST`, `S1_RUNNER`).
 
 ## Result protocol
 
@@ -74,7 +80,7 @@ and the finished ones excluded (`--exclude-file`).
 The test may be a whole class (`<class>`) or a glob. `<only>` limits the
 line to runners (`s1`, `app`) and modes (`int`, `jit`, `jit0`). Categories
 are listed in `run.py` (`CATEGORIES`): `lx-syscall`, `s1-libc`,
-`missing-native`, `bootclasspath`, `icu-data`, `environment`, `art`, `slow`,
+`missing-native`, `bootclasspath`, `tzdata`, `icu-data`, `environment`, `art`, `slow`,
 `harness`, `triage`. A listed test that passes
 is reported as an unexpected pass, so the list shrinks as fixes land.
 

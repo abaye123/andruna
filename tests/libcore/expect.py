@@ -30,7 +30,7 @@ OVERRIDES = [
      "tcgetattr on a non-terminal must fail with ENOTTY"),
     ("libcore.java.lang.OldSystemTest#test_load", "", "environment",
      "ClassLoader.findLibrary(\"log\") finds no liblog.so on java.library.path"),
-    ("libcore.java.util.TimeZoneTest#*", "", "icu-data",
+    ("libcore.java.util.TimeZoneTest#*", "", "tzdata",
      "no time zone data (/apex/com.android.tzdata is not provided): every zone is GMT"),
     ("libcore.java.util.PropertiesTest#*", "xalan", "bootclasspath",
      "no XML transformer (Xalan is not on the boot class path)"),

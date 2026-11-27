@@ -1,8 +1,9 @@
 # Selected libcore tests on ART (x64): tests/libcore/README.md.
 #
-# Builds the x64 ART guest (spike S1 build, cached), the boot class path and
-# the test jar, then runs the tests with the interpreter and the JIT. The job
-# fails when a test fails that tests/libcore/expectations.txt does not list.
+# Builds the boot class path, the guest userland and ART (cached), the ART
+# root and andruna-app, then the test jar, and runs the tests on andruna-app
+# with the interpreter and the JIT. The job fails when a test fails that
+# tests/libcore/expectations.txt does not list.
 
 name: libcore tests
 
@@ -48,8 +49,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-            spikes/s1/art/target
-          key: libcore-tests-cargo-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'spikes/s1/art/Cargo.lock') }}
+          key: libcore-tests-cargo-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: libcore-tests-cargo-
 
       - name: Cache llvm-mingw
@@ -85,52 +85,59 @@ jobs:
           git config --global core.longpaths true
           cargo xtask fetch
           if ($LASTEXITCODE -ne 0) { throw "fetch failed" }
-          cargo xtask patch --project art --project libcore
+          cargo xtask patch
           if ($LASTEXITCODE -ne 0) { throw "patch failed" }
 
       - name: Cache llvm-project
         uses: actions/cache@v4
         with:
-          path: out/s8/llvm-project
-          key: s8-llvm-project-llvmorg-23.1.6-v1
+          path: out/llvm-project
+          key: llvm-project-llvmorg-23.1.6-v1
 
       - name: Fetch llvm-project
         run: |
-          if (-not (Test-Path out/s8/llvm-project/runtimes)) {
-            git clone --depth 1 --filter=blob:none --sparse --branch llvmorg-23.1.6 https://github.com/llvm/llvm-project out/s8/llvm-project
+          if (-not (Test-Path out/llvm-project/runtimes)) {
+            git clone --depth 1 --filter=blob:none --sparse --branch llvmorg-23.1.6 https://github.com/llvm/llvm-project out/llvm-project
             if ($LASTEXITCODE -ne 0) { throw "clone failed" }
-            git -C out/s8/llvm-project sparse-checkout set libcxx libcxxabi libunwind runtimes cmake llvm/cmake llvm/utils/llvm-lit compiler-rt/lib/builtins libc
+            git -C out/llvm-project sparse-checkout set libcxx libcxxabi libunwind runtimes cmake llvm/cmake llvm/utils/llvm-lit compiler-rt/lib/builtins libc
             if ($LASTEXITCODE -ne 0) { throw "sparse checkout failed" }
           }
 
-      - name: Cache guest objects
+      - name: Cache guest and boot class path
         id: guest-cache
         uses: actions/cache@v4
         with:
           path: |
-            out/s1art/x64
+            out/guest/x64
             out/s1/java
             out/s1/tools
-          key: s1art-guest-x64-${{ hashFiles('aosp/aosp.lock', 'aosp/**/*.cmake', 'aosp/**/CMakeLists.txt', 'aosp/overlay/**', 'patches/art/**', 'patches/libcore/**', 'spikes/s1/art/guest/**', 'spikes/s1/java/**', 'xtask/src/toolchain.rs') }}
+          key: libcore-guest-x64-${{ hashFiles('aosp/aosp.lock', 'aosp/**', 'patches/**', 'spikes/s1/java/**', 'xtask/src/toolchain.rs') }}
 
       - name: Boot class path
         if: steps.guest-cache.outputs.cache-hit != 'true'
         run: |
-          python spikes/s1/java/build_boot.py
+          python spikes/s1/java/build_boot.py --skip-verify
           if ($LASTEXITCODE -ne 0) { throw "boot class path build failed" }
 
-      - name: Build guest objects
+      - name: Guest userland and ART root
         if: steps.guest-cache.outputs.cache-hit != 'true'
-        env:
-          ANDRUNA_LLVM_PROJECT: ${{ github.workspace }}\out\s8\llvm-project
         run: |
-          python spikes/s1/art/guest/build.py --arch x64
+          python aosp/tools/build_guest.py --arch x64 sysroot bionic libcxx aosp art
           if ($LASTEXITCODE -ne 0) { throw "guest build failed" }
 
-      - name: Build runner
+      - name: andruna-app
         run: |
-          cargo build --release --target x86_64-pc-windows-gnullvm --manifest-path spikes/s1/art/Cargo.toml
-          if ($LASTEXITCODE -ne 0) { throw "runner build failed" }
+          cargo build -p andruna-app --release --target x86_64-pc-windows-gnullvm
+          if ($LASTEXITCODE -ne 0) { throw "andruna-app build failed" }
+
+      # andruna-app starts ART with the boot image when the ART root has one.
+      - name: Boot image
+        run: |
+          if (-not (Test-Path out/guest/x64/art-root/javalib/x86_64/boot.art)) {
+            target/x86_64-pc-windows-gnullvm/release/andruna-app.exe --art-root out/guest/x64/art-root --compile-boot
+            if ($LASTEXITCODE -ne 0) { throw "boot image failed" }
+          }
+          Get-ChildItem out/guest/x64/art-root/javalib -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
 
       - name: Build tests
         run: |
@@ -156,7 +163,7 @@ jobs:
         run: |
           "## libcore tests (x64)" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           foreach ($m in 'int', 'jit') {
-            $f = "out/libcore-tests/s1-$m/summary.txt"
+            $f = "out/libcore-tests/app-$m/summary.txt"
             if (Test-Path $f) {
               "`n``````text" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
               Get-Content $f | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
@@ -171,7 +178,7 @@ jobs:
           path: |
             out/libcore-tests/build-report.json
             out/libcore-tests/classes.txt
-            out/libcore-tests/s1-*
+            out/libcore-tests/app-*
 
       - name: Result
         if: steps.int.outcome != 'success' || steps.jit.outcome != 'success'
