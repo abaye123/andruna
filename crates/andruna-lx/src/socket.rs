@@ -185,6 +185,29 @@ fn new_queue() -> QueueRef {
 struct Peer {
     rx: QueueRef,
     name: Option<Name>,
+    /// A host receiver instead of a socket ([`register_sink`]).
+    sink: Option<Sink>,
+}
+
+/// A datagram receiver the host process provides at a file-system name,
+/// for services that run inside the host (the log writer while there is
+/// no log service). It runs on the sending thread.
+pub type Sink = fn(&[u8]);
+
+static SINKS: Mutex<Vec<(Name, Sink)>> = Mutex::new(Vec::new());
+
+/// Makes datagrams sent to the absolute Linux path `path` go to `sink`.
+pub fn register_sink(path: &str, sink: Sink) -> SysResult<()> {
+    let p = crate::fs::path::normalize(b"/", path.as_bytes())?;
+    let name = Name::Path(p.to_bytes());
+    let mut g = lock(&SINKS);
+    g.retain(|(n, _)| *n != name);
+    g.push((name, sink));
+    Ok(())
+}
+
+fn sink_at(n: &Name) -> Option<Sink> {
+    lock(&SINKS).iter().find(|(m, _)| m == n).map(|(_, s)| *s)
 }
 
 #[derive(Debug, Default)]
@@ -388,6 +411,16 @@ impl Socket {
         };
         let target = lookup(&name);
         if self.inner.ty == SOCK_DGRAM {
+            if target.is_none()
+                && let Some(sink) = sink_at(&name)
+            {
+                lock(&self.inner.state).peer = Some(Peer {
+                    rx: new_queue(),
+                    name: Some(name),
+                    sink: Some(sink),
+                });
+                return Ok(());
+            }
             let t = target.ok_or_else(|| missing(&name))?;
             if t.ty != SOCK_DGRAM {
                 return Err(Errno::EPROTOTYPE);
@@ -396,6 +429,7 @@ impl Socket {
             st.peer = Some(Peer {
                 rx: t.rx.clone(),
                 name: Some(name),
+                sink: None,
             });
             return Ok(());
         }
@@ -442,11 +476,13 @@ impl Socket {
             ss.peer = Some(Peer {
                 rx: self.inner.rx.clone(),
                 name: my_name,
+                sink: None,
             });
         }
         lock(&self.inner.state).peer = Some(Peer {
             rx: server.rx.clone(),
             name: Some(name),
+            sink: None,
         });
         waitq::notify();
         Ok(())
@@ -531,6 +567,12 @@ impl Socket {
             }
             match (ty, to) {
                 (SOCK_DGRAM, Some(Addr::Name(n))) => {
+                    if lookup(&n).is_none()
+                        && let Some(sink) = sink_at(&n)
+                    {
+                        sink(data);
+                        return Ok(data.len());
+                    }
                     let t = lookup(&n).ok_or_else(|| missing(&n))?;
                     if t.ty != SOCK_DGRAM {
                         return Err(Errno::EPROTOTYPE);
@@ -540,6 +582,12 @@ impl Socket {
                 (SOCK_DGRAM, Some(Addr::Unnamed)) => return Err(Errno::EINVAL),
                 (_, Some(_)) if st.peer.is_some() => return Err(Errno::EISCONN),
                 _ => match &st.peer {
+                    Some(Peer {
+                        sink: Some(sink), ..
+                    }) => {
+                        sink(data);
+                        return Ok(data.len());
+                    }
                     Some(p) => (p.rx.clone(), st.name.clone()),
                     None if ty == SOCK_DGRAM => return Err(Errno::ENOTCONN),
                     None => return Err(Errno::ENOTCONN),
@@ -978,10 +1026,12 @@ pub fn socketpair(domain: i32, ty: i32, protocol: i32) -> SysResult<[i32; 2]> {
     lock(&a.state).peer = Some(Peer {
         rx: b.rx.clone(),
         name: None,
+        sink: None,
     });
     lock(&b.state).peer = Some(Peer {
         rx: a.rx.clone(),
         name: None,
+        sink: None,
     });
     let fa = install(Socket { inner: a }, ty)?;
     match install(Socket { inner: b }, ty) {

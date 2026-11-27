@@ -26,6 +26,7 @@ mod fs;
 mod host;
 mod mem;
 mod syscall;
+pub use syscall::syscall_without_delivery;
 mod syscall_ext;
 mod time;
 

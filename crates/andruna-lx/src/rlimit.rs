@@ -4,7 +4,7 @@
 //!
 //! | Resource | Soft / hard | Source |
 //! | --- | --- | --- |
-//! | `RLIMIT_STACK` | the main thread's stack size, both | Windows' stack limits of the main thread |
+//! | `RLIMIT_STACK` | the main thread's stack size / unlimited | the host's main stack ([`crate::process::set_main_stack`]), else the executable's stack reserve |
 //! | `RLIMIT_NOFILE` | 32768, both | lx's descriptor table ([`crate::fd::NOFILE_MAX`]) |
 //! | `RLIMIT_CORE` | 0 / unlimited | no core files are written |
 //! | `RLIMIT_NICE`, `RLIMIT_RTPRIO` | 0, both | real-time and raised priorities are refused (`EPERM`) |
@@ -50,10 +50,13 @@ fn defaults() -> [Rlimit; RLIM_NLIMITS] {
         max: RLIM_INFINITY,
     };
     let mut l = [inf; RLIM_NLIMITS];
-    let stack = crate::sys::thread::main_stack_size();
+    let stack = match crate::process::main_stack().1 {
+        0 => crate::sys::thread::main_stack_size(),
+        s => s,
+    };
     l[RLIMIT_STACK as usize] = Rlimit {
         cur: stack,
-        max: stack,
+        max: RLIM_INFINITY,
     };
     let nofile = crate::fd::NOFILE_MAX as u64;
     l[RLIMIT_NOFILE as usize] = Rlimit {
@@ -115,7 +118,7 @@ mod tests {
     #[test]
     fn limits() {
         let s = prlimit(0, RLIMIT_STACK, None).unwrap();
-        assert!(s.cur >= 64 * 1024 && s.cur == s.max);
+        assert!(s.cur >= 64 * 1024 && s.max == RLIM_INFINITY);
         let n = prlimit(0, RLIMIT_NOFILE, None).unwrap();
         assert_eq!(n.cur, crate::fd::NOFILE_MAX as u64);
         assert_eq!(

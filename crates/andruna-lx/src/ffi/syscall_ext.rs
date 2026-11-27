@@ -282,6 +282,8 @@ pub(crate) unsafe fn dispatch(sysno: Sysno, a: [i64; 6]) -> SysResult<i64> {
                 }
                 Ok(r.len as i64)
             }
+            Sysno::Readv => sys_iov(int(0), ptr(1), int(2), false),
+            Sysno::Writev => sys_iov(int(0), ptr(1), int(2), true),
             Sysno::Sendmsg => sys_sendmsg(int(0), ptr(1), int(2)),
             Sysno::Recvmsg => sys_recvmsg(int(0), ptr(1), int(2)),
             Sysno::Shutdown => with_socket(int(0), |_, s| s.shutdown(int(1))).map(|()| 0),
@@ -421,7 +423,7 @@ unsafe fn sys_select(nfds: i32, sets: [usize; 3], timeout: Option<i128>) -> SysR
     // Bits at or above nfds in the last word are not looked at.
     for s in v.iter_mut().flatten() {
         if let Some(last) = s.last_mut()
-            && nfds % 64 != 0
+            && !nfds.is_multiple_of(64)
         {
             *last &= (1u64 << (nfds % 64)) - 1;
         }
@@ -538,6 +540,69 @@ unsafe fn sys_accept(fd: i32, addr: usize, len: usize, flags: i32) -> SysResult<
         return Err(e);
     }
     Ok(i64::from(nfd))
+}
+
+/// `readv`/`writev`. A socket gets the buffers as one message (a
+/// datagram stays whole); other files see one `read`/`write` per buffer,
+/// stopping at the first short transfer, as the kernel does for files.
+///
+/// # Safety
+///
+/// `v` points to `n` readable `struct iovec`, each a valid buffer.
+unsafe fn sys_iov(fd: i32, v: usize, n: i32, write: bool) -> SysResult<i64> {
+    if !(0..=UIO_MAXIOV as i32).contains(&n) {
+        return Err(Errno::EINVAL);
+    }
+    // SAFETY: contract.
+    let iov = unsafe { iovecs(v as u64, n as u64) }?;
+    let file = FDS.get(fd)?;
+    if let Some(s) = file.downcast::<Socket>() {
+        if write {
+            let mut data = Vec::new();
+            for [base, len] in iov {
+                // SAFETY: each iovec is a readable buffer (contract).
+                data.extend(unsafe { user_bytes(base as usize, len as usize) }?);
+            }
+            return s
+                .send(&file, &data, SendAnc::default(), None, 0)
+                .map(|n| n as i64);
+        }
+        let total: usize = iov.iter().map(|v| v[1] as usize).sum();
+        let r = s.recv(&file, total, 0)?;
+        let mut off = 0;
+        for [base, len] in iov {
+            let k = (len as usize).min(r.data.len() - off);
+            // SAFETY: each iovec is a writable buffer (contract).
+            let buf = unsafe { UserBuf::new(base as *mut u8, k) };
+            pipe::copy_to_user(buf, 0, &r.data[off..off + k])?;
+            off += k;
+        }
+        return Ok(off as i64);
+    }
+    let mut total: i64 = 0;
+    for [base, len] in iov {
+        if len == 0 {
+            continue;
+        }
+        // SAFETY: each iovec is a valid buffer (contract).
+        let buf = unsafe { UserBuf::new(base as *mut u8, len as usize) };
+        let r = if write {
+            file.write(buf)
+        } else {
+            file.read(buf)
+        };
+        match r {
+            Ok(k) => {
+                total += k as i64;
+                if (k as u64) < len {
+                    break;
+                }
+            }
+            Err(e) if total == 0 => return Err(e),
+            Err(_) => break,
+        }
+    }
+    Ok(total)
 }
 
 /// `struct msghdr` (LP64).
@@ -675,11 +740,8 @@ unsafe fn sys_recvmsg(fd: i32, msg: usize, flags: i32) -> SysResult<i64> {
         }
         let n = (len as usize).min(r.data.len() - off);
         // SAFETY: each iovec is a writable buffer (contract).
-        pipe::copy_to_user(
-            unsafe { UserBuf::new(base as *mut u8, n) },
-            0,
-            &r.data[off..off + n],
-        )?;
+        let buf = unsafe { UserBuf::new(base as *mut u8, n) };
+        pipe::copy_to_user(buf, 0, &r.data[off..off + n])?;
         off += n;
     }
     let mut out_flags = r.flags;

@@ -29,6 +29,7 @@ pub mod errno;
 pub mod eventfd;
 pub mod fd;
 mod ffi;
+pub use ffi::syscall_without_delivery;
 pub mod fs;
 pub mod futex;
 pub mod linux;

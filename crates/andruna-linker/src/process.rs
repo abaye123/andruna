@@ -271,11 +271,11 @@ fn start(ctx: MainCtx) -> Result<std::convert::Infallible> {
     });
     let (argc, argv, envp) = (s.argc, s.argv, s.envp);
     let block = s.block;
-    // `startstack` of /proc/self/stat (bionic finds the main stack by it).
-    crate::procfs::set_program(
-        block,
-        program.args.first().map(String::as_str).unwrap_or_default(),
-    );
+    // `startstack` of /proc/self/stat (bionic finds the main stack by it)
+    // and RLIMIT_STACK (andruna-lx).
+    andruna_lx::process::set_main_stack(block, MAIN_STACK);
+    // liblog's datagrams to logd.
+    crate::logd::install();
     let mut l = Linker::new(program.config);
     l.hwcap = hwcap;
     l.hwcap2 = hwcap2;

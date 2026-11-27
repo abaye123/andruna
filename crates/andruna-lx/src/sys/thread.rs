@@ -218,20 +218,10 @@ fn times(kernel: FILETIME, user: FILETIME) -> CpuTimes {
     }
 }
 
-/// The stack size of the process's main thread: Windows' limits of the
-/// calling thread when it is the main thread, otherwise the stack reserve
-/// of the executable's image (which Windows gives the main thread).
+/// The stack reserve of the executable's image, which Windows gives the
+/// process's main thread.
 pub fn main_stack_size() -> u64 {
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows::Win32::System::Threading::GetCurrentThreadStackLimits;
-    if crate::process::gettid() == crate::process::getpid() {
-        let (mut lo, mut hi) = (0usize, 0usize);
-        // SAFETY: both out pointers are valid locals.
-        unsafe { GetCurrentThreadStackLimits(&mut lo, &mut hi) };
-        if hi > lo {
-            return (hi - lo) as u64;
-        }
-    }
     // SAFETY: NULL names the executable's module, which stays loaded.
     let Ok(m) = (unsafe { GetModuleHandleW(None) }) else {
         return 1 << 20;

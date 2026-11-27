@@ -400,6 +400,20 @@ unsafe fn sys_futex(
     futex::futex(word, op, val, t.as_ref(), val3)
 }
 
+/// [`syscall`] without delivering queued signals when the call returns:
+/// for a host whose system call entry switches stacks, which delivers them
+/// itself with [`signal::deliver_after_syscall`] once the caller's stack
+/// is back in place. Returns -1 with `errno` set on failure, as
+/// [`syscall`].
+///
+/// # Safety
+///
+/// See the module documentation.
+pub unsafe fn syscall_without_delivery(number: i64, a: [i64; 6]) -> i64 {
+    // SAFETY: forwarded from this function's contract.
+    guard(|| unsafe { dispatch(number, a) })
+}
+
 /// `long syscall(long number, ...)`.
 ///
 /// # Safety

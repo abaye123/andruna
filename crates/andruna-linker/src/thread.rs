@@ -520,6 +520,83 @@ mod tests {
         );
     }
 
+    /// Where the signal handler of `queued_signal_runs_on_the_guest_stack`
+    /// ran: its stack pointer and the TEB stack base at that time.
+    static HANDLER_SP: AtomicU64 = AtomicU64::new(0);
+    static HANDLER_BASE: AtomicU64 = AtomicU64::new(0);
+    static GUEST_DONE: AtomicU64 = AtomicU64::new(0);
+
+    gfn! {
+        unsafe fn on_signal(_sig: i32, _info: *mut c_void, _uc: *mut c_void) -> () {
+            let local = 0u8;
+            HANDLER_SP.store(&local as *const u8 as u64, Ordering::SeqCst);
+            HANDLER_BASE.store(stack_bounds().0, Ordering::SeqCst);
+        }
+    }
+
+    gfn! {
+        unsafe fn signalling_child(_func: u64, top: u64) -> () {
+            use andruna_lx::linux::signal::{KernelSigaction, SA_SIGINFO, SIGUSR2};
+            let act = KernelSigaction {
+                handler: on_signal as usize as u64,
+                flags: SA_SIGINFO,
+                restorer: 0,
+                mask: 0,
+            };
+            let old = andruna_lx::signal::sigaction(SIGUSR2, Some(act), 8).unwrap();
+            #[cfg(target_arch = "x86_64")]
+            let tgkill = 234;
+            #[cfg(target_arch = "aarch64")]
+            let tgkill = 131;
+            let pid = i64::from(andruna_lx::process::getpid());
+            let tid = i64::from(andruna_lx::process::gettid());
+            // The signal is queued for this thread and delivered when the
+            // call returns, after `__andruna_syscall` left the Windows stack.
+            let r = crate::syscall::tests::call(tgkill, [pid, tid, i64::from(SIGUSR2), 0, 0, 0]);
+            andruna_lx::signal::sigaction(SIGUSR2, Some(old), 8).unwrap();
+            GUEST_DONE.store(if r == 0 { top } else { 1 }, Ordering::SeqCst);
+            exit_current(0, None)
+        }
+    }
+
+    #[test]
+    fn queued_signal_runs_on_the_guest_stack() {
+        crate::debug::install_handler();
+        let stack = GuestStack::new(1 << 20).unwrap();
+        let tls = Box::new([0u64; 8]);
+        let tid = Box::new(AtomicI32::new(-1));
+        let ctid = tid.as_ptr();
+        let flags =
+            CLONE_VM | CLONE_THREAD | CLONE_SETTLS | CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID;
+        let top = stack.top();
+        let r = clone_thread(
+            flags,
+            top,
+            ctid,
+            tls.as_ptr() as u64,
+            ctid,
+            signalling_child as usize as u64,
+            top,
+            top,
+        );
+        assert!(r > 0);
+        for _ in 0..5000 {
+            if tid.load(Ordering::Acquire) == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(GUEST_DONE.load(Ordering::SeqCst), top, "tgkill failed");
+        let sp = HANDLER_SP.load(Ordering::SeqCst);
+        assert!(
+            sp < top && sp > top - (1 << 20),
+            "handler ran off the guest stack: {sp:#x}"
+        );
+        // The TEB describes the guest stack while the handler runs.
+        assert!(HANDLER_BASE.load(Ordering::SeqCst) >= top);
+        assert!(HANDLER_BASE.load(Ordering::SeqCst) - top < (1 << 20));
+    }
+
     #[test]
     fn processes_cannot_be_cloned() {
         assert_eq!(

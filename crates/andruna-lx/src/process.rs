@@ -154,6 +154,21 @@ pub unsafe fn prctl(
     }
 }
 
+/// The main thread's stack: the address of the initial block (argc,
+/// argv, envp, auxv) and the stack's size; `(0, 0)` until the host sets it.
+static MAIN_STACK: RwLock<(u64, u64)> = RwLock::new((0, 0));
+
+/// Records the guest main thread's stack (`startstack` in
+/// `/proc/self/stat`, `RLIMIT_STACK`).
+pub fn set_main_stack(start: u64, size: u64) {
+    *crate::util::write(&MAIN_STACK) = (start, size);
+}
+
+/// The main thread's initial stack block and stack size.
+pub fn main_stack() -> (u64, u64) {
+    *crate::util::read(&MAIN_STACK)
+}
+
 /// The program: its Windows path and its arguments.
 static PROGRAM: RwLock<Option<(std::path::PathBuf, Vec<String>)>> = RwLock::new(None);
 

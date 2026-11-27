@@ -8,6 +8,8 @@
 //! Linux), and in them `exe`, `cmdline`, `stat`, `status`, `maps`, `fd/`
 //! (links to the open files), `task/` (one directory per thread with
 //! `comm`, `stat` and `status`). Everything else under `/proc` is `ENOENT`.
+//! The processor lists `/sys/devices/system/cpu/{online,possible,present}`
+//! are served the same way.
 //!
 //! The state in `stat` is the Windows scheduler's: a thread waiting in the
 //! kernel (a futex, a sleep, blocking I/O) is `S`, one waiting for paging
@@ -61,6 +63,30 @@ pub fn is_proc(p: &LinuxPath) -> bool {
         || is_props(p)
         || super::dev::Device::at(p).is_some()
         || super::dev::Device::link_at(p).is_some()
+        || cpu_list_file(p)
+}
+
+/// Whether `p` is one of the processor lists in `/sys/devices/system/cpu`
+/// (`online`, `possible`, `present`), which bionic's `get_nprocs` reads.
+fn cpu_list_file(p: &LinuxPath) -> bool {
+    let c = &p.components;
+    c.len() == 5
+        && c[..4]
+            == [
+                b"sys".to_vec(),
+                b"devices".to_vec(),
+                b"system".to_vec(),
+                b"cpu".to_vec(),
+            ]
+        && matches!(c[4].as_slice(), b"online" | b"possible" | b"present")
+}
+
+/// The processor list: `0-<n-1>`.
+fn cpu_list() -> Vec<u8> {
+    match crate::sys::thread::processor_count() {
+        1 => b"0\n".to_vec(),
+        n => format!("0-{}\n", n - 1).into_bytes(),
+    }
 }
 
 /// Whether `p` is bionic's property area file, `/dev/__properties__`.
@@ -92,6 +118,12 @@ pub fn lookup(p: &LinuxPath) -> SysResult<Node> {
     }
     if let Some(t) = super::dev::Device::link_at(p) {
         return Ok(Node::Link(t.to_vec()));
+    }
+    if cpu_list_file(p) {
+        return Ok(Node::File {
+            content: cpu_list(),
+            comm_of: None,
+        });
     }
     let pid = crate::process::getpid() as u32;
     let me = crate::process::gettid() as u32;
@@ -304,18 +336,30 @@ fn stat_line(pid: u32, tid: u32) -> SysResult<Vec<u8>> {
         .filter(|t| t.state != procinfo::STATE_TERMINATED)
         .count();
     // Fields Linux hides from other users or that Windows does not track
-    // (fault counts, addresses of the stack and code, wait channel) are 0,
-    // as Linux shows them to readers without access.
-    let s = format!(
-        "{tid} ({}) {} 0 {pid} {pid} 0 -1 0 0 0 0 0 {} {} 0 0 20 0 {threads} 0 {start} {} {}          18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 {policy} 0 0 0 0 0 0 0 0 0 0 0
-",
-        String::from_utf8_lossy(&name),
-        state_letter(me) as char,
-        ticks(user),
-        ticks(kernel),
-        info.virtual_size,
-        info.working_set / 4096,
-    );
+    // (fault counts, code addresses, wait channel) are 0, as Linux shows
+    // them to readers without access. `startstack` is the main thread's
+    // initial stack block, which bionic uses to find the main stack.
+    // Fields 1 to 52 of proc(5).
+    let mut f: Vec<String> = vec!["0".into(); 52];
+    f[0] = tid.to_string();
+    f[1] = format!("({})", String::from_utf8_lossy(&name));
+    f[2] = (state_letter(me) as char).to_string();
+    f[4] = pid.to_string(); // pgrp
+    f[5] = pid.to_string(); // session
+    f[7] = "-1".into(); // tpgid
+    f[13] = ticks(user).to_string();
+    f[14] = ticks(kernel).to_string();
+    f[17] = "20".into(); // priority
+    f[19] = threads.to_string();
+    f[21] = start.to_string();
+    f[22] = info.virtual_size.to_string();
+    f[23] = (info.working_set / 4096).to_string();
+    f[24] = u64::MAX.to_string(); // rsslim
+    f[27] = crate::process::main_stack().0.to_string(); // startstack
+    f[37] = "17".into(); // exit_signal
+    f[40] = policy.to_string();
+    let mut s = f.join(" ");
+    s.push('\n');
     Ok(s.into_bytes())
 }
 

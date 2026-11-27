@@ -464,14 +464,10 @@ pub fn deliver_pending() {
     if QUEUED.load(Ordering::SeqCst) == 0 {
         return;
     }
-    let Some(t) = current_if_any() else {
-        // A thread that never touched signals can still get process signals.
-        if lock(&PROCESS_PENDING).is_empty() {
-            return;
-        }
-        deliver_with(&current(), None);
-        return;
-    };
+    // A thread that never touched signals can still have been sent one
+    // (its state exists by tid) or get a process signal: `current` finds
+    // or creates its state.
+    let t = current_if_any().unwrap_or_else(current);
     deliver_with(&t, None);
 }
 
@@ -682,6 +678,13 @@ pub fn sigsuspend(mask: SigSet, sigsetsize: usize) -> SysResult<()> {
     }
     t.set_blocked(old);
     Err(Errno::EINTR)
+}
+
+/// Delivers the calling thread's queued signals after a system call made
+/// with [`crate::syscall_without_delivery`], on the stack the caller runs
+/// on again (the host's system call entry calls it after switching back).
+pub fn deliver_after_syscall() {
+    deliver_at_syscall_exit();
 }
 
 /// Saves the calling thread's lx `errno` around signal delivery at system
