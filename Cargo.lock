@@ -53,7 +53,7 @@ dependencies = [
  "andruna-pkg",
  "crc32fast",
  "image-webp",
- "miniz_oxide 0.8.9",
+ "miniz_oxide 0.9.1",
  "p256",
  "p384",
  "p521",
