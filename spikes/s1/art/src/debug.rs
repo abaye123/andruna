@@ -148,6 +148,14 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         unsafe { (*(*info).ContextRecord).Dr6 = 0 };
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+    #[cfg(target_arch = "aarch64")]
+    if code == 0xC000_001D {
+        // SAFETY: the system passes a valid, writable context record.
+        let ctx = unsafe { &mut *(*info).ContextRecord };
+        if emulate_cache_op(ctx) {
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
     {
         // SAFETY: the system passes a valid, writable context record.
         let ctx = unsafe { &mut *(*info).ContextRecord };
@@ -289,6 +297,48 @@ pub fn start_thread_watch() {
             }
         }
     });
+}
+
+/// Guest code built for Linux keeps the instruction cache coherent itself
+/// (compiler-rt's `__clear_cache`: `mrs ctr_el0`, `dc cvau`, `ic ivau`).
+/// Should Windows trap these at EL0, they are emulated here: the cache
+/// type register reads as 64-byte lines with IDC/DIC clear, and the
+/// maintenance operations become `FlushInstructionCache` of that line.
+/// Returns false for any other instruction.
+#[cfg(target_arch = "aarch64")]
+fn emulate_cache_op(ctx: &mut windows::Win32::System::Diagnostics::Debug::CONTEXT) -> bool {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use windows::Win32::System::Diagnostics::Debug::FlushInstructionCache;
+    use windows::Win32::System::Threading::GetCurrentProcess;
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+    if describe(ctx.Pc).is_none() {
+        return false;
+    }
+    // SAFETY: the faulting instruction of guest code, mapped and readable.
+    let insn = unsafe { *(ctx.Pc as *const u32) };
+    let rt = (insn & 31) as usize;
+    // SAFETY: the X array view of the register union.
+    let x = unsafe { &mut ctx.Anonymous.X };
+    match insn & !31 {
+        // mrs Xt, ctr_el0: DminLine = IminLine = 4 (16 words = 64 bytes).
+        0xD53B_0020 => {
+            if rt != 31 {
+                x[rt] = 0x8444_c004;
+            }
+        }
+        // dc cvau, Xt / ic ivau, Xt
+        0xD50B_7B20 | 0xD50B_7520 => {
+            let a = if rt == 31 { 0 } else { x[rt] & !63 };
+            // SAFETY: flushing a range of this process.
+            let _ = unsafe { FlushInstructionCache(GetCurrentProcess(), Some(a as *const _), 64) };
+        }
+        _ => return false,
+    }
+    if COUNT.fetch_add(1, Ordering::Relaxed) == 0 {
+        eprintln!("[s1] emulating an EL0 cache instruction ({insn:#010x}) trapped by Windows");
+    }
+    ctx.Pc += 4;
+    true
 }
 
 /// For each guest thread: ART's `Thread*` from bionic's
