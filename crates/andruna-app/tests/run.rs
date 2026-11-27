@@ -4,7 +4,7 @@
 //! Inputs: the ART root (`ANDRUNA_ART_ROOT`, default
 //! `out/guest/<arch>/art-root`, made by `python aosp/tools/build_guest.py
 //! --arch <arch> art`) and the test dex files (`ANDRUNA_TEST_DEX`, default
-//! `out/s1/java`: `hello.dex`, `faults.dex`, built by
+//! `out/s1/java`: `hello.dex`, `faults.dex`, `jnistress.dex`, built by
 //! `spikes/s1/java/build_boot.py`). When either is missing the tests report
 //! that and pass, unless `ANDRUNA_REQUIRE_GUEST=1` makes that a failure.
 
@@ -210,4 +210,56 @@ fn aot_boot_image_and_app_code() {
     );
     assert_eq!(o.code, 0);
     assert!(o.stdout.contains("Hello, Andruna"));
+}
+
+/// Compiled JNI stubs take their slow paths (`art_jni_method_start` and
+/// `art_jni_method_end`, which pass the `Thread*` to the runtime) when a
+/// suspend or checkpoint request is pending. `JniStress` calls native
+/// methods of the boot class path on several threads while the main thread
+/// runs the GC and walks their stacks.
+fn jni_stress(name: &str, extra: &[&str]) {
+    let Some((root, dex)) = inputs("jnistress.dex") else {
+        return;
+    };
+    let data = scratch(name);
+    let d = dex.display().to_string();
+    let mut args = extra.to_vec();
+    args.extend(["--classpath", &d, "JniStress", "4", "2000"]);
+    let o = app(&root, &data, &args);
+    assert_eq!(o.code, 0);
+    assert!(o.stdout.contains("jni stress: 4 threads"));
+    assert!(!o.stderr.contains("SIG_DFL"), "no unclaimed fault");
+}
+
+/// The JNI stubs of the boot class path as AOT code in the boot image.
+#[test]
+fn jni_stub_slow_paths_with_the_boot_image() {
+    if inputs("jnistress.dex").is_none() {
+        return;
+    }
+    let isa = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else {
+        "arm64"
+    };
+    {
+        let _g = BOOT.lock().unwrap_or_else(|e| e.into_inner());
+        if !art_root()
+            .join("javalib")
+            .join(isa)
+            .join("boot.art")
+            .is_file()
+        {
+            let o = app(&art_root(), &scratch("jni-boot"), &["--compile-boot"]);
+            assert_eq!(o.code, 0, "dex2oat for the boot image");
+        }
+    }
+    jni_stress("jni-aot", &["--mode", "jit"]);
+}
+
+/// Without the boot image the JIT compiles the stubs of the native methods
+/// once they are hot (the default threshold, as in the libcore runs).
+#[test]
+fn jni_stub_slow_paths_with_jit_compiled_stubs() {
+    jni_stress("jni-jit", &["--mode", "jit", "--no-boot-image"]);
 }

@@ -48,7 +48,10 @@ target\release\andruna-app --art-root out\guest\x64\art-root ^
 layout; `tests/run.rs` runs Hello World in the interpreter, with the JIT
 (also compiling every method at its first call), the fault test (implicit
 null checks and stack overflow through the signal path), dex2oat for the
-boot image and the app and the AOT run, each in a child process. They skip
+boot image and the app and the AOT run, and the JNI stress test (native
+calls on several threads during GCs and stack walks, so that compiled JNI
+stubs take their slow paths, with the boot image and with JIT-compiled
+stubs), each in a child process. They skip
 when the ART root or the test dex files are missing, unless
 `ANDRUNA_REQUIRE_GUEST=1`.
 

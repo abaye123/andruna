@@ -62,8 +62,9 @@ const RED_ZONE: u64 = 0;
 thread_local! {
     /// Set while lx writes a frame: a fault then is fatal, not a signal.
     static IN_FRAME: Cell<bool> = const { Cell::new(false) };
-    /// Consecutive retried faults at one address (see `retry`).
-    static RETRIES: Cell<(u64, u32)> = const { Cell::new((0, 0)) };
+    /// Consecutive retried faults on one page with no `MADV_DONTNEED`
+    /// window closed in between: (page, windows closed, count), see `retry`.
+    static RETRIES: Cell<(u64, u64, u32)> = const { Cell::new((0, 0, 0)) };
 }
 
 /// Statistics for tests and diagnostics.
@@ -287,8 +288,37 @@ unsafe fn handle(ep: *mut EXCEPTION_POINTERS) -> bool {
 
 /// An access violation on a page that is accessible now was a transient
 /// state (lx's `madvise(MADV_DONTNEED)` decommits and recommits pages):
-/// retried, a few times at most per address.
+/// retried. A fault while such a window is open waits for it to close. The
+/// same page faulting again with no window closed in between is not
+/// transient: after a few tries it is a real fault.
 fn retry(addr: u64, write: bool) -> bool {
+    use crate::mem::{DISCARDS_ACTIVE, DISCARDS_DONE};
+    // A window is a decommit and a commit: short. The bound only guards
+    // against waiting forever on a window that never closes.
+    for _ in 0..100_000 {
+        let done = DISCARDS_DONE.load(Ordering::SeqCst);
+        if accessible(addr, write) {
+            let page = addr & !0xfff;
+            return RETRIES.with(|c| {
+                let (a, d, n) = c.get();
+                let n = if a == page && d == done { n + 1 } else { 1 };
+                c.set((page, done, n));
+                n <= 4
+            });
+        }
+        if DISCARDS_ACTIVE.load(Ordering::SeqCst) == 0
+            && DISCARDS_DONE.load(Ordering::SeqCst) == done
+        {
+            return false;
+        }
+        std::thread::yield_now();
+    }
+    false
+}
+
+/// Whether the page of `addr` is committed with a protection that allows
+/// the access.
+fn accessible(addr: u64, write: bool) -> bool {
     let Some(r) = crate::sys::mem::query(addr as usize) else {
         return false;
     };
@@ -312,16 +342,7 @@ fn retry(addr: u64, write: bool) -> bool {
         PAGE_EXECUTE_WRITECOPY.0,
     ]
     .contains(&p);
-    if !(if write { writable } else { readable }) {
-        return false;
-    }
-    let page = addr & !0xfff;
-    RETRIES.with(|c| {
-        let (a, n) = c.get();
-        let n = if a == page { n + 1 } else { 1 };
-        c.set((page, n));
-        n <= 4
-    })
+    if write { writable } else { readable }
 }
 
 /// Whether `addr` is mapped (`SEGV_ACCERR`) rather than unmapped

@@ -574,3 +574,46 @@ fn overflow_once_large_gap() -> (u64, u64) {
     restore(SIGSEGV, old);
     (before - hsp, 0)
 }
+
+static TRANSIENT_SEGVS: AtomicU64 = AtomicU64::new(0);
+
+handler!(segv_count, |_sig, _info, _uc| {
+    // The page is accessible again when the handler runs: returning retries
+    // the access.
+    TRANSIENT_SEGVS.fetch_add(1, Ordering::SeqCst);
+});
+
+/// `madvise(MADV_DONTNEED)` decommits and recommits pages. A thread writing
+/// to them meanwhile faults inside the window or just after it, again and
+/// again on the same page (a GC clearing its card table while mutators mark
+/// cards): none of those faults is a signal.
+#[test]
+fn faults_in_madvise_windows_are_not_signals() {
+    let _g = serial();
+    let old = set_action(SIGSEGV, segv_count as usize, 0);
+    TRANSIENT_SEGVS.store(0, Ordering::SeqCst);
+    let page = anon(PAGE_SIZE, PROT_READ | PROT_WRITE);
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let writer = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let mut n = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                // SAFETY: an lx read-write mapping, unmapped only after the
+                // thread is joined.
+                unsafe { core::ptr::write_volatile((page + 64) as *mut u64, n) };
+                n += 1;
+            }
+            n
+        })
+    };
+    for _ in 0..20_000 {
+        crate::mem::madvise(page, PAGE_SIZE, MADV_DONTNEED).unwrap();
+    }
+    stop.store(true, Ordering::SeqCst);
+    let writes = writer.join().unwrap();
+    assert!(writes > 0);
+    assert_eq!(TRANSIENT_SEGVS.load(Ordering::SeqCst), 0);
+    crate::mem::munmap(page, PAGE_SIZE).unwrap();
+    restore(SIGSEGV, old);
+}

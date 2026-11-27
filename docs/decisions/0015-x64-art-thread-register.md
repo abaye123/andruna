@@ -33,6 +33,9 @@ patches gated on `ANDRUNA` (`patches/art/`):
   every AOSP tag (about 250 lines today, nterp to come).
 - Compiled code depends on the FS-base lazy restore: an `%fs:` access
   after a context switch takes one fault, as bionic code does.
+- A `%gs:` access left in x86_64 code reads the TEB, not the Thread (the
+  JNI trampolines passed TEB+0xd8 as the `Thread*` until patch 0005): the
+  art stage of `aosp/tools/build_guest.py` fails on any outside nterp.
 - Rejected: a dedicated thread register in ART's x86_64 back end (a
   register allocator change), and swapping the GS base at boundaries
   (silently wrong after a context switch).

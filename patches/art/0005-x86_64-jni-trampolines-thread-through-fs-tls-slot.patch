@@ -1,0 +1,74 @@
+Pass the x86_64 Thread* to the JNI trampolines from bionic's TLS slot in the ANDRUNA build.
+
+The JNI stubs call art_jni_method_start, art_jni_method_end and the
+other JNI_SAVE_*_TRAMPOLINE entry points on their slow paths, and those
+pass Thread::Current() as the macro argument gs:THREAD_SELF_OFFSET.
+Patch 0001 changed the explicit %gs: uses but not these arguments, so on
+Windows x64 the trampolines passed the word at TEB+THREAD_SELF_OFFSET
+(normally 0) as the Thread*, and artJniMethodStart or artJniMethodEnd
+faulted whenever a compiled JNI stub took a slow path (a suspend or
+checkpoint request was pending, for example during a GC). Under ANDRUNA
+the argument is the TLS slot %fs:ANDRUNA_TLS_ART_THREAD_SELF_OFFSET, as
+for GS_SELF. Without ANDRUNA the expansion is unchanged.
+
+diff --git a/runtime/arch/x86_64/jni_entrypoints_x86_64.S b/runtime/arch/x86_64/jni_entrypoints_x86_64.S
+--- a/runtime/arch/x86_64/jni_entrypoints_x86_64.S
++++ b/runtime/arch/x86_64/jni_entrypoints_x86_64.S
+@@ -16,6 +16,15 @@
+ 
+ #include "asm_support_x86_64.S"
+ 
++// The trampolines below pass Thread::Current() as a macro argument that is
++// used as `%<arg>`.
++#if defined(ANDRUNA)
++// Andruna (Windows x64): %gs is the TEB; read the TLS slot (see GS_SELF).
++#define THREAD_SELF_ARG fs:ANDRUNA_TLS_ART_THREAD_SELF_OFFSET
++#else
++#define THREAD_SELF_ARG gs:THREAD_SELF_OFFSET
++#endif
++
+ #define MANAGED_ARGS_SAVE_SIZE /*xmm0-xmm7*/ 8 * 8 + /*padding*/ 8 + /* GPR args */ 6 * 8
+ 
+ MACRO0(SAVE_MANAGED_ARGS_INCREASE_FRAME)
+@@ -337,30 +346,30 @@
+     /*
+      * Trampoline to `artJniMethodStart()` that preserves all managed arguments.
+      */
+-JNI_SAVE_MANAGED_ARGS_TRAMPOLINE art_jni_method_start, artJniMethodStart, gs:THREAD_SELF_OFFSET
++JNI_SAVE_MANAGED_ARGS_TRAMPOLINE art_jni_method_start, artJniMethodStart, THREAD_SELF_ARG
+ 
+     /*
+      * Trampoline to `artJniMethodEntryHook` that preserves all managed arguments.
+      */
+ JNI_SAVE_MANAGED_ARGS_TRAMPOLINE \
+-    art_jni_method_entry_hook, artJniMethodEntryHook, gs:THREAD_SELF_OFFSET
++    art_jni_method_entry_hook, artJniMethodEntryHook, THREAD_SELF_ARG
+ 
+     /*
+      * Trampoline to `artJniMonitoredMethodStart()` that preserves all managed arguments.
+      */
+ JNI_SAVE_MANAGED_ARGS_TRAMPOLINE \
+-    art_jni_monitored_method_start, artJniMonitoredMethodStart, gs:THREAD_SELF_OFFSET
++    art_jni_monitored_method_start, artJniMonitoredMethodStart, THREAD_SELF_ARG
+ 
+     /*
+      * Trampoline to `artJniMethodEnd()` that preserves all return registers.
+      */
+-JNI_SAVE_RETURN_VALUE_TRAMPOLINE art_jni_method_end, artJniMethodEnd, gs:THREAD_SELF_OFFSET, none
++JNI_SAVE_RETURN_VALUE_TRAMPOLINE art_jni_method_end, artJniMethodEnd, THREAD_SELF_ARG, none
+ 
+     /*
+      * Trampoline to `artJniMonitoredMethodEnd()` that preserves all return registers.
+      */
+ JNI_SAVE_RETURN_VALUE_TRAMPOLINE \
+-    art_jni_monitored_method_end, artJniMonitoredMethodEnd, gs:THREAD_SELF_OFFSET, none
++    art_jni_monitored_method_end, artJniMonitoredMethodEnd, THREAD_SELF_ARG, none
+ 
+     /*
+      * Entry from JNI stub that tries to lock the object in a fast path and
+@@ -438,4 +447,4 @@
+      */
+     // This is also the slow path for art_jni_unlock_object.
+ JNI_SAVE_RETURN_VALUE_TRAMPOLINE \
+-    art_jni_unlock_object_no_inline, artJniUnlockObject, rbx, gs:THREAD_SELF_OFFSET
++    art_jni_unlock_object_no_inline, artJniUnlockObject, rbx, THREAD_SELF_ARG
