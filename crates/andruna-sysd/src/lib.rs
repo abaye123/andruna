@@ -19,6 +19,7 @@
 //!   **placeholder** until andruna-app exists ([`host`]).
 
 pub mod activity;
+pub mod appcontainer;
 pub mod host;
 pub mod l10n;
 pub mod log;

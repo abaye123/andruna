@@ -26,8 +26,17 @@ does not exist yet. Until it does, sysd starts its own executable as
 `andruna-sysd --host <package>`. That process runs no app code: it logs
 `event=placeholder_host` and shows a window (English or Hebrew, from
 `res/`) saying that it is a placeholder. `host_started` log lines carry
-`placeholder=true`. Not implemented: AppContainer, the warm host pool,
-Binder, services, splash.
+`placeholder=true`. Not implemented: the warm host pool, Binder, services,
+splash.
+
+**AppContainer** (`src/appcontainer/`, spike S7, ADRs 0035 and 0036): per-package
+profiles (`install`/`uninstall` hooks for the package manager, salted
+names), directory security for `data\<package>` and `app\<package>`, the
+`andrunaRuntime` capability for the install directory, capabilities from
+granted permissions, `launch` inside the container (handle list, job,
+suspended start) and `process_sid`/`pid_sid` for peer identity. The
+supervisor does not use it yet: it still starts the placeholder host
+outside a container.
 
 ```
 andruna-sysd [--instance <name>] [--root <dir>] [--idle-timeout-ms <n>] [--ready-event <handle>]

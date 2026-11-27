@@ -47,6 +47,11 @@ decided in spike S7:
    the already-built boot image section into it, so the cost is process
    creation plus runtime init, without boot image load.
 
+S7 measured both ([results](../plan/spike-results/S7.md)); option 2 is
+proposed in [ADR 0035](../decisions/0035-warm-process-strategy.md), file
+access and the channel to sysd in
+[ADR 0036](../decisions/0036-appcontainer-file-access-and-sysd-channel.md).
+
 ## Identity
 
 - sysd identifies every Binder peer by its process token (AppContainer SID),
