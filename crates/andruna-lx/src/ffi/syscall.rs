@@ -70,8 +70,31 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
             Sysno::ClockGetres => sys_clock_getres(int(0), ptr(1) as _),
             Sysno::ClockNanosleep => sys_clock_nanosleep(int(0), int(1), ptr(2) as _).map(|()| 0),
             Sysno::Futex => sys_futex(ptr(0), int(1), uint(2), ptr(3), uint(5)),
+            Sysno::Mremap => mem::mremap(ptr(0), ptr(1), ptr(2), uint(3)).map(|a| a as i64),
+            Sysno::Getcwd => sys_getcwd(ptr(0) as *mut u8, ptr(1)),
+            Sysno::Chdir => fs::chdir(super::path_arg(ptr(0) as *const c_char)?).map(|()| 0),
         }
     }
+}
+
+/// The `getcwd` system call: the path with its NUL, `ERANGE` if it does
+/// not fit; returns the length written including the NUL.
+///
+/// # Safety
+///
+/// `buf` is NULL or writable for `size` bytes.
+unsafe fn sys_getcwd(buf: *mut u8, size: usize) -> SysResult<i64> {
+    let mut p = fs::getcwd();
+    p.push(0);
+    if buf.is_null() {
+        return Err(Errno::EFAULT);
+    }
+    if p.len() > size {
+        return Err(Errno::ERANGE);
+    }
+    // SAFETY: the caller's buffer, at least `p.len()` bytes (checked).
+    unsafe { core::ptr::copy_nonoverlapping(p.as_ptr(), buf, p.len()) };
+    Ok(p.len() as i64)
 }
 
 /// `futex(uint32_t* uaddr, int op, uint32_t val, const struct timespec*
@@ -178,6 +201,20 @@ mod tests {
         let p = call(Sysno::Mmap, [0, len, prot, flags, -1, 0]).unwrap();
         assert_eq!(call(Sysno::Mprotect, [p, len, 1, 0, 0, 0]), Ok(0));
         assert_eq!(call(Sysno::Madvise, [p, len, 4, 0, 0, 0]), Ok(0));
+        // Grow in place or move, then shrink.
+        assert_eq!(call(Sysno::Mprotect, [p, len, prot, 0, 0, 0]), Ok(0));
+        let q = call(Sysno::Mremap, [p, len, 2 * len, 1, 0, 0]).unwrap();
+        // SAFETY: the remapped range is readable and writable.
+        unsafe { (q as *mut u8).add(2 * len as usize - 1).write(7) };
+        assert_eq!(call(Sysno::Mremap, [q, 2 * len, len, 0, 0, 0]), Ok(q));
+        assert_eq!(
+            call(Sysno::Mremap, [q, len, len, 4, 0, 0]),
+            Err(Errno::EINVAL)
+        );
+        let p = q;
+        // Fork advice: no process is forked, nothing to do.
+        assert_eq!(call(Sysno::Madvise, [p, len, 18, 0, 0, 0]), Ok(0));
+        assert_eq!(call(Sysno::Madvise, [p, len, 19, 0, 0, 0]), Ok(0));
         assert_eq!(call(Sysno::Munmap, [p, len, 0, 0, 0, 0]), Ok(0));
     }
 
@@ -197,5 +234,21 @@ mod tests {
         assert_eq!(call(Sysno::Nanosleep, [zp, 0, 0, 0, 0, 0]), Ok(0));
         assert_eq!(call(Sysno::ClockNanosleep, [1, 0, zp, 0, 0, 0]), Ok(0));
         assert_eq!(call(Sysno::SchedYield, [0; 6]), Ok(0));
+    }
+
+    #[test]
+    fn getcwd_through_syscall() {
+        let mut b = [0u8; 256];
+        let n = call(Sysno::Getcwd, [b.as_mut_ptr() as i64, 256, 0, 0, 0, 0]).unwrap();
+        assert!(n >= 2 && b[0] == b'/' && b[n as usize - 1] == 0);
+        assert_eq!(
+            call(Sysno::Getcwd, [b.as_mut_ptr() as i64, 1, 0, 0, 0, 0]),
+            Err(Errno::ERANGE)
+        );
+        assert_eq!(
+            call(Sysno::Getcwd, [0, 256, 0, 0, 0, 0]),
+            Err(Errno::EFAULT)
+        );
+        assert_eq!(call(Sysno::Chdir, [0, 0, 0, 0, 0, 0]), Err(Errno::EFAULT));
     }
 }

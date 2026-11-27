@@ -1,0 +1,61 @@
+# Functions guest ELF objects import from the host (andruna-linker).
+#
+# The build generates libandruna_host.so from this list: one empty function
+# per name, soname libandruna_host.so. Guest objects link against it the way
+# NDK code links against stub libraries; at run time andruna-linker binds
+# every name to its host table, entered with the Android convention (System V
+# on x86_64, AAPCS64 on arm64). See aosp/bionic/README.md.
+
+# System calls: number in rax (x86_64) or x8 (arm64), arguments in the C
+# argument registers, raw kernel result (-errno on failure).
+__andruna_syscall
+
+# Threads and the thread pointer.
+__andruna_clone_thread
+__andruna_exit_with_stack_teardown
+__andruna_set_tls
+
+# The dynamic linker interface of libdl.so and libc.so (bionic's
+# ld-android.so names). __loader_shared_globals is defined by the bridge
+# (aosp/bionic/ld_android_bridge.cpp), not by the host.
+__loader_add_thread_local_dtor
+__loader_android_create_namespace
+__loader_android_dlopen_ext
+__loader_android_dlwarning
+__loader_android_get_LD_LIBRARY_PATH
+__loader_android_get_application_target_sdk_version
+__loader_android_get_exported_namespace
+__loader_android_handle_signal
+__loader_android_init_anonymous_namespace
+__loader_android_link_namespaces
+__loader_android_link_namespaces_all_libs
+__loader_android_set_16kb_appcompat_mode
+__loader_android_set_application_target_sdk_version
+__loader_android_update_LD_LIBRARY_PATH
+__loader_cfi_fail
+__loader_dl_iterate_phdr
+__loader_dladdr
+__loader_dlclose
+__loader_dlerror
+__loader_dlopen
+__loader_dlsym
+__loader_dlvsym
+__loader_remove_thread_local_dtor
+
+# Unicode properties for wctype.cpp and wcwidth.cpp (bionic's private/icu4x.h;
+# Android implements them in Rust with ICU4X inside libc.so).
+__icu4x_bionic_general_category
+__icu4x_bionic_east_asian_width
+__icu4x_bionic_hangul_syllable_type
+__icu4x_bionic_is_alphabetic
+__icu4x_bionic_is_default_ignorable_code_point
+__icu4x_bionic_is_lowercase
+__icu4x_bionic_is_alnum
+__icu4x_bionic_is_blank
+__icu4x_bionic_is_graph
+__icu4x_bionic_is_print
+__icu4x_bionic_is_xdigit
+__icu4x_bionic_is_white_space
+__icu4x_bionic_is_uppercase
+__icu4x_bionic_to_upper
+__icu4x_bionic_to_lower

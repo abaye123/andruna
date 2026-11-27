@@ -78,6 +78,9 @@ const MADV_HINTS: &[i32] = &[
     15, // MADV_NOHUGEPAGE
     16, // MADV_DONTDUMP
     17, // MADV_DODUMP
+    // No process is ever forked, so there is no child copy to wipe or keep.
+    18, // MADV_WIPEONFORK
+    19, // MADV_KEEPONFORK
 ];
 
 /// Translates Linux `PROT_*` bits to a Windows page protection.
@@ -169,6 +172,63 @@ pub fn munmap(addr: usize, len: usize) -> SysResult<()> {
 /// `mprotect` on the process address space.
 pub fn mprotect(addr: usize, len: usize, prot: u32) -> SysResult<()> {
     lock(&SPACE).mprotect(addr, len, prot)
+}
+
+/// `mremap` flags.
+pub const MREMAP_MAYMOVE: u32 = 1;
+pub const MREMAP_FIXED: u32 = 2;
+
+/// `mremap` on the process address space, for lx's anonymous memory:
+/// shrinking unmaps the tail; growing extends in place when the pages after
+/// the mapping are free, otherwise (with `MREMAP_MAYMOVE`) maps a new range
+/// with the same protection, copies the contents and unmaps the old one.
+/// `MREMAP_FIXED` and `MREMAP_DONTUNMAP` are not supported (`EINVAL`).
+pub fn mremap(addr: usize, old_len: usize, new_len: usize, flags: u32) -> SysResult<usize> {
+    if flags & !MREMAP_MAYMOVE != 0 || !is_page_aligned(addr) {
+        return Err(Errno::EINVAL);
+    }
+    let old = page_round_up(old_len).ok_or(Errno::EINVAL)?;
+    let new = match page_round_up(new_len) {
+        Some(0) | None => return Err(Errno::EINVAL),
+        Some(n) => n,
+    };
+    let mut s = lock(&SPACE);
+    if old == 0 {
+        // Duplicating a shared mapping; lx has none.
+        return Err(Errno::EINVAL);
+    }
+    let prot = s.protection_of(addr, old).ok_or(Errno::EFAULT)?;
+    if new <= old {
+        if new < old {
+            s.munmap(addr + new, old - new)?;
+        }
+        return Ok(addr);
+    }
+    let tail = addr.checked_add(old).ok_or(Errno::ENOMEM)?;
+    let anon = MAP_PRIVATE | MAP_ANONYMOUS;
+    if s.mmap(tail, new - old, prot, anon | MAP_FIXED_NOREPLACE, -1, 0)
+        .is_ok()
+    {
+        return Ok(addr);
+    }
+    if flags & MREMAP_MAYMOVE == 0 {
+        return Err(Errno::ENOMEM);
+    }
+    let to = s.mmap(0, new, PROT_READ | PROT_WRITE, anon, -1, 0)?;
+    if prot & PROT_READ == 0 {
+        // Unreadable pages cannot be copied without changing them.
+        let _ = s.munmap(to, new);
+        return Err(Errno::EFAULT);
+    }
+    // SAFETY: both ranges are lx mappings held under the address-space
+    // lock; the old one is readable and `old` bytes long, the new one is
+    // writable and longer.
+    unsafe { core::ptr::copy_nonoverlapping(addr as *const u8, to as *mut u8, old) };
+    if prot != PROT_READ | PROT_WRITE {
+        s.mprotect(to, new, prot)?;
+    }
+    s.munmap(addr, old)?;
+    Ok(to)
 }
 
 /// `madvise` on the process address space.

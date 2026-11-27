@@ -1,0 +1,27 @@
+Return from signal handlers through the host in the ANDRUNA build (x86_64).
+
+The x86_64 signal trampoline __restore_rt executes the rt_sigreturn system
+call. Andruna's guest bionic runs in a Windows process, where system calls
+are made by calling the host's __andruna_syscall (aosp/bionic/README.md).
+Under ANDRUNA the trampoline passes the ucontext_t at %rsp to the host's
+rt_sigreturn instead; the CFI that describes the signal frame is
+unchanged.
+
+diff --git a/libc/arch-x86_64/bionic/__restore_rt.S b/libc/arch-x86_64/bionic/__restore_rt.S
+--- a/libc/arch-x86_64/bionic/__restore_rt.S
++++ b/libc/arch-x86_64/bionic/__restore_rt.S
+@@ -110,6 +110,14 @@
+   RESTORE_GPR(RIP)
+   nop
+ ENTRY_NO_DWARF_PRIVATE(__restore_rt)
++#if defined(ANDRUNA)
++  // The host performs rt_sigreturn: it gets the ucontext_t in %rdi.
++  mov %rsp, %rdi
++  mov $__NR_rt_sigreturn, %rax
++  call __andruna_syscall@PLT
++  hlt
++#else
+   mov $__NR_rt_sigreturn, %rax
+   syscall
++#endif
+ END(__restore_rt)
