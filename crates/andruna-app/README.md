@@ -64,4 +64,4 @@ when the ART root or the test dex files are missing, unless
   runtime through an `app_process`-like guest entry instead of `dalvikvm`,
   and receives the package assignment over the pipe; the launcher keeps
   talking to sysd only.
-- arm64: builds; the ART root for arm64 and AOT on arm64 are not done here.
+- arm64: runs (interpreter, JIT, AOT) in CI, `.github/workflows/art-arm64.yml`.

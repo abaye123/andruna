@@ -1,0 +1,275 @@
+# ART on the production loader on Windows ARM64 (docs/plan/phase1/art-on-linker.md):
+# the arm64 guest userland and ART root are cross-built on the x64 runner
+# (cached), then andruna-app runs Hello World, the S1 benchmark, the fault
+# test and the wall-clock probe in the interpreter, with the JIT and as AOT
+# code (dex2oat on arm64) on the hosted windows-11-arm runner. The
+# andruna-linker guest tests (bionic, the vDSO) and the andruna-app tests
+# run there too.
+
+name: ART arm64
+
+on:
+  push:
+    branches: [phase1-arm64-app]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: art-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  ANDRUNA_LLVM_MINGW: C:\tools\llvm-mingw
+
+jobs:
+  guest:
+    name: arm64 guest and ART root (built on x64)
+    runs-on: windows-latest
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: |
+          cargo xtask toolchain
+          "$env:ANDRUNA_LLVM_MINGW\x86_64-w64-mingw32\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: CMake, Ninja
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { python -m pip install ninja }
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { python -m pip install cmake }
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # Same key as the S1 ART and libcore jobs, so the cache is shared.
+      - name: Cache AOSP sources (all projects)
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-all-${{ hashFiles('aosp/aosp.lock') }}
+
+      - name: Fetch and patch AOSP
+        run: |
+          git config --global core.longpaths true
+          cargo xtask fetch
+          if ($LASTEXITCODE -ne 0) { throw "fetch failed" }
+          cargo xtask patch
+          if ($LASTEXITCODE -ne 0) { throw "patch failed" }
+
+      - name: Cache llvm-project
+        uses: actions/cache@v4
+        with:
+          path: out/llvm-project
+          key: llvm-project-llvmorg-23.1.6-v1
+
+      - name: Fetch llvm-project
+        run: |
+          if (-not (Test-Path out/llvm-project/runtimes)) {
+            git clone --depth 1 --filter=blob:none --sparse --branch llvmorg-23.1.6 https://github.com/llvm/llvm-project out/llvm-project
+            if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+            git -C out/llvm-project sparse-checkout set libcxx libcxxabi libunwind runtimes cmake llvm/cmake llvm/utils/llvm-lit compiler-rt/lib/builtins libc
+            if ($LASTEXITCODE -ne 0) { throw "sparse checkout failed" }
+          }
+
+      - name: Cache guest and boot class path
+        id: guest-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            out/guest/arm64
+            out/s1/java
+            out/s1/tools
+          key: art-guest-arm64-${{ hashFiles('aosp/aosp.lock', 'aosp/**', 'patches/**', 'spikes/s1/java/**', 'xtask/src/toolchain.rs') }}
+
+      - name: Boot class path
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        run: |
+          python spikes/s1/java/build_boot.py --skip-verify
+          if ($LASTEXITCODE -ne 0) { throw "boot class path build failed" }
+
+      - name: Guest userland and ART root
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        run: |
+          python aosp/tools/build_guest.py --arch arm64 sysroot builtins bionic libcxx aosp art
+          if ($LASTEXITCODE -ne 0) { throw "guest build failed" }
+
+      # Not cached: the loader's own test programs change with the loader.
+      - name: Linker test programs
+        run: |
+          python aosp/tools/build_guest.py --arch arm64 linker-tests
+          if ($LASTEXITCODE -ne 0) { throw "linker test build failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: art-guest-arm64
+          path: |
+            out/guest/arm64/art-root
+            out/guest/arm64/sysroot/usr/lib
+            out/guest/arm64/libcxx-install/lib
+            out/guest/arm64/linker-tests/*_test
+            out/guest/arm64/linker-tests/lib*.so
+            out/s1/java/*.dex
+          if-no-files-found: error
+
+  run:
+    name: andruna-app on arm64
+    needs: guest
+    runs-on: windows-11-arm
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe" -OutFile rustup-init.exe
+            ./rustup-init.exe -y --default-toolchain none --profile minimal
+            Remove-Item rustup-init.exe
+            "$env:USERPROFILE\.cargo\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+          }
+          rustup show active-toolchain
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: art-arm64-cargo-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: art-arm64-cargo-
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: cargo xtask toolchain
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: art-guest-arm64
+          path: out
+
+      - name: Build
+        run: |
+          cargo build --release --target aarch64-pc-windows-gnullvm -p andruna-app -p andruna-linker
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+          $cpu = (Get-Item 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0').GetValue('ProcessorNameString')
+          "cpu: $cpu, logical processors: $env:NUMBER_OF_PROCESSORS"
+
+      - name: Linker guest tests (bionic, vDSO)
+        id: linker
+        continue-on-error: true
+        env:
+          ANDRUNA_REQUIRE_GUEST: '1'
+        run: |
+          cargo test --release --target aarch64-pc-windows-gnullvm -p andruna-linker --test guest -- --nocapture --test-threads 1 --skip link_only_other_architecture
+          if ($LASTEXITCODE -ne 0) { throw "linker guest tests failed" }
+
+      - name: Runs (Hello, Bench, Faults, Clock; int, jit, aot)
+        id: runs
+        continue-on-error: true
+        run: |
+          New-Item -ItemType Directory -Force out/art-arm64 | Out-Null
+          python crates/andruna-app/tools/runs.py --app target/aarch64-pc-windows-gnullvm/release/andruna-app.exe --runs 3 *>&1 | Tee-Object out/art-arm64/runs.txt
+          if ($LASTEXITCODE -ne 0) { throw "runs failed" }
+
+      - name: Profile (start-up)
+        continue-on-error: true
+        env:
+          ANDRUNA_PROFILE: '1'
+        run: |
+          $app = "target/aarch64-pc-windows-gnullvm/release/andruna-app.exe"
+          $root = "out/guest/arm64/art-root"
+          & $app --art-root $root --mode int --no-boot-image --classpath out/s1/java/hello.dex Hello *>&1 | Tee-Object -Append out/art-arm64/profile.txt
+          & $app --art-root $root --mode aot --classpath out/s1/java/hello.dex Hello *>&1 | Tee-Object -Append out/art-arm64/profile.txt
+
+      # When a run crashed: the failing cases again under cdb (only
+      # second-chance exceptions and fail-fast stop it), with the loader's
+      # module list (ANDRUNA_LLDB_FILE) to place guest addresses.
+      - name: Diagnose crashes
+        if: steps.runs.outcome != 'success'
+        continue-on-error: true
+        run: |
+          $app = "target/aarch64-pc-windows-gnullvm/release/andruna-app.exe"
+          $root = "out/guest/arm64/art-root"
+          $data = Join-Path $env:TEMP 'andruna-app-runs'
+          $out = "out/art-arm64/diagnose.txt"
+          $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers' -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue | Where-Object FullName -match 'arm64' | Select-Object -First 1
+          "cdb: $($cdb.FullName)" | Out-File -Append -Encoding utf8 $out
+          $cases = @{
+            'hello-jit0' = @('--mode', 'jit', '--no-boot-image', '-Xjitthreshold:0', '--classpath', "$data\app\hello.dex", 'Hello')
+            'faults-aot' = @('--mode', 'aot', '--classpath', "$data\app\faults.dex", 'Faults')
+          }
+          foreach ($name in $cases.Keys) {
+            $env:ANDRUNA_LLDB_FILE = Join-Path $PWD "out/art-arm64/modules-$name.txt"
+            "### $name" | Out-File -Append -Encoding utf8 $out
+            $a = @('--art-root', $root, '--data', $data) + $cases[$name]
+            & $cdb.FullName -G -xd av -xd ii -xd sov -xd eh -xd ch -c 'g; .lastevent; r; kn 80; dps @sp L60; ~*k 20; q' $app @a *>&1 | Select-Object -Last 400 | Out-File -Append -Encoding utf8 $out
+          }
+          Get-Content $out
+
+      - name: andruna-app tests
+        id: apptests
+        continue-on-error: true
+        env:
+          ANDRUNA_REQUIRE_GUEST: '1'
+        run: |
+          cargo test --release --target aarch64-pc-windows-gnullvm -p andruna-app -- --test-threads 1
+          if ($LASTEXITCODE -ne 0) { throw "andruna-app tests failed" }
+
+      - name: Summary
+        if: always()
+        run: |
+          "## andruna-app on arm64" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          foreach ($f in 'runs.txt', 'profile.txt', 'diagnose.txt', 'modules-hello-jit0.txt', 'modules-faults-aot.txt') {
+            $p = "out/art-arm64/$f"
+            if (Test-Path $p) {
+              "`n<details><summary>$f</summary>`n`n``````text" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+              Get-Content $p | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+              "```````n</details>`n" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            }
+          }
+          $s = "out/art-arm64/runs.txt"
+          if (Test-Path $s) {
+            $lines = Get-Content $s
+            $i = [array]::IndexOf($lines, '## Summary')
+            if ($i -ge 0) { $lines[$i..($lines.Length - 1)] | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY }
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: art-arm64-results
+          path: out/art-arm64
+
+      - name: Result
+        if: steps.linker.outcome != 'success' || steps.runs.outcome != 'success' || steps.apptests.outcome != 'success'
+        run: throw "a step failed, see the summary"

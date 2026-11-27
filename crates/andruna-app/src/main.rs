@@ -16,6 +16,7 @@ fn main() {
 }
 
 fn start(args: &[String]) -> Result<(), String> {
+    andruna_linker::profile::mark("andruna-app main");
     let opts = parse(args).map_err(|e| format!("{e}\n{USAGE}"))?;
     let art = ArtRoot::locate(opts.art_root.as_deref(), exe_dir().as_deref())?;
     let layout = Layout::new(art, opts.data.as_deref());
@@ -25,6 +26,7 @@ fn start(args: &[String]) -> Result<(), String> {
     };
     let p = plan(&opts, &layout)?;
     layout.install(&classpath)?;
+    andruna_linker::profile::mark("guest tree mounted");
     if std::env::var_os("ANDRUNA_APP_TRACE").is_some() {
         eprintln!("andruna-app: {} {}", p.exe.display(), p.argv.join(" "));
     }

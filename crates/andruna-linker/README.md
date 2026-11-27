@@ -36,7 +36,15 @@ calling convention (see `src/lib.rs` and `aosp/bionic/host_symbols.txt`).
   and `procfs.rs` (`/proc/self/stat`, `/sys` processor lists), and
   liblog's logd socket is a stand-in that writes the records to the
   guest's stderr (`logd.rs`, `ANDRUNA_LOG_PRIORITY`). Faults go to
-  andruna-lx's signal delivery from the first vectored handler.
+  andruna-lx's signal delivery from the first vectored handler; on arm64
+  that handler first emulates `mrs ctr_el0` (and `dc cvau`/`ic ivau`),
+  which Windows does not allow at EL0 and the JIT's `__clear_cache` uses.
+- A vDSO (`vdso.rs`, `AT_SYSINFO_EHDR`): bionic's `clock_gettime`,
+  `clock_getres`, `gettimeofday` and `time` call host functions on
+  andruna-lx's clocks without a system call, as on Linux.
+  `ANDRUNA_NO_VDSO` leaves it out.
+- `ANDRUNA_PROFILE` (`profile.rs`): phase marks, system call counts and
+  times, and exception counts on stderr at exit.
 - Debugging: Windows unwind tables translated from `.eh_frame` (x64), crash
   reports for faults in guest code, and LLDB commands in the file named by
   `ANDRUNA_LLDB_FILE` (`command source` it in llvm-mingw's `lldb.exe`).

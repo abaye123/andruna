@@ -1,6 +1,6 @@
 """Build a minimal ART boot classpath (core-oj, core-libart, core-icu4j) as
 dex jars from the AOSP sources fetched by `cargo xtask fetch`, plus the S1
-test programs Hello and Bench.
+test programs Hello, Bench, Faults and Clock.
 
 The build mirrors what Soong does for these modules at android-17.0.0_r1:
 
@@ -409,7 +409,7 @@ def build_tests(jars):
         shutil.rmtree(classes)
     os.makedirs(classes)
     boot_classes = os.path.join(OUT, "classes", "boot")
-    for name in ("Hello", "Bench", "Faults", "JniStress"):
+    for name in ("Hello", "Bench", "Faults", "JniStress", "Clock"):
         javac([
             "-encoding", "UTF-8",
             "-source", JAVA_VERSION, "-target", JAVA_VERSION,

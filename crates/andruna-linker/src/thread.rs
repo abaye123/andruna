@@ -117,7 +117,19 @@ pub(crate) fn set_stack_bounds(base: u64, limit: u64) {
     }
 }
 
-/// The committed region around a guest stack top.
+/// The TEB stack bounds `(base, limit)` for a guest stack whose top is
+/// `top`: the Windows allocation that holds it, from its start
+/// (`AllocationBase`, which includes a guard region at the bottom) to the
+/// end of the pages above `top - 16` that share their state.
+///
+/// `VirtualQuery`'s `BaseAddress` is the queried page itself, not the start
+/// of the region, so it cannot serve as the limit: with it the bounds
+/// covered only the top page of the stack. x64 never checks the bounds
+/// when a vectored handler resumes a thread, but Windows ARM64 does
+/// (`RtlGuardRestoreContext` ends the process with
+/// `FAST_FAIL_INVALID_SET_OF_CONTEXT` when the stack pointer of the
+/// resumed context lies outside them), so every emulated instruction on a
+/// guest thread ended the process there.
 fn region_of(top: u64) -> (u64, u64) {
     let mut mbi = MEMORY_BASIC_INFORMATION::default();
     // SAFETY: queries the address space only.
@@ -131,8 +143,9 @@ fn region_of(top: u64) -> (u64, u64) {
     if n == 0 {
         return (top, top - 4096);
     }
-    let lo = mbi.BaseAddress as u64;
-    (lo + mbi.RegionSize as u64, lo)
+    let hi = mbi.BaseAddress as u64 + mbi.RegionSize as u64;
+    let lo = mbi.AllocationBase as u64;
+    (hi, if lo == 0 || lo >= hi { top - 4096 } else { lo })
 }
 
 /// Switches the current thread to the guest stack `top` and calls the
@@ -473,6 +486,25 @@ mod tests {
     use std::sync::atomic::AtomicU64;
 
     static SEEN: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn stack_bounds_cover_the_whole_guest_stack() {
+        let st = GuestStack::new(1 << 20).unwrap();
+        // A stack pointer anywhere in the stack must lie inside the bounds
+        // the thread gets (Windows ARM64 checks them on every resume from
+        // a vectored handler).
+        let (base, limit) = region_of(st.top());
+        assert!(base >= st.top(), "{base:#x} below the top {:#x}", st.top());
+        assert!(
+            limit <= st.base,
+            "{limit:#x} above the bottom {:#x}",
+            st.base
+        );
+        assert!(
+            st.base - limit <= 64 << 10,
+            "only the guard below the stack"
+        );
+    }
 
     gfn! {
         unsafe fn child(func: u64, arg: u64) -> () {

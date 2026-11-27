@@ -19,6 +19,9 @@
 #include <unwindstack/Maps.h>
 #include <unwindstack/Memory.h>
 #include <unwindstack/Regs.h>
+#if defined(__aarch64__)
+#include <unwindstack/RegsArm64.h>
+#endif
 #include <unwindstack/Unwinder.h>
 
 namespace unwindstack {
@@ -118,6 +121,14 @@ ArchEnum Regs::CurrentArch() {
 Regs* Regs::CreateFromLocal() {
   return nullptr;
 }
+
+#if defined(__aarch64__)
+// RegsGetLocal (inline, used by ART's backtrace helper) stores the SVE
+// vector length; without SVE state to unwind, 0.
+uint64_t RegsArm64::GetVgFromLocal() {
+  return 0;
+}
+#endif
 
 std::shared_ptr<Memory> Memory::CreateProcessMemoryThreadCached(pid_t) {
   return nullptr;
