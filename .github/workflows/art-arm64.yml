@@ -211,6 +211,39 @@ jobs:
           & $app --art-root $root --mode int --no-boot-image --classpath out/s1/java/hello.dex Hello *>&1 | Tee-Object -Append out/art-arm64/profile.txt
           & $app --art-root $root --mode aot --classpath out/s1/java/hello.dex Hello *>&1 | Tee-Object -Append out/art-arm64/profile.txt
 
+      # When a run crashed: the failing cases again with loader tracing,
+      # Windows crash dumps of andruna-app, and cdb's view of each dump.
+      - name: Diagnose crashes
+        if: steps.runs.outcome != 'success'
+        continue-on-error: true
+        run: |
+          $dumps = "$env:RUNNER_TEMP\dumps"
+          New-Item -ItemType Directory -Force $dumps | Out-Null
+          $k = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\andruna-app.exe'
+          New-Item -Force $k | Out-Null
+          Set-ItemProperty $k -Name DumpFolder -Value $dumps
+          Set-ItemProperty $k -Name DumpType -Value 1 -Type DWord
+          Set-ItemProperty $k -Name DumpCount -Value 5 -Type DWord
+          $app = "target/aarch64-pc-windows-gnullvm/release/andruna-app.exe"
+          $root = "out/guest/arm64/art-root"
+          $data = Join-Path $env:TEMP 'andruna-app-runs'
+          $env:ANDRUNA_TRACE = '1'
+          $out = "out/art-arm64/diagnose.txt"
+          "### hello jit0" | Out-File -Append -Encoding utf8 $out
+          & $app --art-root $root --data $data --mode jit --no-boot-image -Xjitthreshold:0 --classpath "$data\app\hello.dex" Hello *>&1 | Select-Object -Last 120 | Out-File -Append -Encoding utf8 $out
+          "exit $LASTEXITCODE" | Out-File -Append -Encoding utf8 $out
+          "### faults aot" | Out-File -Append -Encoding utf8 $out
+          & $app --art-root $root --data $data --mode aot --classpath "$data\app\faults.dex" Faults *>&1 | Select-Object -Last 120 | Out-File -Append -Encoding utf8 $out
+          "exit $LASTEXITCODE" | Out-File -Append -Encoding utf8 $out
+          Start-Sleep 10
+          $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers' -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue | Where-Object FullName -match 'arm64' | Select-Object -First 1
+          "cdb: $($cdb.FullName)" | Out-File -Append -Encoding utf8 $out
+          foreach ($d in Get-ChildItem $dumps -Filter *.dmp) {
+            "### dump $($d.Name)" | Out-File -Append -Encoding utf8 $out
+            if ($cdb) { & $cdb.FullName -z $d.FullName -c '.exr -1; .ecxr; r; kn 60; !analyze -v; q' *>&1 | Out-File -Append -Encoding utf8 $out }
+          }
+          Get-Content $out
+
       - name: andruna-app tests
         id: apptests
         continue-on-error: true
@@ -224,7 +257,7 @@ jobs:
         if: always()
         run: |
           "## andruna-app on arm64" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
-          foreach ($f in 'runs.txt', 'profile.txt') {
+          foreach ($f in 'runs.txt', 'profile.txt', 'diagnose.txt') {
             $p = "out/art-arm64/$f"
             if (Test-Path $p) {
               "`n<details><summary>$f</summary>`n`n``````text" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
