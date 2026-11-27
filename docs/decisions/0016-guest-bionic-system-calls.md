@@ -1,6 +1,6 @@
 # 0016 - Real bionic for guest code, system calls through the loader
 
-**Status:** proposed, 2026-11-26
+**Status:** accepted, 2026-11-27 (proposed 2026-11-26)
 
 ## Context
 ADR 0013 builds AOSP code as Android ELF loaded by andruna-linker, and

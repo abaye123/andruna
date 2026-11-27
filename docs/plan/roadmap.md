@@ -28,6 +28,10 @@ maintainer closes it.
   manager, installer, signing) starts now, in parallel with the remaining
   phase 0 and 1 work. It shows honest "not available yet" states until the
   runtime parts land.
+- Maintainer decision, 2026-11-27: phase 0 is closed. S1 to S4 and S8 are
+  answered (docs/plan/spike-results/). ART AOT on ARM64 (blocked by a dex2oat
+  oat size check) moves to phase 1, where it is already an exit criterion.
+  Phase 1 is active.
 
 ## Working with agents
 
