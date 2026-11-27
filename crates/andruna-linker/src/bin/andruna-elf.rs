@@ -79,6 +79,8 @@ fn init_lx(root: Option<PathBuf>) -> Result<(), String> {
     let root = std::fs::canonicalize(&root).map_err(|e| e.to_string())?;
     let r = root.to_string_lossy();
     let r = r.strip_prefix(r"\\?\").unwrap_or(&r).to_string();
+    // /dev/binder, served by the broker named in ANDRUNA_BINDER_PIPE.
+    andruna_binder_device::register();
     andruna_lx::fs::mount::mount("/", Path::new(&r))
         .map_err(|e| format!("mount: errno {}", e.0))?;
     andruna_lx::fs::stream::install_std_streams().map_err(|e| format!("std streams: errno {}", e.0))

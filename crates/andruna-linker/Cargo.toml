@@ -15,6 +15,7 @@ name = "andruna-elf"
 path = "src/bin/andruna-elf.rs"
 
 [dependencies]
+andruna-binder-device = { path = "../andruna-binder-device" }
 andruna-lx = { path = "../andruna-lx" }
 
 [dependencies.windows]
