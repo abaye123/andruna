@@ -25,11 +25,18 @@ calling convention (see `src/lib.rs` and `aosp/bionic/host_symbols.txt`).
   through the bridge `ld-android.so` (`aosp/bionic/ld_android_bridge.cpp`);
   without bionic a built-in static layout is used.
 - `dlopen`, `dlsym`, `dlvsym`, `dlclose`, `dladdr`, `dl_iterate_phdr`,
-  `android_dlopen_ext` (no extinfo options yet), as the `__loader_*`
-  functions bionic's `libdl.so` calls. Namespaces are not supported yet and
-  fail with a `dlerror` message.
+  `android_dlopen_ext` (only `ANDROID_DLEXT_USE_NAMESPACE` with the
+  default namespace), as the `__loader_*` functions bionic's `libdl.so`
+  calls. The process has one namespace, exported as "default"; creating
+  or linking namespaces fails with a `dlerror` message.
 - Threads: `__andruna_clone_thread` (bionic's `__bionic_clone`) on Windows
   threads running on bionic's stacks; `CLONE_*SETTID`/`CLEARTID` semantics.
+- System calls (`__andruna_syscall`) run on the thread's Windows stack and
+  go to andruna-lx; the few lx does not answer yet are in `interim.rs`
+  and `procfs.rs` (`/proc/self/stat`, `/sys` processor lists), and
+  liblog's logd socket is a stand-in that writes the records to the
+  guest's stderr (`logd.rs`, `ANDRUNA_LOG_PRIORITY`). Faults go to
+  andruna-lx's signal delivery from the first vectored handler.
 - Debugging: Windows unwind tables translated from `.eh_frame` (x64), crash
   reports for faults in guest code, and LLDB commands in the file named by
   `ANDRUNA_LLDB_FILE` (`command source` it in llvm-mingw's `lldb.exe`).
