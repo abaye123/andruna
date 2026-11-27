@@ -12,6 +12,10 @@ publish.workspace = true
 # exports must not end up in sysd).
 device = ["dep:andruna-lx"]
 
+[[test]]
+name = "transport"
+required-features = ["device"]
+
 [dependencies]
 andruna-lx = { path = "../andruna-lx", optional = true }
 
