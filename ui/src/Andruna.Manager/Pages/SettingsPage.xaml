@@ -81,6 +81,8 @@
                         <TextBlock Text="{l:Str Key=AppTitle}" Style="{StaticResource BodyStrongTextBlockStyle}" />
                         <TextBlock Text="{x:Bind Vm.VersionText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" IsTextSelectionEnabled="True" />
                         <TextBlock Text="{x:Bind Vm.ServiceText, Mode=OneWay}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind Vm.ServiceDetail, Mode=OneWay}" Visibility="{x:Bind Vm.HasServiceDetail, Mode=OneWay}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                         <TextBlock Text="{l:Str Key=AboutDescription}" Margin="0,6,0,0" TextWrapping="Wrap" />
                     </StackPanel>
                     <Button Grid.Column="2" VerticalAlignment="Top" Content="{l:Str Key=AboutNoticesButton}"

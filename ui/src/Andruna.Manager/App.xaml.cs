@@ -61,10 +61,16 @@ public partial class App : Application
 
     public static FlowDirection FlowDirection => IsRightToLeft ? FlowDirection.RightToLeft : FlowDirection.LeftToRight;
 
-    /// <summary>The connection to andruna-sysd, shared by all pages.</summary>
+    /// <summary>
+    /// The connection to andruna-sysd of this user and session, shared by all
+    /// pages. It stays open while the manager runs, which keeps sysd alive.
+    /// </summary>
     public static ServiceConnection Service { get; } = new(
-        new SysdClient(),
+        SysdClient.ForCurrentUser(),
         new InstalledServiceHost(AppContext.BaseDirectory));
+
+    /// <summary>How often the manager checks that its sysd connection is still open.</summary>
+    private static readonly TimeSpan KeepAliveInterval = TimeSpan.FromSeconds(10);
 
     public static AppIdentity Identity { get; } = new(
         typeof(App).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "0.0.0",
@@ -88,6 +94,7 @@ public partial class App : Application
 
         _window = new MainWindow(StartPage.Parse(Environment.GetCommandLineArgs().Skip(1).ToList()));
         _window.Activate();
+        Service.StartKeepAlive(KeepAliveInterval);
     }
 
     /// <summary>Starts a new instance on the settings page and closes this one.</summary>

@@ -54,31 +54,36 @@ the defaults.
 
 ## sysd protocol (client side)
 
-The manager talks to andruna-sysd over the named pipe `\\.\pipe\andruna-sysd`
-(`SysdClient`). The pipe is opened with `CurrentUserOnly`, so only a server
-running as the same user is accepted. One request per connection:
+The manager speaks the binary pipe protocol of
+[andruna-ipc](../crates/andruna-ipc/README.md), version 1, which is
+authoritative; `Sysd/SysdWire.cs` is its C# codec and `Sysd/SysdClient.cs`
+the client.
 
-- Frame: 4-byte little-endian length, then that many bytes of UTF-8 JSON;
-  at most 4 MiB.
-- Request: `{"id": 1, "method": "<name>"}`.
-- Response: `{"id": 1, "result": {...}}` or
-  `{"id": 1, "error": {"code": "...", "message": "..."}}`; `id` echoes the
-  request.
+- Pipe `\\.\pipe\Andruna.sysd.<user SID>.<session id>.default`
+  (`SysdEndpoint`; the session id comes from `ProcessIdToSessionId`).
+- Opened with `CurrentUserOnly` and identification-level impersonation;
+  before anything is sent, `GetNamedPipeServerProcessId` and the server
+  process token must show the same user. Otherwise the manager reports that
+  it does not trust the service.
+- One connection, kept open while the manager runs (it keeps sysd from
+  exiting on idle); calls are serialized on it with increasing request ids.
+  If sysd closed it, the next call reconnects once. A check every 10 s
+  reopens a lost connection.
+- Error responses keep their code; each code has a localized message
+  (`ServiceMessages.ForError`). Unknown codes are failures.
+- Protocol version 1 reports package names only, so the library shows names
+  and no versions or labels.
 
-| Method | Result |
-| --- | --- |
-| `ping` | `{}` |
-| `status` | `{"version": "0.1.0", "protocol": 1, "uptime_ms": 1234}` |
-| `list_packages` | `{"packages": [{"name": "org.example", "label": "Example", "version_name": "1.0", "version_code": 1}]}` |
-
-This is the client's side of the protocol. When the sysd crate defines the
-protocol, the constants and shapes in `Sysd/SysdWire.cs` and
-`Sysd/SysdModels.cs` follow it. The architecture names Binder for the
-manager in the long run (02-architecture.md, IPC); this pipe is the bring-up
-channel.
+The codec is tested against `crates/andruna-ipc/tests/golden/v1.txt`, the
+bytes the Rust encoder produces (checked on the Rust side by
+`crates/andruna-ipc/tests/golden.rs`). The test-only pipe server in
+`tests/` speaks the same protocol.
 
 If sysd does not answer and `andruna-sysd.exe` is next to the manager, the
-manager starts it once and waits up to 3 s for it.
+manager starts it (at most once every 10 s) and retries the connection for
+up to 3 s. Settings > About shows the sysd version, uptime, running app
+processes and process id. The architecture names Binder for the manager in
+the long run (02-architecture.md, IPC); this pipe is the bring-up channel.
 
 ## Screenshots on a locked machine
 

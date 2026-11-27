@@ -46,12 +46,14 @@ public sealed class AppPageViewModel : ObservableObject
 
     public bool HasProblem => Problem is not null;
 
-    /// <summary>The app label from sysd, or the package name while it is unknown.</summary>
-    public string Title => string.IsNullOrWhiteSpace(_package?.Label) ? PackageName : _package!.Label!;
+    /// <summary>The package name; sysd does not report app labels yet (protocol version 1).</summary>
+    public string Title => PackageName;
 
-    public string VersionText => string.IsNullOrEmpty(_package?.VersionName)
-        ? _strings.Get("AppVersionUnknown")
-        : _strings.Format("PackageVersionFormat", _package!.VersionName);
+    /// <summary>sysd does not report versions yet (protocol version 1).</summary>
+    public string VersionText => _strings.Get("AppVersionUnknown");
+
+    /// <summary>True once sysd reported the package as installed.</summary>
+    public bool IsInstalled => _package is not null;
 
     /// <summary>True when the actions on this page can be used. Always false until sysd implements them.</summary>
     public bool ActionsAvailable => false;
@@ -71,7 +73,7 @@ public sealed class AppPageViewModel : ObservableObject
             var list = await _service.Client.ListPackagesAsync();
             if (!list.IsOk)
             {
-                Problem = ServiceMessages.ForOutcome(list.Outcome, list.Detail, _service.Host.IsInstalled, _strings);
+                Problem = ServiceMessages.ForResult(list, _service.Host.IsInstalled, _strings);
                 return;
             }
 
@@ -79,8 +81,7 @@ public sealed class AppPageViewModel : ObservableObject
             Problem = _package is null
                 ? new UserMessage(_strings.Get("AppNotFoundTitle"), _strings.Format("AppNotFoundMessage", PackageName))
                 : null;
-            OnPropertyChanged(nameof(Title));
-            OnPropertyChanged(nameof(VersionText));
+            OnPropertyChanged(nameof(IsInstalled));
         }
         finally
         {

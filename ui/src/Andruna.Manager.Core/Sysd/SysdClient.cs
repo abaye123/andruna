@@ -1,159 +1,268 @@
 using System.IO.Pipes;
-using System.Text.Json;
+using System.Security.Principal;
 
 namespace Andruna.Manager.Core.Sysd;
 
 /// <summary>The calls the management app makes to andruna-sysd.</summary>
 public interface ISysdClient
 {
-    Task<SysdResult<bool>> PingAsync(CancellationToken ct = default);
+    Task<SysdResult<ushort>> PingAsync(CancellationToken ct = default);
 
     Task<SysdResult<SysdStatus>> GetStatusAsync(CancellationToken ct = default);
 
     Task<SysdResult<IReadOnlyList<PackageSummary>>> ListPackagesAsync(CancellationToken ct = default);
+
+    Task<SysdResult<SysdResponse.Started>> StartPackageAsync(string package, CancellationToken ct = default);
+
+    Task<SysdResult<bool>> FocusWindowAsync(string package, CancellationToken ct = default);
 }
 
 /// <summary>
-/// Client for the sysd named pipe. Each call opens a connection, sends one
-/// request, reads one response and closes the connection. The pipe is opened
-/// with <see cref="PipeOptions.CurrentUserOnly"/>, so a pipe created by
-/// another user is never trusted.
+/// Client for the sysd pipe protocol (crates/andruna-ipc). One connection is
+/// opened on the first call and kept open while the client lives: an open
+/// connection keeps sysd from exiting on idle. Calls are serialized on it.
+/// When the connection breaks, the next call opens a new one.
 /// </summary>
-public sealed class SysdClient : ISysdClient
+/// <remarks>
+/// Security, as the protocol requires: the pipe is opened with
+/// <see cref="PipeOptions.CurrentUserOnly"/> (the pipe must be owned by this
+/// user) and identification-level impersonation (sysd cannot act as this
+/// user), and before anything is sent the server process is checked to run
+/// as the same user (<c>GetNamedPipeServerProcessId</c>).
+/// </remarks>
+public sealed class SysdClient : ISysdClient, IDisposable
 {
-    /// <summary>Pipe name used by sysd (<c>\\.\pipe\andruna-sysd</c>).</summary>
-    public const string DefaultPipeName = "andruna-sysd";
-
     private readonly string _pipeName;
     private readonly TimeSpan _connectTimeout;
     private readonly TimeSpan _callTimeout;
-    private long _nextId;
+    private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly SecurityIdentifier _user = SysdEndpoint.CurrentUserSid();
+    private NamedPipeClientStream? _pipe;
+    private uint _nextId;
 
-    public SysdClient(string pipeName = DefaultPipeName, TimeSpan? connectTimeout = null, TimeSpan? callTimeout = null)
+    /// <param name="pipeName">Pipe name without <c>\\.\pipe\</c>; see <see cref="SysdEndpoint"/>.</param>
+    public SysdClient(string pipeName, TimeSpan? connectTimeout = null, TimeSpan? callTimeout = null)
     {
         _pipeName = pipeName;
         _connectTimeout = connectTimeout ?? TimeSpan.FromMilliseconds(500);
         _callTimeout = callTimeout ?? TimeSpan.FromSeconds(5);
     }
 
-    public async Task<SysdResult<bool>> PingAsync(CancellationToken ct = default)
+    /// <summary>The client of the product sysd of this user and session.</summary>
+    public static SysdClient ForCurrentUser() => new(SysdEndpoint.PipeNameForCurrentUser());
+
+    public string PipeName => _pipeName;
+
+    /// <summary>True while a connection is open.</summary>
+    public bool IsConnected => _pipe?.IsConnected == true;
+
+    /// <summary>Process id of the sysd serving the open connection, or 0.</summary>
+    public uint ServerPid { get; private set; }
+
+    public async Task<SysdResult<ushort>> PingAsync(CancellationToken ct = default)
     {
-        var result = await CallAsync("ping", ct).ConfigureAwait(false);
-        return result.IsOk ? SysdResult<bool>.Ok(true) : SysdResult<bool>.Fail(result.Outcome, result.Detail);
+        var r = await RequestAsync(SysdRequest.Ping, ct).ConfigureAwait(false);
+        return r.Value is SysdResponse.Pong pong ? SysdResult<ushort>.Ok(pong.Protocol) : Unexpected<ushort>(r);
     }
 
     public async Task<SysdResult<SysdStatus>> GetStatusAsync(CancellationToken ct = default)
     {
-        var result = await CallAsync("status", ct).ConfigureAwait(false);
-        return Decode<SysdStatus>(result, s => !string.IsNullOrEmpty(s.Version));
+        var r = await RequestAsync(SysdRequest.Status, ct).ConfigureAwait(false);
+        return r.Value is SysdResponse.StatusReply s ? SysdResult<SysdStatus>.Ok(s.Status) : Unexpected<SysdStatus>(r);
     }
 
     public async Task<SysdResult<IReadOnlyList<PackageSummary>>> ListPackagesAsync(CancellationToken ct = default)
     {
-        var result = await CallAsync("list_packages", ct).ConfigureAwait(false);
-        var list = Decode<PackageList>(result, l => l.Packages is not null && l.Packages.All(p => !string.IsNullOrEmpty(p.Name)));
-        return list.IsOk
-            ? SysdResult<IReadOnlyList<PackageSummary>>.Ok(list.Value!.Packages)
-            : SysdResult<IReadOnlyList<PackageSummary>>.Fail(list.Outcome, list.Detail);
+        var r = await RequestAsync(SysdRequest.ListPackages, ct).ConfigureAwait(false);
+        return r.Value is SysdResponse.Packages p
+            ? SysdResult<IReadOnlyList<PackageSummary>>.Ok(p.Names.Select(n => new PackageSummary(n)).ToList())
+            : Unexpected<IReadOnlyList<PackageSummary>>(r);
     }
 
-    private static SysdResult<T> Decode<T>(SysdResult<JsonElement> raw, Func<T, bool> isValid)
-        where T : class
+    public async Task<SysdResult<SysdResponse.Started>> StartPackageAsync(string package, CancellationToken ct = default)
     {
-        if (!raw.IsOk)
-        {
-            return SysdResult<T>.Fail(raw.Outcome, raw.Detail);
-        }
+        var r = await RequestAsync(SysdRequest.StartPackage(package), ct).ConfigureAwait(false);
+        return r.Value is SysdResponse.Started s ? SysdResult<SysdResponse.Started>.Ok(s) : Unexpected<SysdResponse.Started>(r);
+    }
 
+    public async Task<SysdResult<bool>> FocusWindowAsync(string package, CancellationToken ct = default)
+    {
+        var r = await RequestAsync(SysdRequest.FocusWindow(package), ct).ConfigureAwait(false);
+        return r.Value is SysdResponse.Focused ? SysdResult<bool>.Ok(true) : Unexpected<bool>(r);
+    }
+
+    /// <summary>
+    /// Sends one request and returns the decoded response. An Error response
+    /// becomes <see cref="SysdOutcome.ServiceError"/> with its code.
+    /// </summary>
+    public async Task<SysdResult<SysdResponse>> RequestAsync(SysdRequest request, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var value = raw.Value.Deserialize<T>(SysdWire.JsonOptions);
-            if (value is null || !isValid(value))
+            // A kept connection may have been closed by sysd (idle exit,
+            // restart); then one fresh connection is tried, as the launcher does.
+            var reused = _pipe is not null;
+            var (result, closed) = await RequestOnceAsync(request, ct).ConfigureAwait(false);
+            if (reused && closed)
             {
-                return SysdResult<T>.Fail(SysdOutcome.ProtocolError, $"the {typeof(T).Name} result is incomplete");
+                (result, _) = await RequestOnceAsync(request, ct).ConfigureAwait(false);
             }
 
-            return SysdResult<T>.Ok(value);
+            return result;
         }
-        catch (JsonException e)
+        finally
         {
-            return SysdResult<T>.Fail(SysdOutcome.ProtocolError, $"the {typeof(T).Name} result is malformed: {e.Message}");
+            _lock.Release();
         }
     }
 
-    private async Task<SysdResult<JsonElement>> CallAsync(string method, CancellationToken ct)
+    /// <summary>Closes the connection. The next call opens a new one.</summary>
+    public void Disconnect()
     {
-        using var pipe = new NamedPipeClientStream(
+        _lock.Wait();
+        try
+        {
+            Drop();
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public void Dispose()
+    {
+        Disconnect();
+        _lock.Dispose();
+    }
+
+    /// <summary>One attempt; <c>Closed</c> is true when the connection closed without an answer.</summary>
+    private async Task<(SysdResult<SysdResponse> Result, bool Closed)> RequestOnceAsync(SysdRequest request, CancellationToken ct)
+    {
+        if (_pipe is null)
+        {
+            var failure = await ConnectAsync(ct).ConfigureAwait(false);
+            if (failure is not null)
+            {
+                return (failure, false);
+            }
+        }
+
+        var pipe = _pipe!;
+        var id = unchecked(++_nextId);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(_callTimeout);
+        try
+        {
+            byte[] payload;
+            try
+            {
+                await SysdWire.WriteFrameAsync(pipe, SysdWire.EncodeRequest(request, id), timeout.Token).ConfigureAwait(false);
+                payload = await SysdWire.ReadFrameAsync(pipe, timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception e) when (e is IOException or ObjectDisposedException or SysdConnectionClosedException { BeforeFrame: true })
+            {
+                Drop();
+                return (SysdResult<SysdResponse>.Fail(SysdOutcome.ProtocolError, $"the connection to the service closed: {e.Message}"), true);
+            }
+
+            var (gotId, response) = SysdWire.DecodeResponse(payload);
+            if (gotId != id)
+            {
+                Drop();
+                return (SysdResult<SysdResponse>.Fail(SysdOutcome.ProtocolError, $"answer for request {gotId} received while waiting for {id}"), false);
+            }
+
+            if (response is SysdResponse.Error error)
+            {
+                // After these the server closes the connection.
+                if (error.Code is SysdErrorCode.UnsupportedVersion or SysdErrorCode.Malformed)
+                {
+                    Drop();
+                }
+
+                return (SysdResult<SysdResponse>.Fail(SysdOutcome.ServiceError, $"{error.Code}: {error.Message}", error.Code), false);
+            }
+
+            return (SysdResult<SysdResponse>.Ok(response), false);
+        }
+        catch (SysdProtocolException e)
+        {
+            Drop();
+            return (SysdResult<SysdResponse>.Fail(SysdOutcome.ProtocolError, e.Message), false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            Drop();
+            return (SysdResult<SysdResponse>.Fail(SysdOutcome.ProtocolError, "the service did not answer in time"), false);
+        }
+    }
+
+    /// <summary>Opens and checks a connection; returns null on success, else the failure.</summary>
+    private async Task<SysdResult<SysdResponse>?> ConnectAsync(CancellationToken ct)
+    {
+        var pipe = new NamedPipeClientStream(
             ".",
             _pipeName,
             PipeDirection.InOut,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly,
+            TokenImpersonationLevel.Identification);
         try
         {
             await pipe.ConnectAsync(_connectTimeout, ct).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
-            return SysdResult<JsonElement>.Fail(SysdOutcome.NotRunning, "no service is listening on the pipe");
+            pipe.Dispose();
+            return SysdResult<SysdResponse>.Fail(SysdOutcome.NotRunning, "no service is listening on the pipe");
         }
         catch (IOException e)
         {
-            return SysdResult<JsonElement>.Fail(SysdOutcome.NotRunning, e.Message);
+            pipe.Dispose();
+            return SysdResult<SysdResponse>.Fail(SysdOutcome.NotRunning, e.Message);
         }
         catch (UnauthorizedAccessException e)
         {
-            // The pipe exists but belongs to another user: not our service.
-            return SysdResult<JsonElement>.Fail(SysdOutcome.NotRunning, e.Message);
+            // The pipe exists but is not owned by this user: not our service.
+            pipe.Dispose();
+            return SysdResult<SysdResponse>.Fail(SysdOutcome.WrongServerUser, e.Message);
         }
 
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(_callTimeout);
-        var id = Interlocked.Increment(ref _nextId);
+        uint serverPid;
+        SecurityIdentifier? serverUser;
         try
         {
-            var request = JsonSerializer.SerializeToUtf8Bytes(new SysdRequest(id, method), SysdWire.JsonOptions);
-            await SysdWire.WriteFrameAsync(pipe, request, timeout.Token).ConfigureAwait(false);
-            var payload = await SysdWire.ReadFrameAsync(pipe, timeout.Token).ConfigureAwait(false);
-
-            SysdResponse? response;
-            try
-            {
-                response = JsonSerializer.Deserialize<SysdResponse>(payload, SysdWire.JsonOptions);
-            }
-            catch (JsonException e)
-            {
-                return SysdResult<JsonElement>.Fail(SysdOutcome.ProtocolError, $"the response is not valid JSON: {e.Message}");
-            }
-
-            if (response is null || response.Id != id)
-            {
-                return SysdResult<JsonElement>.Fail(SysdOutcome.ProtocolError, "the response does not match the request");
-            }
-
-            if (response.Error is { } error)
-            {
-                return SysdResult<JsonElement>.Fail(SysdOutcome.ServiceError, $"{error.Code}: {error.Message}");
-            }
-
-            if (response.Result is not { } result)
-            {
-                return SysdResult<JsonElement>.Fail(SysdOutcome.ProtocolError, "the response has neither result nor error");
-            }
-
-            return SysdResult<JsonElement>.Ok(result.Clone());
+            serverPid = SysdEndpoint.ServerProcessId(pipe.SafePipeHandle);
+            serverUser = SysdEndpoint.ProcessUser(serverPid);
         }
-        catch (SysdProtocolException e)
+        catch (System.ComponentModel.Win32Exception e)
         {
-            return SysdResult<JsonElement>.Fail(SysdOutcome.ProtocolError, e.Message);
+            pipe.Dispose();
+            return SysdResult<SysdResponse>.Fail(SysdOutcome.WrongServerUser, $"the server process cannot be identified: {e.Message}");
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+
+        if (serverUser != _user)
         {
-            return SysdResult<JsonElement>.Fail(SysdOutcome.ProtocolError, "the service did not answer in time");
+            pipe.Dispose();
+            return SysdResult<SysdResponse>.Fail(
+                SysdOutcome.WrongServerUser,
+                $"the pipe is served by process {serverPid}, which runs as another user");
         }
-        catch (IOException e)
-        {
-            return SysdResult<JsonElement>.Fail(SysdOutcome.ProtocolError, $"the connection failed: {e.Message}");
-        }
+
+        _pipe = pipe;
+        ServerPid = serverPid;
+        return null;
     }
+
+    private void Drop()
+    {
+        _pipe?.Dispose();
+        _pipe = null;
+        ServerPid = 0;
+    }
+
+    private static SysdResult<T> Unexpected<T>(SysdResult<SysdResponse> r) => r.IsOk
+        ? SysdResult<T>.Fail(SysdOutcome.ProtocolError, $"unexpected response {r.Value!.GetType().Name}")
+        : r.Cast<T>();
 }

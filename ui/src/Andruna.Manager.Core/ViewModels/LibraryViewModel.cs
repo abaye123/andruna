@@ -85,17 +85,16 @@ public sealed class LibraryViewModel : ObservableObject
             var list = await _service.Client.ListPackagesAsync();
             if (!list.IsOk)
             {
-                Problem = ServiceMessages.ForOutcome(list.Outcome, list.Detail, _service.Host.IsInstalled, _strings);
+                Problem = ServiceMessages.ForResult(list, _service.Host.IsInstalled, _strings);
                 return;
             }
 
             Problem = null;
-            foreach (var p in list.Value!.OrderBy(p => p.Label ?? p.Name, StringComparer.CurrentCultureIgnoreCase))
+            // Protocol version 1 reports package names only, so the tile shows
+            // the name and no version.
+            foreach (var p in list.Value!.OrderBy(p => p.Name, StringComparer.Ordinal))
             {
-                Packages.Add(new PackageTile(
-                    p.Name,
-                    string.IsNullOrWhiteSpace(p.Label) ? p.Name : p.Label,
-                    string.IsNullOrEmpty(p.VersionName) ? string.Empty : _strings.Format("PackageVersionFormat", p.VersionName)));
+                Packages.Add(new PackageTile(p.Name, p.Name, string.Empty));
             }
         }
         finally

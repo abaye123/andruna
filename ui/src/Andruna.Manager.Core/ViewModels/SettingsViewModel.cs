@@ -22,6 +22,7 @@ public sealed class SettingsViewModel : ObservableObject
     private ManagerSettings _settings;
     private string? _saveError;
     private string _serviceText;
+    private string _serviceDetail = string.Empty;
 
     public SettingsViewModel(SettingsStore store, ManagerSettings current, AppLanguage startupLanguage, AppIdentity identity, ServiceConnection service, IStrings strings)
     {
@@ -44,6 +45,21 @@ public sealed class SettingsViewModel : ObservableObject
         get => _serviceText;
         private set => SetProperty(ref _serviceText, value);
     }
+
+    /// <summary>Uptime, running app processes and process id; or what to do when the service is not available.</summary>
+    public string ServiceDetail
+    {
+        get => _serviceDetail;
+        private set
+        {
+            if (SetProperty(ref _serviceDetail, value))
+            {
+                OnPropertyChanged(nameof(HasServiceDetail));
+            }
+        }
+    }
+
+    public bool HasServiceDetail => !string.IsNullOrEmpty(ServiceDetail);
 
     /// <summary>Index into System, Hebrew, English (the order of <see cref="AppLanguage"/>).</summary>
     public int LanguageIndex
@@ -99,9 +115,25 @@ public sealed class SettingsViewModel : ObservableObject
     public async Task LoadServiceInfoAsync()
     {
         var snapshot = await _service.CheckAsync();
-        ServiceText = snapshot.State == ServiceState.Running
-            ? _strings.Format("AboutServiceRunningFormat", snapshot.Status!.Version)
-            : ServiceMessages.For(snapshot, _strings)!.Title;
+        if (snapshot.State == ServiceState.Running)
+        {
+            var status = snapshot.Status!;
+            ServiceText = _strings.Format("AboutServiceRunningFormat", status.Version);
+            ServiceDetail = _strings.Format("AboutServiceStatusFormat", FormatUptime(status.UptimeMs), status.Hosts, status.Pid);
+        }
+        else
+        {
+            var problem = ServiceMessages.For(snapshot, _strings)!;
+            ServiceText = problem.Title;
+            ServiceDetail = problem.Message;
+        }
+    }
+
+    /// <summary>Uptime as h:mm:ss; days are counted in the hours.</summary>
+    public static string FormatUptime(ulong ms)
+    {
+        var t = TimeSpan.FromMilliseconds(Math.Min(ms, (ulong)TimeSpan.MaxValue.TotalMilliseconds - 1));
+        return $"{(long)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}";
     }
 
     private void Update(ManagerSettings next)

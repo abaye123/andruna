@@ -52,7 +52,7 @@
     <value>השירות של Andruna אינו מותקן</value>
   </data>
   <data name="ServiceNotInstalledMessage" xml:space="preserve">
-    <value>גרסת התצוגה המקדימה הזו עדיין לא כוללת את השירות שמריץ אפליקציות Android ‏(andruna-sysd.exe). עד שיתווסף, אי אפשר להתקין או לפתוח אפליקציות.</value>
+    <value>הקובץ andruna-sysd.exe, השירות שמריץ אפליקציות Android, חסר בתיקייה של Andruna. התקינו מחדש את Andruna כדי לתקן את זה.</value>
   </data>
   <data name="ServiceNotRunningTitle" xml:space="preserve">
     <value>השירות של Andruna אינו פועל</value>
@@ -200,5 +200,50 @@
   </data>
   <data name="AboutNoticesButton" xml:space="preserve">
     <value>הודעות צד שלישי</value>
+  </data>
+  <data name="ServiceUntrustedTitle" xml:space="preserve">
+    <value>Andruna לא התחברה לשירות</value>
+  </data>
+  <data name="ServiceUntrustedMessage" xml:space="preserve">
+    <value>נקודת החיבור של השירות של Andruna שייכת לחשבון משתמש אחר במחשב הזה, ולכן Andruna לא סומכת עליה. התנתקו והתחברו שוב, או הפעילו מחדש את המחשב.</value>
+  </data>
+  <data name="ServiceErrorTitle" xml:space="preserve">
+    <value>השירות של Andruna לא הצליח לבצע את הפעולה</value>
+  </data>
+  <data name="SysdErrorUnsupportedVersion" xml:space="preserve">
+    <value>השירות שייך לגרסה אחרת של Andruna מהאפליקציה הזו. התקינו מחדש את Andruna.</value>
+  </data>
+  <data name="SysdErrorMalformed" xml:space="preserve">
+    <value>השירות לא הצליח לקרוא את הבקשה מהאפליקציה הזו. התקינו מחדש את Andruna.</value>
+  </data>
+  <data name="SysdErrorUnknownRequest" xml:space="preserve">
+    <value>השירות לא תומך בבקשה הזו. ייתכן שהוא מגרסה ישנה יותר של Andruna; התקינו מחדש את Andruna.</value>
+  </data>
+  <data name="SysdErrorInvalidPackageName" xml:space="preserve">
+    <value>זה לא שם חבילה תקין של Android.</value>
+  </data>
+  <data name="SysdErrorNotInstalled" xml:space="preserve">
+    <value>האפליקציה הזו אינה מותקנת.</value>
+  </data>
+  <data name="SysdErrorNotRunning" xml:space="preserve">
+    <value>האפליקציה הזו אינה פועלת.</value>
+  </data>
+  <data name="SysdErrorNoWindow" xml:space="preserve">
+    <value>לאפליקציה הזו אין חלון פתוח.</value>
+  </data>
+  <data name="SysdErrorHostStartFailed" xml:space="preserve">
+    <value>לא ניתן היה להפעיל את התהליך של האפליקציה. הפרטים נמצאים ביומן של Andruna.</value>
+  </data>
+  <data name="SysdErrorBusy" xml:space="preserve">
+    <value>השירות עסוק. נסו שוב בעוד רגע.</value>
+  </data>
+  <data name="SysdErrorInternal" xml:space="preserve">
+    <value>משהו השתבש בתוך השירות. הפרטים נמצאים ביומן של Andruna.</value>
+  </data>
+  <data name="SysdErrorOther" xml:space="preserve">
+    <value>השירות דיווח על שגיאה שהגרסה הזו של האפליקציה לא מכירה (קוד {0}).</value>
+  </data>
+  <data name="AboutServiceStatusFormat" xml:space="preserve">
+    <value>פועל כבר {0}, תהליכי אפליקציות פעילים: {1}, מזהה תהליך {2}</value>
   </data>
 </root>

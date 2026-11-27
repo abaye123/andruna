@@ -52,7 +52,7 @@
     <value>The Andruna service isn't installed</value>
   </data>
   <data name="ServiceNotInstalledMessage" xml:space="preserve">
-    <value>This preview doesn't include the service that runs Android apps yet (andruna-sysd.exe). Until it's added, apps can't be installed or opened.</value>
+    <value>andruna-sysd.exe, the service that runs Android apps, is missing from the Andruna folder. Reinstall Andruna to fix this.</value>
   </data>
   <data name="ServiceNotRunningTitle" xml:space="preserve">
     <value>The Andruna service isn't running</value>
@@ -200,5 +200,50 @@
   </data>
   <data name="AboutNoticesButton" xml:space="preserve">
     <value>Third-party notices</value>
+  </data>
+  <data name="ServiceUntrustedTitle" xml:space="preserve">
+    <value>Andruna didn't connect to the service</value>
+  </data>
+  <data name="ServiceUntrustedMessage" xml:space="preserve">
+    <value>The connection point of the Andruna service belongs to another user account on this PC, so Andruna doesn't trust it. Sign out and back in, or restart your PC.</value>
+  </data>
+  <data name="ServiceErrorTitle" xml:space="preserve">
+    <value>The Andruna service couldn't do this</value>
+  </data>
+  <data name="SysdErrorUnsupportedVersion" xml:space="preserve">
+    <value>The service is from a different version of Andruna than this app. Reinstall Andruna.</value>
+  </data>
+  <data name="SysdErrorMalformed" xml:space="preserve">
+    <value>The service couldn't read the request from this app. Reinstall Andruna.</value>
+  </data>
+  <data name="SysdErrorUnknownRequest" xml:space="preserve">
+    <value>The service doesn't support this request. It may be from an older version of Andruna; reinstall Andruna.</value>
+  </data>
+  <data name="SysdErrorInvalidPackageName" xml:space="preserve">
+    <value>This isn't a valid Android package name.</value>
+  </data>
+  <data name="SysdErrorNotInstalled" xml:space="preserve">
+    <value>This app isn't installed.</value>
+  </data>
+  <data name="SysdErrorNotRunning" xml:space="preserve">
+    <value>This app isn't running.</value>
+  </data>
+  <data name="SysdErrorNoWindow" xml:space="preserve">
+    <value>This app has no open window.</value>
+  </data>
+  <data name="SysdErrorHostStartFailed" xml:space="preserve">
+    <value>The app's process couldn't be started. The details are in the Andruna log.</value>
+  </data>
+  <data name="SysdErrorBusy" xml:space="preserve">
+    <value>The service is busy. Try again in a moment.</value>
+  </data>
+  <data name="SysdErrorInternal" xml:space="preserve">
+    <value>Something went wrong inside the service. The details are in the Andruna log.</value>
+  </data>
+  <data name="SysdErrorOther" xml:space="preserve">
+    <value>The service reported an error this version of the app doesn't know (code {0}).</value>
+  </data>
+  <data name="AboutServiceStatusFormat" xml:space="preserve">
+    <value>Up for {0}, app processes running: {1}, process ID {2}</value>
   </data>
 </root>

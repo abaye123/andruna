@@ -16,18 +16,40 @@ public static class ServiceMessages
             strings.Get("ServiceNotInstalledTitle"), strings.Get("ServiceNotInstalledMessage")),
         ServiceState.NotRunning => new UserMessage(
             strings.Get("ServiceNotRunningTitle"), strings.Get("ServiceNotRunningMessage")),
+        ServiceState.Untrusted => new UserMessage(
+            strings.Get("ServiceUntrustedTitle"), strings.Get("ServiceUntrustedMessage")),
+        _ when snapshot.ErrorCode is { } code => new UserMessage(
+            strings.Get("ServiceErrorTitle"), ForError(code, strings)),
         _ => new UserMessage(
             strings.Get("ServiceFaultedTitle"), strings.Format("ServiceFaultedMessage", snapshot.Detail ?? string.Empty)),
     };
 
     /// <summary>The same as <see cref="For"/> for a failed call result.</summary>
-    public static UserMessage ForOutcome(SysdOutcome outcome, string? detail, bool installed, IStrings strings) =>
+    public static UserMessage ForResult<T>(SysdResult<T> result, bool installed, IStrings strings) =>
         For(new ServiceSnapshot(
-            outcome switch
+            result.Outcome switch
             {
                 SysdOutcome.NotRunning => installed ? ServiceState.NotRunning : ServiceState.NotInstalled,
+                SysdOutcome.WrongServerUser => ServiceState.Untrusted,
                 _ => ServiceState.Faulted,
             },
             null,
-            detail), strings)!;
+            result.Detail,
+            result.ErrorCode), strings)!;
+
+    /// <summary>What an Error response code means, in the user's language.</summary>
+    public static string ForError(SysdErrorCode code, IStrings strings) => code switch
+    {
+        SysdErrorCode.UnsupportedVersion => strings.Get("SysdErrorUnsupportedVersion"),
+        SysdErrorCode.Malformed => strings.Get("SysdErrorMalformed"),
+        SysdErrorCode.UnknownRequest => strings.Get("SysdErrorUnknownRequest"),
+        SysdErrorCode.InvalidPackageName => strings.Get("SysdErrorInvalidPackageName"),
+        SysdErrorCode.NotInstalled => strings.Get("SysdErrorNotInstalled"),
+        SysdErrorCode.NotRunning => strings.Get("SysdErrorNotRunning"),
+        SysdErrorCode.NoWindow => strings.Get("SysdErrorNoWindow"),
+        SysdErrorCode.HostStartFailed => strings.Get("SysdErrorHostStartFailed"),
+        SysdErrorCode.Busy => strings.Get("SysdErrorBusy"),
+        SysdErrorCode.Internal => strings.Get("SysdErrorInternal"),
+        _ => strings.Format("SysdErrorOther", (ushort)code),
+    };
 }
