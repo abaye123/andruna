@@ -1,3 +1,4 @@
+using Andruna.Manager.Core.Platform;
 using Andruna.Manager.Core.Settings;
 using Andruna.Manager.Localization;
 using Andruna.Manager.Pages;
@@ -15,7 +16,7 @@ public sealed partial class MainWindow : Window
 {
     private bool _syncingSelection;
 
-    public MainWindow(StartPage start)
+    public MainWindow(LaunchRequest start)
     {
         InitializeComponent();
 
@@ -42,7 +43,17 @@ public sealed partial class MainWindow : Window
         ApplyTheme(App.StartupSettings.Theme);
         Root.ActualThemeChanged += (_, _) => UpdateCaptionButtonColors();
 
-        switch (start.Page)
+        Open(start);
+
+#if DEBUG
+        DebugSnapshot.ScheduleIfRequested(Root);
+#endif
+    }
+
+    /// <summary>Shows the page a launch request names.</summary>
+    public void Open(LaunchRequest request)
+    {
+        switch (request.Page)
         {
             case "settings":
                 Nav.SelectedItem = SettingsItem;
@@ -51,18 +62,60 @@ public sealed partial class MainWindow : Window
                 Nav.SelectedItem = SettingsItem;
                 Navigate(typeof(NoticesPage), null);
                 break;
-            case "app" when start.Package is not null:
-                Navigate(typeof(LibraryPage), null);
-                Navigate(typeof(AppPage), start.Package);
+            case "diagnostics":
+                Navigate(typeof(DiagnosticsPage), request.Package ?? string.Empty);
+                break;
+            case "app" when request.Package is not null:
+                if (ContentFrame.Content is null)
+                {
+                    Navigate(typeof(LibraryPage), null);
+                }
+
+                Navigate(typeof(AppPage), request.Package);
                 break;
             default:
-                Nav.SelectedItem = LibraryItem;
+                if (ContentFrame.Content is null || request.InstallFile is null)
+                {
+                    Nav.SelectedItem = LibraryItem;
+                }
+
                 break;
         }
+    }
 
-#if DEBUG
-        DebugSnapshot.ScheduleIfRequested(Root);
-#endif
+    /// <summary>Restores and activates the window (a second start of the manager, a crash dialog).</summary>
+    public void BringToFront()
+    {
+        if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } p)
+        {
+            p.Restore();
+        }
+
+        Activate();
+        NativeWindow.SetForeground(this);
+    }
+
+    /// <summary>Opens the install dialog for a package file (file association, drag and drop, picker).</summary>
+    public async void ShowInstall(string path)
+    {
+        if (ContentFrame.Content is null)
+        {
+            Nav.SelectedItem = LibraryItem;
+        }
+
+        // Started with a file (the file association): the dialog needs the loaded window.
+        if (Root.XamlRoot is null || !Root.IsLoaded)
+        {
+            var loaded = new TaskCompletionSource();
+            Root.Loaded += (_, _) => loaded.TrySetResult();
+            await loaded.Task;
+        }
+
+        await InstallDialog.ShowAsync(Root.XamlRoot!, path, Root.ActualTheme);
+        if (ContentFrame.Content is LibraryPage library)
+        {
+            await library.Vm.RefreshCommand.ExecuteAsync();
+        }
     }
 
     public void ApplyTheme(AppTheme theme)
@@ -102,6 +155,9 @@ public sealed partial class MainWindow : Window
             case "settings":
                 Navigate(typeof(SettingsPage), null);
                 break;
+            case "diagnostics":
+                Navigate(typeof(DiagnosticsPage), null);
+                break;
         }
     }
 
@@ -119,6 +175,7 @@ public sealed partial class MainWindow : Window
         _syncingSelection = true;
         Nav.SelectedItem = e.SourcePageType == typeof(SettingsPage) || e.SourcePageType == typeof(NoticesPage) ? SettingsItem
             : e.SourcePageType == typeof(LibraryPage) ? LibraryItem
+            : e.SourcePageType == typeof(DiagnosticsPage) ? DiagnosticsItem
             : null;
         _syncingSelection = false;
     }

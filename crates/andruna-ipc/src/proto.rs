@@ -22,6 +22,13 @@
 use std::fmt;
 use std::io::{self, Read, Write};
 
+mod events;
+
+pub use events::{
+    Event, EventKind, MAX_MISSING_FUNCTIONS, MAX_WAIT_MS, MissingFunction, Notification,
+    is_valid_activity_name,
+};
+
 /// The protocol version this crate speaks.
 pub const PROTOCOL_VERSION: u16 = 1;
 
@@ -40,12 +47,23 @@ mod kind {
     pub const START_PACKAGE: u16 = 0x0003;
     pub const FOCUS_WINDOW: u16 = 0x0004;
     pub const LIST_PACKAGES: u16 = 0x0005;
+    /// Defined with the package manager messages (same body there).
+    pub const START_ACTIVITY: u16 = 0x000A;
+
+    // 0x0010..=0x001F (responses 0x8010..=0x801F): events, crash reports,
+    // diagnostics. See proto/events.rs.
+    pub const WAIT_EVENTS: u16 = 0x0010;
+    pub const GET_MISSING_FUNCTIONS: u16 = 0x0011;
+    pub const REPORT_MISSING_FUNCTIONS: u16 = 0x0012;
 
     pub const PONG: u16 = 0x8001;
     pub const STATUS_REPLY: u16 = 0x8002;
     pub const STARTED: u16 = 0x8003;
     pub const FOCUSED: u16 = 0x8004;
     pub const PACKAGES: u16 = 0x8005;
+    pub const EVENTS: u16 = 0x8010;
+    pub const MISSING_FUNCTIONS: u16 = 0x8011;
+    pub const REPORTED: u16 = 0x8012;
     pub const ERROR: u16 = 0x80FF;
 }
 
@@ -64,6 +82,28 @@ pub enum Request {
     FocusWindow { package: String },
     /// The installed packages; answered with [`Response::Packages`].
     ListPackages,
+    /// Events after `after` (the sequence number of the last event the
+    /// client saw) of the sysd instance `epoch`; answered with
+    /// [`Response::Events`] as soon as there is one, or empty after
+    /// `timeout_ms` (at most [`MAX_WAIT_MS`]). `after == u64::MAX` asks for
+    /// the current position only. A connection that sends this is passive:
+    /// it does not keep sysd running.
+    WaitEvents {
+        epoch: u64,
+        after: u64,
+        timeout_ms: u32,
+    },
+    /// The missing-function counters recorded for a package; answered with
+    /// [`Response::MissingFunctions`].
+    GetMissingFunctions { package: String },
+    /// From a host process: the missing functions its app called since the
+    /// last report. sysd takes the package from the caller's process id,
+    /// never from the message; answered with [`Response::Reported`].
+    ReportMissingFunctions { entries: Vec<MissingFunction> },
+    /// Start one activity of a package (`activity` as in the manifest,
+    /// either fully qualified or starting with `.`); answered with
+    /// [`Response::Started`].
+    StartActivity { package: String, activity: String },
 }
 
 /// State reported by [`Response::Status`].
@@ -102,6 +142,24 @@ pub enum Response {
         /// Installed package names, sorted.
         packages: Vec<String>,
     },
+    Events {
+        /// Identifies the sysd instance; sequence numbers restart with it.
+        epoch: u64,
+        /// The `after` to send next: the last event's sequence number.
+        next: u64,
+        /// True when events between the requested `after` and the first
+        /// event returned were dropped, or the epoch changed.
+        missed: bool,
+        events: Vec<Event>,
+    },
+    MissingFunctions {
+        /// When the counters were last updated, in milliseconds since the
+        /// Unix epoch; 0 when nothing was recorded.
+        updated_ms: u64,
+        /// Most-called first.
+        entries: Vec<MissingFunction>,
+    },
+    Reported,
     Error {
         code: ErrorCode,
         message: String,
@@ -132,6 +190,9 @@ pub enum ErrorCode {
     Busy,
     /// Any other failure inside sysd.
     Internal,
+    /// The caller may not make this request (for example a report from a
+    /// process that is not a host sysd started).
+    NotPermitted,
     /// A code this version does not know.
     Other(u16),
 }
@@ -149,6 +210,7 @@ impl ErrorCode {
             Self::HostStartFailed => 8,
             Self::Busy => 9,
             Self::Internal => 10,
+            Self::NotPermitted => 32,
             Self::Other(c) => c,
         }
     }
@@ -165,6 +227,7 @@ impl ErrorCode {
             8 => Self::HostStartFailed,
             9 => Self::Busy,
             10 => Self::Internal,
+            32 => Self::NotPermitted,
             c => Self::Other(c),
         }
     }
@@ -250,6 +313,9 @@ impl Writer {
     fn u64(&mut self, v: u64) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
+    fn i32(&mut self, v: i32) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
     /// Strings longer than `u16::MAX` bytes are cut at a character boundary;
     /// no field this protocol defines gets near that.
     fn str(&mut self, s: &str) {
@@ -288,6 +354,9 @@ impl<'a> Reader<'a> {
         let mut a = [0u8; 8];
         a.copy_from_slice(self.take(8)?);
         Ok(u64::from_le_bytes(a))
+    }
+    fn i32(&mut self) -> Result<i32, DecodeError> {
+        Ok(self.u32()? as i32)
     }
     fn bool(&mut self) -> Result<bool, DecodeError> {
         match self.u8()? {
@@ -353,6 +422,33 @@ impl Request {
                 w
             }
             Self::ListPackages => Writer::new(kind::LIST_PACKAGES, id),
+            Self::WaitEvents {
+                epoch,
+                after,
+                timeout_ms,
+            } => {
+                let mut w = Writer::new(kind::WAIT_EVENTS, id);
+                w.u64(*epoch);
+                w.u64(*after);
+                w.u32(*timeout_ms);
+                w
+            }
+            Self::GetMissingFunctions { package } => {
+                let mut w = Writer::new(kind::GET_MISSING_FUNCTIONS, id);
+                w.str(package);
+                w
+            }
+            Self::ReportMissingFunctions { entries } => {
+                let mut w = Writer::new(kind::REPORT_MISSING_FUNCTIONS, id);
+                events::write_missing(&mut w, entries);
+                w
+            }
+            Self::StartActivity { package, activity } => {
+                let mut w = Writer::new(kind::START_ACTIVITY, id);
+                w.str(package);
+                w.str(activity);
+                w
+            }
         };
         w.0
     }
@@ -366,6 +462,19 @@ impl Request {
             kind::START_PACKAGE => Self::StartPackage { package: r.str()? },
             kind::FOCUS_WINDOW => Self::FocusWindow { package: r.str()? },
             kind::LIST_PACKAGES => Self::ListPackages,
+            kind::WAIT_EVENTS => Self::WaitEvents {
+                epoch: r.u64()?,
+                after: r.u64()?,
+                timeout_ms: r.u32()?,
+            },
+            kind::GET_MISSING_FUNCTIONS => Self::GetMissingFunctions { package: r.str()? },
+            kind::REPORT_MISSING_FUNCTIONS => Self::ReportMissingFunctions {
+                entries: events::read_missing(&mut r)?,
+            },
+            kind::START_ACTIVITY => Self::StartActivity {
+                package: r.str()?,
+                activity: r.str()?,
+            },
             k => return Err(DecodeError::UnknownKind(k)),
         };
         r.end()?;
@@ -416,6 +525,32 @@ impl Response {
                 }
                 w
             }
+            Self::Events {
+                epoch,
+                next,
+                missed,
+                events,
+            } => {
+                let mut w = Writer::new(kind::EVENTS, id);
+                w.u64(*epoch);
+                w.u64(*next);
+                w.u8(u8::from(*missed));
+                w.u32(events.len() as u32);
+                for e in events {
+                    events::write_event(&mut w, e);
+                }
+                w
+            }
+            Self::MissingFunctions {
+                updated_ms,
+                entries,
+            } => {
+                let mut w = Writer::new(kind::MISSING_FUNCTIONS, id);
+                w.u64(*updated_ms);
+                events::write_missing(&mut w, entries);
+                w
+            }
+            Self::Reported => Writer::new(kind::REPORTED, id),
             Self::Error { code, message } => {
                 let mut w = Writer::new(kind::ERROR, id);
                 w.u16(code.to_u16());
@@ -457,6 +592,22 @@ impl Response {
                 }
                 Self::Packages { packages }
             }
+            kind::EVENTS => {
+                let epoch = r.u64()?;
+                let next = r.u64()?;
+                let missed = r.bool()?;
+                Self::Events {
+                    epoch,
+                    next,
+                    missed,
+                    events: events::read_events(&mut r)?,
+                }
+            }
+            kind::MISSING_FUNCTIONS => Self::MissingFunctions {
+                updated_ms: r.u64()?,
+                entries: events::read_missing(&mut r)?,
+            },
+            kind::REPORTED => Self::Reported,
             kind::ERROR => Self::Error {
                 code: ErrorCode::from_u16(r.u16()?),
                 message: r.str()?,

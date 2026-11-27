@@ -30,11 +30,22 @@ SHA-256, or taken from `ANDRUNA_NSIS` (a folder with `makensis.exe`).
   rights (`RequestExecutionLevel user`).
 - Refuses to run before Windows 11, and when it has no build for the PC's
   processor; otherwise installs the matching architecture.
+- Ends running Andruna processes of this user that run from the install
+  folder (manager, sysd, apps) before it replaces files.
 - Creates the Start menu shortcut "Andruna" for `Andruna.Manager.exe`.
+- Registers the package file types per user (P-3,
+  [ADR 0034](../docs/decisions/0034-file-association-and-shortcuts.md)):
+  ProgID `Andruna.Package` ("Install with Andruna" runs
+  `Andruna.Manager.exe --install "%1"`) under `OpenWithProgids` of `.apk`,
+  `.apks`, `.xapk` and `.apkm`; it becomes the default only for an
+  extension that has no default in `HKCU\Software\Classes`.
 - Registers the uninstaller in Windows "Installed apps" (HKCU).
-- The uninstaller removes the program folder, the shortcut and the
-  registration, then asks whether to remove installed Android apps and their
-  data in `%LOCALAPPDATA%\Andruna` (default: keep; `/S` keeps them).
+- The uninstaller ends Andruna's processes, removes the manager's
+  notification registration (`Andruna.Manager.exe --unregister`), the
+  program folder, the shortcut, the file types (only values it added) and
+  the uninstall registration, then asks whether to remove installed Android
+  apps and their data in `%LOCALAPPDATA%\Andruna` (default: keep; `/S`
+  keeps them).
 - `/S` installs or uninstalls silently.
 
 ## Slots for the Rust executables

@@ -11,11 +11,12 @@
 use crate::l10n::{self, Lang};
 use crate::{Layout, info, sys, warn};
 
-pub fn run(layout: &Layout, package: &str) -> i32 {
+pub fn run(layout: &Layout, package: &str, activity: Option<&str>) -> i32 {
     let _ = crate::log::init(&layout.logs_dir(), "host");
     warn!(
         "placeholder_host",
         package = package,
+        activity = activity.unwrap_or("-"),
         detail = "andruna-app does not exist yet; this process runs no app code"
     );
     let lang = Lang::current();

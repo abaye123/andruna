@@ -155,6 +155,24 @@ public class ServiceConnectionTests
 
         public Task<SysdResult<bool>> FocusWindowAsync(string package, CancellationToken ct = default) =>
             (current() ?? Nothing).FocusWindowAsync(package, ct);
+
+        public Task<SysdResult<IReadOnlyList<PackageInfo>>> ListPackageInfoAsync(string locale, CancellationToken ct = default) =>
+            (current() ?? Nothing).ListPackageInfoAsync(locale, ct);
+
+        public Task<SysdResult<PackageDetails>> InspectPackageAsync(IReadOnlyList<string> paths, string locale, CancellationToken ct = default) =>
+            (current() ?? Nothing).InspectPackageAsync(paths, locale, ct);
+
+        public Task<SysdResult<InstallOutcome>> InstallPackageAsync(IReadOnlyList<string> paths, CancellationToken ct = default) =>
+            (current() ?? Nothing).InstallPackageAsync(paths, ct);
+
+        public Task<SysdResult<bool>> UninstallPackageAsync(string package, bool keepData, CancellationToken ct = default) =>
+            (current() ?? Nothing).UninstallPackageAsync(package, keepData, ct);
+
+        public Task<SysdResult<MissingFunctionReport>> GetMissingFunctionsAsync(string package, CancellationToken ct = default) =>
+            (current() ?? Nothing).GetMissingFunctionsAsync(package, ct);
+
+        public Task<SysdResult<SysdEventBatch>> WaitEventsAsync(ulong epoch, ulong after, uint timeoutMs, CancellationToken ct = default) =>
+            (current() ?? Nothing).WaitEventsAsync(epoch, after, timeoutMs, ct);
     }
 }
 
@@ -218,15 +236,15 @@ public class LibraryViewModelTests
     }
 
     [Fact]
-    public void InstallRequest_SaysInstallingIsNotAvailable_AndNamesTheFile()
+    public async Task OlderService_ListsNamesOnly_AndSaysSo()
     {
-        using var client = new SysdClient("x");
-        var vm = new LibraryViewModel(new ServiceConnection(client, new FakeHost(false)), Strings);
+        await using var sysd = FakeSysd.Running("org.example.one");
+        var vm = new LibraryViewModel(new ServiceConnection(sysd.Client(), new FakeHost(true)), Strings);
 
-        var answer = vm.DescribeInstallRequest(@"C:\Users\someone\Downloads\app-release.apk");
+        await vm.RefreshAsync();
 
-        Assert.Equal("InstallUnavailableTitle", answer.Title);
-        Assert.Equal("InstallUnavailableMessage:app-release.apk", answer.Message);
+        Assert.True(vm.NamesOnly);
+        Assert.False(vm.HasProblem);
     }
 }
 
@@ -238,7 +256,7 @@ public class AppPageViewModelTests
     public async Task KnownPackage_ShowsWhatSysdReported()
     {
         await using var sysd = FakeSysd.Running("org.example.one");
-        var vm = new AppPageViewModel("org.example.one", new ServiceConnection(sysd.Client(), new FakeHost(true)), Strings);
+        var vm = new AppPageViewModel("org.example.one", new ServiceConnection(sysd.Client(), new FakeHost(true)), Strings, TestServices.AppPage());
 
         await vm.LoadAsync();
 
@@ -246,14 +264,18 @@ public class AppPageViewModelTests
         Assert.True(vm.IsInstalled);
         Assert.Equal("org.example.one", vm.Title);
         Assert.Equal("AppVersionUnknown", vm.VersionText);
-        Assert.False(vm.ActionsAvailable);
+
+        // Names only: pinning needs the AppUserModelID from ListPackageInfo; clearing data has no request yet.
+        Assert.True(vm.CanOpen);
+        Assert.False(vm.CanPin);
+        Assert.False(vm.CanClearData);
     }
 
     [Fact]
     public async Task UnknownPackage_IsNotFound()
     {
         await using var sysd = FakeSysd.Running();
-        var vm = new AppPageViewModel("org.example.gone", new ServiceConnection(sysd.Client(), new FakeHost(true)), Strings);
+        var vm = new AppPageViewModel("org.example.gone", new ServiceConnection(sysd.Client(), new FakeHost(true)), Strings, TestServices.AppPage());
 
         await vm.LoadAsync();
 
@@ -266,7 +288,7 @@ public class AppPageViewModelTests
     public async Task NoService_ShowsPackageNameOnly()
     {
         var client = new SysdClient("andruna-test-absent-" + Guid.NewGuid().ToString("N"), TimeSpan.FromMilliseconds(100));
-        var vm = new AppPageViewModel("org.example.one", new ServiceConnection(client, new FakeHost(true, () => false)), Strings);
+        var vm = new AppPageViewModel("org.example.one", new ServiceConnection(client, new FakeHost(true, () => false)), Strings, TestServices.AppPage());
 
         await vm.LoadAsync();
 

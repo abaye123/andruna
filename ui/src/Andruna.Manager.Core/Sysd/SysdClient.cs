@@ -15,6 +15,28 @@ public interface ISysdClient
     Task<SysdResult<SysdResponse.Started>> StartPackageAsync(string package, CancellationToken ct = default);
 
     Task<SysdResult<bool>> FocusWindowAsync(string package, CancellationToken ct = default);
+
+    /// <summary>The installed packages with label, version, icon and size (ListPackageInfo, 0x0009).</summary>
+    Task<SysdResult<IReadOnlyList<PackageInfo>>> ListPackageInfoAsync(string locale, CancellationToken ct = default);
+
+    /// <summary>Reads and verifies package files without installing them (InspectPackage, 0x0006).</summary>
+    Task<SysdResult<PackageDetails>> InspectPackageAsync(IReadOnlyList<string> paths, string locale, CancellationToken ct = default);
+
+    /// <summary>Installs or updates a package (InstallPackage, 0x0007). Can take minutes (compilation).</summary>
+    Task<SysdResult<InstallOutcome>> InstallPackageAsync(IReadOnlyList<string> paths, CancellationToken ct = default);
+
+    /// <summary>Removes a package (UninstallPackage, 0x0008).</summary>
+    Task<SysdResult<bool>> UninstallPackageAsync(string package, bool keepData, CancellationToken ct = default);
+
+    /// <summary>The missing-function counters of a package (GetMissingFunctions, 0x0011).</summary>
+    Task<SysdResult<MissingFunctionReport>> GetMissingFunctionsAsync(string package, CancellationToken ct = default);
+
+    /// <summary>
+    /// Long poll on the event stream (WaitEvents, 0x0010). The connection that
+    /// sends it no longer keeps sysd running, so it is meant for a client of
+    /// its own.
+    /// </summary>
+    Task<SysdResult<SysdEventBatch>> WaitEventsAsync(ulong epoch, ulong after, uint timeoutMs, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -96,11 +118,54 @@ public sealed class SysdClient : ISysdClient, IDisposable
         return r.Value is SysdResponse.Focused ? SysdResult<bool>.Ok(true) : Unexpected<bool>(r);
     }
 
+    public async Task<SysdResult<IReadOnlyList<PackageInfo>>> ListPackageInfoAsync(string locale, CancellationToken ct = default)
+    {
+        var r = await RequestAsync(SysdRequest.ListPackageInfo(locale), ct).ConfigureAwait(false);
+        return r.Value is SysdResponse.PackageInfos p
+            ? SysdResult<IReadOnlyList<PackageInfo>>.Ok(p.Value)
+            : Unexpected<IReadOnlyList<PackageInfo>>(r);
+    }
+
+    public async Task<SysdResult<PackageDetails>> InspectPackageAsync(IReadOnlyList<string> paths, string locale, CancellationToken ct = default)
+    {
+        var r = await RequestAsync(SysdRequest.InspectPackage(paths, locale), ct, InstallTimeout).ConfigureAwait(false);
+        return r.Value is SysdResponse.Details d ? SysdResult<PackageDetails>.Ok(d.Value) : Unexpected<PackageDetails>(r);
+    }
+
+    public async Task<SysdResult<InstallOutcome>> InstallPackageAsync(IReadOnlyList<string> paths, CancellationToken ct = default)
+    {
+        var r = await RequestAsync(SysdRequest.InstallPackage(paths), ct, InstallTimeout).ConfigureAwait(false);
+        return r.Value is SysdResponse.Installed i ? SysdResult<InstallOutcome>.Ok(i.Value) : Unexpected<InstallOutcome>(r);
+    }
+
+    public async Task<SysdResult<bool>> UninstallPackageAsync(string package, bool keepData, CancellationToken ct = default)
+    {
+        var r = await RequestAsync(SysdRequest.UninstallPackage(package, keepData), ct, InstallTimeout).ConfigureAwait(false);
+        return r.Value is SysdResponse.Uninstalled ? SysdResult<bool>.Ok(true) : Unexpected<bool>(r);
+    }
+
+    public async Task<SysdResult<MissingFunctionReport>> GetMissingFunctionsAsync(string package, CancellationToken ct = default)
+    {
+        var r = await RequestAsync(SysdRequest.GetMissingFunctions(package), ct).ConfigureAwait(false);
+        return r.Value is SysdResponse.MissingFunctions m ? SysdResult<MissingFunctionReport>.Ok(m.Value) : Unexpected<MissingFunctionReport>(r);
+    }
+
+    public async Task<SysdResult<SysdEventBatch>> WaitEventsAsync(ulong epoch, ulong after, uint timeoutMs, CancellationToken ct = default)
+    {
+        // The answer may take the whole wait; the call timeout comes on top.
+        var r = await RequestAsync(SysdRequest.WaitEvents(epoch, after, timeoutMs), ct, TimeSpan.FromMilliseconds(timeoutMs) + _callTimeout)
+            .ConfigureAwait(false);
+        return r.Value is SysdResponse.Events e ? SysdResult<SysdEventBatch>.Ok(e.Value) : Unexpected<SysdEventBatch>(r);
+    }
+
+    /// <summary>How long install, inspect and uninstall may take (dex2oat runs during the call).</summary>
+    public static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(10);
+
     /// <summary>
     /// Sends one request and returns the decoded response. An Error response
     /// becomes <see cref="SysdOutcome.ServiceError"/> with its code.
     /// </summary>
-    public async Task<SysdResult<SysdResponse>> RequestAsync(SysdRequest request, CancellationToken ct = default)
+    public async Task<SysdResult<SysdResponse>> RequestAsync(SysdRequest request, CancellationToken ct = default, TimeSpan? timeout = null)
     {
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -108,10 +173,10 @@ public sealed class SysdClient : ISysdClient, IDisposable
             // A kept connection may have been closed by sysd (idle exit,
             // restart); then one fresh connection is tried, as the launcher does.
             var reused = _pipe is not null;
-            var (result, closed) = await RequestOnceAsync(request, ct).ConfigureAwait(false);
+            var (result, closed) = await RequestOnceAsync(request, timeout ?? _callTimeout, ct).ConfigureAwait(false);
             if (reused && closed)
             {
-                (result, _) = await RequestOnceAsync(request, ct).ConfigureAwait(false);
+                (result, _) = await RequestOnceAsync(request, timeout ?? _callTimeout, ct).ConfigureAwait(false);
             }
 
             return result;
@@ -143,7 +208,7 @@ public sealed class SysdClient : ISysdClient, IDisposable
     }
 
     /// <summary>One attempt; <c>Closed</c> is true when the connection closed without an answer.</summary>
-    private async Task<(SysdResult<SysdResponse> Result, bool Closed)> RequestOnceAsync(SysdRequest request, CancellationToken ct)
+    private async Task<(SysdResult<SysdResponse> Result, bool Closed)> RequestOnceAsync(SysdRequest request, TimeSpan callTimeout, CancellationToken ct)
     {
         if (_pipe is null)
         {
@@ -157,7 +222,7 @@ public sealed class SysdClient : ISysdClient, IDisposable
         var pipe = _pipe!;
         var id = unchecked(++_nextId);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(_callTimeout);
+        timeout.CancelAfter(callTimeout);
         try
         {
             byte[] payload;

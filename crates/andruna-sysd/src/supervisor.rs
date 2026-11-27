@@ -14,12 +14,14 @@ use std::io;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use andruna_ipc::{ErrorCode, is_valid_package_name};
+use andruna_ipc::{ErrorCode, EventKind, is_valid_activity_name, is_valid_package_name};
 
 use crate::activity::Activity;
+use crate::events::Events;
 use crate::sys::{self, Job};
 use crate::{Layout, error, info, packages, warn};
 
@@ -49,6 +51,10 @@ pub struct Supervisor {
     /// Running hosts by package name: the process id.
     hosts: Mutex<HashMap<String, u32>>,
     activity: Arc<Activity>,
+    /// Crash reports go here.
+    events: Arc<Events>,
+    /// Set by [`Supervisor::shutdown`]: hosts ending after it did not crash.
+    stopping: AtomicBool,
 }
 
 impl Supervisor {
@@ -59,12 +65,54 @@ impl Supervisor {
             job: Job::new()?,
             hosts: Mutex::new(HashMap::new()),
             activity,
+            events: Arc::new(Events::new()),
+            stopping: AtomicBool::new(false),
         })
+    }
+
+    /// The event stream that host crashes are published to.
+    pub fn events(&self) -> &Arc<Events> {
+        &self.events
+    }
+
+    /// The package whose host process has this process id.
+    pub fn package_for_pid(&self, pid: u32) -> Option<String> {
+        self.hosts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(_, p)| **p == pid)
+            .map(|(name, _)| name.clone())
+    }
+
+    /// Starts one activity of `package`. When the package already runs, its
+    /// window is focused; delivering the activity to a running app needs the
+    /// activity manager, which does not exist yet.
+    pub fn start_activity(
+        self: &Arc<Self>,
+        package: &str,
+        activity: &str,
+    ) -> Result<(u32, bool), Failure> {
+        if !is_valid_activity_name(activity) {
+            return Err(Failure::new(
+                ErrorCode::InvalidPackageName,
+                format!("`{activity}` is not a valid activity name"),
+            ));
+        }
+        self.start_with(package, Some(activity))
     }
 
     /// Starts `package`, or focuses it when it already runs. Returns the
     /// host's process id and whether it was already running.
     pub fn start(self: &Arc<Self>, package: &str) -> Result<(u32, bool), Failure> {
+        self.start_with(package, None)
+    }
+
+    fn start_with(
+        self: &Arc<Self>,
+        package: &str,
+        activity: Option<&str>,
+    ) -> Result<(u32, bool), Failure> {
         if !is_valid_package_name(package) {
             return Err(Failure::new(
                 ErrorCode::InvalidPackageName,
@@ -95,11 +143,16 @@ impl Supervisor {
                 format!("{MAX_HOSTS} app processes are already running"),
             ));
         }
-        let mut child = Command::new(&self.host_exe)
+        let mut command = Command::new(&self.host_exe);
+        command
             .arg("--host")
             .arg(package)
             .arg("--root")
-            .arg(&self.layout.root)
+            .arg(&self.layout.root);
+        if let Some(a) = activity {
+            command.arg("--activity").arg(a);
+        }
+        let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -154,12 +207,20 @@ impl Supervisor {
                     }
                 }
                 match status {
-                    Ok(s) => info!(
-                        "host_exited",
-                        package = package,
-                        pid = pid,
-                        code = s.code().unwrap_or(-1)
-                    ),
+                    Ok(s) => {
+                        let code = s.code().unwrap_or(-1);
+                        info!("host_exited", package = package, pid = pid, code = code);
+                        // A host that ends on its own with a non-zero code
+                        // crashed; hosts ended by sysd's shutdown did not.
+                        if code != 0 && !this.stopping.load(Ordering::SeqCst) {
+                            this.events.publish(EventKind::AppCrashed {
+                                package: package.clone(),
+                                pid,
+                                exit_code: code as u32,
+                                reason: String::new(),
+                            });
+                        }
+                    }
                     Err(e) => warn!("host_wait_failed", package = package, pid = pid, error = e),
                 }
                 this.activity.host_exited();
@@ -214,6 +275,8 @@ impl Supervisor {
 
     /// Ends every host process.
     pub fn shutdown(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        self.events.stop();
         self.job.terminate(1);
     }
 }

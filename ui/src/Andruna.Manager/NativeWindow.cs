@@ -30,6 +30,12 @@ internal static class NativeWindow
         SetWindowLongPtrW(hwnd, GwlExStyle, (nint)((long)style | WsExLayoutRtl));
     }
 
+    /// <summary>Brings the window to the foreground (allowed when the activation came from the user).</summary>
+    public static void SetForeground(Window window) => SetForegroundWindow(Handle(window));
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern bool SetForegroundWindow(nint hwnd);
+
     [DllImport("user32.dll", ExactSpelling = true)]
     private static extern uint GetDpiForWindow(nint hwnd);
 

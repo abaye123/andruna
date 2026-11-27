@@ -1,7 +1,9 @@
-//! `andruna-launch.exe <package>`: what Start menu shortcuts run.
+//! `andruna-launch.exe <package>[/<activity>]`: what Start menu shortcuts
+//! and notification clicks run.
 //!
-//! Asks andruna-sysd to start the package, starting sysd first when it is
-//! not running, then exits
+//! Asks andruna-sysd to start the package (or one of its activities),
+//! starting sysd first when it is not running, makes sure the manager's
+//! notification bridge runs, then exits
 //! ([architecture](../../docs/spec/02-architecture.md#startup-of-an-app)).
 //! A windows-subsystem program, so no console window appears. Errors are
 //! shown in a task dialog in the user's language and reported by the exit
@@ -36,6 +38,8 @@ const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
 struct Args {
     package: String,
+    /// The activity, from `<package>/<activity>`.
+    activity: Option<String>,
     instance: String,
     root: Option<PathBuf>,
 }
@@ -81,12 +85,56 @@ fn parse_args() -> Result<Args, Failure> {
             _ => package = Some(a),
         }
     }
-    let package = package.ok_or_else(|| Failure::new("usage", 1))?;
+    let target: String = package.ok_or_else(|| Failure::new("usage", 1))?;
+    let (package, activity) = split_target(&target);
     Ok(Args {
         package,
+        activity,
         instance,
         root,
     })
+}
+
+/// Splits `<package>[/<activity>]` (Android's component name form). An
+/// activity of the form `.Name` is relative to the package.
+fn split_target(target: &str) -> (String, Option<String>) {
+    match target.split_once('/') {
+        Some((p, a)) => (p.to_string(), Some(a.to_string())),
+        None => (target.to_string(), None),
+    }
+}
+
+/// The manager's file name next to the launcher.
+const MANAGER_EXE: &str = "Andruna.Manager.exe";
+
+/// Makes sure the manager runs, in the background when no window is open:
+/// it shows the apps' notifications and the crash dialog. The manager holds
+/// the mutex `Local\Andruna.Manager.<user SID>` while it runs; when the
+/// mutex exists nothing is started. Only for the product instance of sysd,
+/// which is the one the manager talks to.
+fn ensure_manager(args: &Args, endpoint: &Endpoint) {
+    if args.instance != DEFAULT_INSTANCE || args.root.is_some() {
+        return;
+    }
+    let mutex = format!("Local\\Andruna.Manager.{}", endpoint.user().to_string_sid());
+    if sys::mutex_exists(&mutex) {
+        return;
+    }
+    let Some(exe) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(MANAGER_EXE)))
+        .filter(|p| p.is_file())
+    else {
+        return;
+    };
+    use std::os::windows::process::CommandExt;
+    let _ = Command::new(exe)
+        .arg("--background")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB)
+        .spawn();
 }
 
 /// Starts andruna-sysd from the launcher's own directory. It is started
@@ -170,9 +218,16 @@ fn start_package(args: &Args) -> Result<(), Failure> {
         attempt += 1;
         let mut client = connect(args, &endpoint)?;
         sys::allow_foreground(client.server_pid());
-        match client.request(&Request::StartPackage {
-            package: args.package.clone(),
-        }) {
+        let request = match &args.activity {
+            Some(activity) => Request::StartActivity {
+                package: args.package.clone(),
+                activity: activity.clone(),
+            },
+            None => Request::StartPackage {
+                package: args.package.clone(),
+            },
+        };
+        match client.request(&request) {
             Ok(r) => break r,
             Err(andruna_ipc::Error::Closed | andruna_ipc::Error::Io(_)) if attempt < 2 => {
                 std::thread::sleep(Duration::from_millis(100));
@@ -185,11 +240,19 @@ fn start_package(args: &Args) -> Result<(), Failure> {
         }
     };
     match resp {
-        Response::Started { .. } => Ok(()),
+        Response::Started { .. } => {
+            ensure_manager(args, &endpoint);
+            Ok(())
+        }
         Response::Error { code, message } => {
             let f = match code {
                 ErrorCode::NotInstalled => Failure::new("not_installed", 3),
+                ErrorCode::InvalidPackageName if args.activity.is_some() => {
+                    Failure::new("invalid_activity", 1)
+                        .arg("activity", args.activity.clone().unwrap_or_default())
+                }
                 ErrorCode::InvalidPackageName => Failure::new("invalid_package", 1),
+                ErrorCode::UnknownRequest => Failure::new("sysd_outdated", 3),
                 ErrorCode::HostStartFailed => Failure::new("host_failed", 3),
                 ErrorCode::Busy => Failure::new("busy", 3),
                 _ => Failure::new("internal", 3),
@@ -230,6 +293,13 @@ fn main() {
     let result = parse_args().and_then(|args| {
         if !andruna_ipc::is_valid_package_name(&args.package) {
             return Err(Failure::new("invalid_package", 1).arg("package", args.package.clone()));
+        }
+        if let Some(a) = &args.activity
+            && !andruna_ipc::is_valid_activity_name(a)
+        {
+            return Err(Failure::new("invalid_activity", 1)
+                .arg("package", args.package.clone())
+                .arg("activity", a.clone()));
         }
         start_package(&args)
     });

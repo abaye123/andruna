@@ -297,3 +297,169 @@ fn protocol_errors() {
 
     f.wait_counts((0, 0));
 }
+
+fn started_pid(r: Response) -> u32 {
+    match r {
+        Response::Started { pid, .. } => pid,
+        r => panic!("{r:?}"),
+    }
+}
+
+#[test]
+fn a_crashed_host_is_an_event_and_waiters_are_passive() {
+    use andruna_ipc::EventKind;
+    let f = Fixture::new("crash");
+    f.install("com.example.crash");
+    let mut waiter = f.client();
+    let (epoch, next) = match waiter
+        .request(&Request::WaitEvents {
+            epoch: 0,
+            after: u64::MAX,
+            timeout_ms: 0,
+        })
+        .unwrap()
+    {
+        Response::Events {
+            epoch,
+            next,
+            events,
+            ..
+        } => {
+            assert!(events.is_empty());
+            (epoch, next)
+        }
+        r => panic!("{r:?}"),
+    };
+    // The waiting connection does not count as activity.
+    f.wait_counts((0, 0));
+
+    let mut c = f.client();
+    let pid = started_pid(
+        c.request(&Request::StartActivity {
+            package: "com.example.crash".into(),
+            activity: ".Main".into(),
+        })
+        .unwrap(),
+    );
+    drop(c);
+    f.wait_counts((0, 1));
+    // Ended from outside with a non-zero code: a crash.
+    let killed = std::process::Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .output()
+        .unwrap();
+    assert!(killed.status.success(), "{killed:?}");
+    let events = match waiter
+        .request(&Request::WaitEvents {
+            epoch,
+            after: next,
+            timeout_ms: 10_000,
+        })
+        .unwrap()
+    {
+        Response::Events { events, missed, .. } => {
+            assert!(!missed);
+            events
+        }
+        r => panic!("{r:?}"),
+    };
+    assert_eq!(events.len(), 1);
+    match &events[0].kind {
+        EventKind::AppCrashed {
+            package,
+            pid: p,
+            exit_code,
+            ..
+        } => {
+            assert_eq!(package, "com.example.crash");
+            assert_eq!(*p, pid);
+            assert_ne!(*exit_code, 0);
+        }
+        k => panic!("{k:?}"),
+    }
+    let log = fs::read_to_string(f.root.join("logs").join("host.log")).unwrap();
+    assert!(log.contains("activity=.Main"), "{log}");
+}
+
+#[test]
+fn missing_functions_are_reported_only_by_hosts() {
+    use andruna_ipc::MissingFunction;
+    let f = Fixture::new("missing");
+    let mut c = f.client();
+    // This test process is not a host: refused.
+    match c
+        .request(&Request::ReportMissingFunctions {
+            entries: vec![MissingFunction {
+                name: "lx:x".into(),
+                calls: 1,
+            }],
+        })
+        .unwrap()
+    {
+        Response::Error {
+            code: ErrorCode::NotPermitted,
+            ..
+        } => {}
+        r => panic!("{r:?}"),
+    }
+    assert_eq!(
+        c.request(&Request::GetMissingFunctions {
+            package: "com.example.app".into()
+        })
+        .unwrap(),
+        Response::MissingFunctions {
+            updated_ms: 0,
+            entries: vec![]
+        }
+    );
+    // What a host reported (written through the same store) is read back.
+    andruna_sysd::diagnostics::add(
+        &f.root.join("diagnostics"),
+        "com.example.app",
+        &[MissingFunction {
+            name: "service:package.getInstalledModules".into(),
+            calls: 3,
+        }],
+    )
+    .unwrap();
+    match c
+        .request(&Request::GetMissingFunctions {
+            package: "com.example.app".into(),
+        })
+        .unwrap()
+    {
+        Response::MissingFunctions {
+            updated_ms,
+            entries,
+        } => {
+            assert!(updated_ms > 0);
+            assert_eq!(entries[0].calls, 3);
+        }
+        r => panic!("{r:?}"),
+    }
+    match c
+        .request(&Request::GetMissingFunctions {
+            package: "..".into(),
+        })
+        .unwrap()
+    {
+        Response::Error {
+            code: ErrorCode::InvalidPackageName,
+            ..
+        } => {}
+        r => panic!("{r:?}"),
+    }
+    match c
+        .request(&Request::StartActivity {
+            package: "com.example.app".into(),
+            activity: "a/b".into(),
+        })
+        .unwrap()
+    {
+        Response::Error {
+            code: ErrorCode::InvalidPackageName,
+            ..
+        } => {}
+        r => panic!("{r:?}"),
+    }
+}

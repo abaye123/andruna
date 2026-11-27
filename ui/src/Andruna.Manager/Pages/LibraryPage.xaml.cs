@@ -1,3 +1,4 @@
+using Andruna.Manager.Core.Platform;
 using Andruna.Manager.Core.ViewModels;
 using Andruna.Manager.Localization;
 using Microsoft.UI.Xaml;
@@ -14,7 +15,7 @@ public sealed partial class LibraryPage : Page
 {
     public LibraryPage()
     {
-        Vm = new LibraryViewModel(App.Service, Loc.Strings);
+        Vm = new LibraryViewModel(App.Service, Loc.Strings, App.Language);
         InitializeComponent();
         NavigationCacheMode = NavigationCacheMode.Required;
     }
@@ -43,7 +44,7 @@ public sealed partial class LibraryPage : Page
         var file = await picker.PickSingleFileAsync();
         if (file is not null)
         {
-            await ShowInstallAnswerAsync(file.Path);
+            App.MainWindow?.ShowInstall(file.Path);
         }
     }
 
@@ -52,6 +53,7 @@ public sealed partial class LibraryPage : Page
         if (e.DataView.Contains(StandardDataFormats.StorageItems))
         {
             e.AcceptedOperation = DataPackageOperation.Copy;
+            e.DragUIOverride.Caption = Loc.Get("InstallApkButton");
         }
     }
 
@@ -63,35 +65,18 @@ public sealed partial class LibraryPage : Page
         }
 
         var items = await e.DataView.GetStorageItemsAsync();
-        var file = items.OfType<StorageFile>().FirstOrDefault(f =>
-            LibraryViewModel.PackageFileTypes.Contains(Path.GetExtension(f.Path), StringComparer.OrdinalIgnoreCase));
+        var file = items.OfType<StorageFile>().FirstOrDefault(f => LaunchRequest.IsPackageFile(f.Path));
         if (file is not null)
         {
-            await ShowInstallAnswerAsync(file.Path);
+            App.MainWindow?.ShowInstall(file.Path);
         }
-    }
-
-    private async Task ShowInstallAnswerAsync(string path)
-    {
-        var answer = Vm.DescribeInstallRequest(path);
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = answer.Title,
-            Content = new TextBlock { Text = answer.Message, TextWrapping = TextWrapping.Wrap },
-            CloseButtonText = Loc.Get("DialogClose"),
-            DefaultButton = ContentDialogButton.Close,
-            FlowDirection = App.FlowDirection,
-            RequestedTheme = ActualTheme,
-        };
-        await dialog.ShowAsync();
     }
 
     private void OnPackageClick(object sender, ItemClickEventArgs e)
     {
         if (e.ClickedItem is PackageTile tile)
         {
-            App.MainWindow?.OpenApp(tile.PackageName);
+            App.MainWindow?.Open(new LaunchRequest("app", tile.PackageName));
         }
     }
 }

@@ -15,7 +15,14 @@ What exists now:
 - **Idle shutdown**: exits 30 s (`--idle-timeout-ms`) after the last client
   disconnected and the last host process ended.
 - **Pipe server** with the protocol of [andruna-ipc](../andruna-ipc/README.md):
-  ping, status, start package, focus window, list packages.
+  ping, status, start package or activity, focus window, list packages,
+  the event stream, missing-function counters.
+- **Events** (`events.rs`): the last 256 events for `WaitEvents` long polls.
+  A host that ends on its own with a non-zero exit code is published as
+  AppCrashed. Connections that wait for events do not keep sysd running.
+- **Missing-function counters** (`diagnostics.rs`): reports from host
+  processes sysd started (identified by process id) are added up in
+  `diagnostics\<package>.missing`.
 - **Supervision**: host processes run in a kill-on-close job object, their
   exit is tracked, and their window can be focused.
 - **Installed packages** are the directories `app\<package>\`; nothing
@@ -40,7 +47,7 @@ outside a container.
 
 ```
 andruna-sysd [--instance <name>] [--root <dir>] [--idle-timeout-ms <n>] [--ready-event <handle>]
-andruna-sysd --host <package> [--root <dir>]
+andruna-sysd --host <package> [--activity <name>] [--root <dir>]
 ```
 
 `--root` replaces `%LOCALAPPDATA%\Andruna` and `--instance` the `default`

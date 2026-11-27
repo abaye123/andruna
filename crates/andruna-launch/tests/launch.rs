@@ -136,6 +136,9 @@ fn rejects_bad_command_lines_without_starting_sysd() {
     let out = env.launch("not a package");
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert!(stderr(&out).contains("not a valid Android package name"));
+    let out = env.launch("com.example.demo/not an activity");
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(stderr(&out).contains("not a valid activity name"));
 
     let out = Command::new(LAUNCH).arg("--quiet").output().unwrap();
     assert_eq!(out.status.code(), Some(1));
@@ -164,4 +167,23 @@ fn concurrent_launches_share_one_sysd() {
     assert_eq!(a.status.code(), Some(0), "{}", stderr(&a));
     assert_eq!(b.status.code(), Some(0), "{}", stderr(&b));
     assert_eq!(env.status().hosts, 2);
+}
+
+#[test]
+fn starts_one_activity() {
+    let env = Env::new("activity");
+    env.install("com.example.demo");
+    let out = env.launch("com.example.demo/.SettingsActivity");
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(env.status().hosts, 1);
+    // The host logs the activity it was started for, shortly after it starts.
+    let t = Instant::now();
+    let log = loop {
+        let log = fs::read_to_string(env.root.join("logs").join("host.log")).unwrap_or_default();
+        if log.contains("event=placeholder_host") || t.elapsed() > Duration::from_secs(10) {
+            break log;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(log.contains("activity=.SettingsActivity"), "{log}");
 }

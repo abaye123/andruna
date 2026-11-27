@@ -61,6 +61,13 @@ impl Activity {
         self.update(|s| s.connections = s.connections.saturating_sub(1));
     }
 
+    /// An open connection stops counting as activity: it only waits for
+    /// events (a notifier), which must not keep sysd running. Its close is
+    /// then not reported with [`Activity::connection_closed`].
+    pub fn connection_passive(&self) {
+        self.update(|s| s.connections = s.connections.saturating_sub(1));
+    }
+
     pub fn host_started(&self) {
         self.update(|s| s.hosts += 1);
     }
