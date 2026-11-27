@@ -29,6 +29,16 @@ public static class SysdEndpoint
         return identity.User ?? throw new InvalidOperationException("the current token has no user SID");
     }
 
+    /// <summary>
+    /// The owner the current token gives new objects: the user, or
+    /// BUILTIN\Administrators in an elevated process.
+    /// </summary>
+    public static SecurityIdentifier? CurrentDefaultOwner()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        return identity.Owner;
+    }
+
     public static uint CurrentSessionId()
     {
         if (!Native.ProcessIdToSessionId(Native.GetCurrentProcessId(), out var session))

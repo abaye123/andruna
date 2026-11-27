@@ -47,6 +47,14 @@ public sealed class RealSysdTests : IDisposable
             .FirstOrDefault(File.Exists);
     }
 
+    private static string Output(System.Text.StringBuilder output)
+    {
+        lock (output)
+        {
+            return output.ToString();
+        }
+    }
+
     [Fact]
     public async Task Client_SpeaksTheProtocol_OfTheRealSysd()
     {
@@ -62,7 +70,14 @@ public sealed class RealSysdTests : IDisposable
         {
             ArgumentList = { "--instance", instance, "--root", _root, "--idle-timeout-ms", "10000" },
             UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         })!;
+        var output = new System.Text.StringBuilder();
+        _sysd.OutputDataReceived += (_, e) => { lock (output) { output.AppendLine(e.Data); } };
+        _sysd.ErrorDataReceived += (_, e) => { lock (output) { output.AppendLine(e.Data); } };
+        _sysd.BeginOutputReadLine();
+        _sysd.BeginErrorReadLine();
 
         using var client = new SysdClient(SysdEndpoint.PipeNameForCurrentUser(instance), TimeSpan.FromMilliseconds(200));
         var host = new FakeHost(installed: true, start: () => false);
@@ -76,7 +91,11 @@ public sealed class RealSysdTests : IDisposable
             snapshot = await connection.CheckAsync();
         }
 
-        Assert.Equal(ServiceState.Running, snapshot.State);
+        Assert.True(
+            snapshot.State == ServiceState.Running,
+            $"state {snapshot.State} ({snapshot.Detail}); sysd {exe} " +
+            (_sysd.HasExited ? $"exited with {_sysd.ExitCode}" : "is running") +
+            $"; pipe {client.PipeName}; sysd output:\n{Output(output)}");
         Assert.Equal((uint)_sysd.Id, snapshot.Status!.Pid);
         Assert.Equal((uint)_sysd.Id, client.ServerPid);
         Assert.Equal(0u, snapshot.Status.Hosts);

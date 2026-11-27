@@ -25,10 +25,14 @@ public interface ISysdClient
 /// </summary>
 /// <remarks>
 /// Security, as the protocol requires: the pipe is opened with
-/// <see cref="PipeOptions.CurrentUserOnly"/> (the pipe must be owned by this
-/// user) and identification-level impersonation (sysd cannot act as this
-/// user), and before anything is sent the server process is checked to run
-/// as the same user (<c>GetNamedPipeServerProcessId</c>).
+/// identification-level impersonation (sysd cannot act as this user), and
+/// before anything is sent the pipe must be owned by this user (its SID, or
+/// the token's default owner) and the server process is checked to run as
+/// the same user (<c>GetNamedPipeServerProcessId</c>).
+/// <see cref="PipeOptions.CurrentUserOnly"/> is not used: it accepts only the
+/// token's default owner, which in an elevated process is
+/// BUILTIN\Administrators, while sysd names the user SID as the owner, so an
+/// elevated manager would reject its own sysd.
 /// </remarks>
 public sealed class SysdClient : ISysdClient, IDisposable
 {
@@ -37,6 +41,7 @@ public sealed class SysdClient : ISysdClient, IDisposable
     private readonly TimeSpan _callTimeout;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly SecurityIdentifier _user = SysdEndpoint.CurrentUserSid();
+    private readonly SecurityIdentifier? _defaultOwner = SysdEndpoint.CurrentDefaultOwner();
     private NamedPipeClientStream? _pipe;
     private uint _nextId;
 
@@ -206,7 +211,7 @@ public sealed class SysdClient : ISysdClient, IDisposable
             ".",
             _pipeName,
             PipeDirection.InOut,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly,
+            PipeOptions.Asynchronous,
             TokenImpersonationLevel.Identification);
         try
         {
@@ -227,6 +232,23 @@ public sealed class SysdClient : ISysdClient, IDisposable
             // The pipe exists but is not owned by this user: not our service.
             pipe.Dispose();
             return SysdResult<SysdResponse>.Fail(SysdOutcome.WrongServerUser, e.Message);
+        }
+
+        IdentityReference? owner;
+        try
+        {
+            owner = pipe.GetAccessControl().GetOwner(typeof(SecurityIdentifier));
+        }
+        catch (Exception e) when (e is UnauthorizedAccessException or InvalidOperationException or IOException)
+        {
+            pipe.Dispose();
+            return SysdResult<SysdResponse>.Fail(SysdOutcome.WrongServerUser, $"the owner of the pipe cannot be read: {e.Message}");
+        }
+
+        if (owner is not SecurityIdentifier ownerSid || (ownerSid != _user && ownerSid != _defaultOwner))
+        {
+            pipe.Dispose();
+            return SysdResult<SysdResponse>.Fail(SysdOutcome.WrongServerUser, "the pipe is not owned by the current user");
         }
 
         uint serverPid;

@@ -26,7 +26,11 @@ internal sealed class FakeSysd : IAsyncDisposable
     {
         PipeName = pipeName ?? "andruna-test-" + Guid.NewGuid().ToString("N");
         Handler = handler;
-        _loop = Task.Run(RunAsync);
+        // The first pipe instance exists before the constructor returns, so
+        // a client made right after never races the accept loop, which may
+        // start late on a busy thread pool.
+        var first = CreateInstance();
+        _loop = Task.Run(() => RunAsync(first));
     }
 
     public string PipeName { get; }
@@ -66,16 +70,20 @@ internal sealed class FakeSysd : IAsyncDisposable
         }
     }
 
-    private async Task RunAsync()
+    private NamedPipeServerStream CreateInstance() => new(
+        PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
+        PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+
+    private async Task RunAsync(NamedPipeServerStream first)
     {
         var clients = new List<Task>();
+        var next = first;
         try
         {
             while (!_stop.IsCancellationRequested)
             {
-                var server = new NamedPipeServerStream(
-                    PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                var server = next ?? CreateInstance();
+                next = null;
                 try
                 {
                     await server.WaitForConnectionAsync(_stop.Token);
@@ -92,6 +100,7 @@ internal sealed class FakeSysd : IAsyncDisposable
         }
         finally
         {
+            next?.Dispose();
             await Task.WhenAll(clients);
         }
     }
