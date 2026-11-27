@@ -16,6 +16,7 @@ Steps (all output in out/guest/<arch>/ of the repository):
   linker-tests  crates/andruna-linker/tests/guest/* (lib<name>.c -> a shared
                 object, anything else a PIE; `// LINK: -lfoo` on the first
                 line adds libraries)
+  binder-tests  crates/andruna-binder-device/tests/guest/*, the same way
   art           libart.so, the JNI libraries ART opens at start-up (ICU,
                 libcore), dalvikvm and dex2oat, collected in art/out
                 (aosp/guest/art.cmake; needs the art and libcore patches;
@@ -121,8 +122,8 @@ def keep_going():
     return ["--", "-k", "0"] if os.environ.get("KEEP_GOING") else []
 
 
-def stage(arch, out, name, extra=()):
-    b = out / name
+def stage(arch, out, name, extra=(), build_dir=None):
+    b = out / (build_dir or name)
     run(["cmake", "-S", GUEST, "-B", b] + cmake_common(arch, out) + [
         f"-DANDRUNA_GUEST_STAGE={name}",
         f"-DANDRUNA_AOSP_DIR={AOSP}",
@@ -204,6 +205,14 @@ def step_tests(arch, out):
 def step_linker_tests(arch, out):
     stage(arch, out, "linker-tests",
           [f"-DANDRUNA_LINKER_TESTS_DIR={ROOT / 'crates' / 'andruna-linker' / 'tests' / 'guest'}"])
+
+
+def step_binder_tests(arch, out):
+    # The guest programs of andruna-binder-device's tests, built like the
+    # linker tests.
+    stage(arch, out, "linker-tests",
+          [f"-DANDRUNA_LINKER_TESTS_DIR={ROOT / 'crates' / 'andruna-binder-device' / 'tests' / 'guest'}"],
+          build_dir="binder-tests")
 
 
 BOOT_JARS = ("core-oj.jar", "core-libart.jar", "core-icu4j.jar")
@@ -309,7 +318,8 @@ def step_builtins(arch, out):
 
 STEPS = {"sysroot": step_sysroot, "builtins": step_builtins, "bionic": step_bionic,
          "libcxx": step_libcxx, "aosp": step_aosp, "tests": step_tests,
-         "linker-tests": step_linker_tests, "art": step_art}
+         "linker-tests": step_linker_tests, "binder-tests": step_binder_tests,
+         "art": step_art}
 
 
 def main():
