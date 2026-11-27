@@ -174,6 +174,10 @@ can).
 - **Per-display vsync pacing.** Events carry each display's period and the
   compositor reports each window's display; Choreographer pacing per
   window and dynamic refresh rate awareness come with the framework.
+- **Esc as Back** relies on the fallback key Android's generic key
+  character map defines for `ESCAPE`; to be checked end to end when the
+  framework runs in app processes (if it does not hold, the compositor
+  sends Back for an unhandled Escape itself).
 - **AppUserModelID per package (D-5)**, taskbar badges, the system menu's
   Android entries, Windows text scale to `fontScale` (D-9, reported as
   1.0), high contrast.
