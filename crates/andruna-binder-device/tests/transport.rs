@@ -258,10 +258,17 @@ fn run_client() {
     cmd(&mut w, BC_ENTER_LOOPER);
     tx(&mut w, BC_TRANSACTION, 0, 99, TF_ONE_WAY, b"", &[]);
     let start = Instant::now();
-    let mut first = true;
+    // Write only, then wait with poll (as Looper does with epoll) until
+    // the death notice is readable.
+    d.wr(&w, false);
+    let f = FDS.get(d.fd).unwrap();
+    while f.ops().poll() & andruna_lx::linux::poll::POLLIN == 0 {
+        assert!(start.elapsed().as_secs() < 10, "poll never reported work");
+        std::thread::sleep(std::time::Duration::from_micros(200));
+    }
+    println!("POLL ok");
     loop {
-        let r = d.wr(if first { &w } else { &[] }, true);
-        first = false;
+        let r = d.wr(&[], true);
         if parse(&r)
             .iter()
             .any(|(c, _, a)| *c == BR_DEAD_BINDER && *a == 0xfeed)
@@ -345,6 +352,7 @@ fn two_processes_through_the_broker() {
     assert!(out.status.success(), "client failed");
     assert!(text.contains("FD_PASSING ok"));
     assert!(text.contains("DEATH ok"));
+    assert!(text.contains("POLL ok"));
     let sm_out = sm.wait_with_output().unwrap();
     assert!(sm_out.status.success());
     let t = Instant::now();
