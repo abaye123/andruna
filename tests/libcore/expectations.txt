@@ -263,12 +263,12 @@ libcore.java.util.GregorianCalendarTest#test_fieldsAffectedByGregorianCutOver | 
 libcore.java.util.GregorianCalendarTest#test_fromZonedDateTime | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
 libcore.java.util.GregorianCalendarTest#test_toZonedDateTime | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
 libcore.java.util.OldAndroidLocaleTest#testResourceBundles | tzdata | fail: junit.framework.ComparisonFailure: expected:<[Central European Standard Time]> but was:<[GMT+00:00]> @ junit.framework.Assert.assertEquals(Assert.java:100)
-libcore.java.util.OldGregorianCalendarTest#test_computeFields | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules | int
+libcore.java.util.OldGregorianCalendarTest#test_computeFields | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
 libcore.java.util.OldTimeZoneTest#test_getDisplayName | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
 libcore.java.util.OldTimeZoneTest#test_getDisplayNameLjava_util_Locale | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
 libcore.java.util.OldTimeZoneTest#test_getDisplayNameZI | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
 libcore.java.util.OldTimeZoneTest#test_getDisplayNameZILjava_util_Locale | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
-libcore.java.util.OldTimeZoneTest#test_getID | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules | int
+libcore.java.util.OldTimeZoneTest#test_getID | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
 libcore.java.util.OldTimeZoneTest#test_hasSameRulesLjava_util_TimeZone | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
 libcore.java.util.SimpleTimeZoneTest#testStandardNewYork2014 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
 libcore.java.util.SimpleTimeZoneTest#testStandardParis2014 | tzdata | no time zone data (/apex/com.android.tzdata is not provided): zones have no rules
@@ -348,4 +348,5 @@ libcore.java.util.ListOfTest#empty | triage | List.of().contains(null) did not t
 libcore.java.util.MapOfTest#empty[OF] | triage | Map.of(): a null key or value check did not throw NullPointerException here
 libcore.java.util.MapOfTest#manyEntries[OF] | triage | Map.of(): a null key or value check did not throw NullPointerException here
 libcore.java.util.SetOfTest#empty | triage | Set.of().contains(null) did not throw NullPointerException here
-libcore.java.util.concurrent.ForkJoinPoolTest#testGetRunningThreadCount | triage | timing: a worker still counted as running (seen once, with the JIT)
+libcore.java.util.concurrent.ForkJoinPoolTest#testGetRunningThreadCount | triage | timing: a worker still counted as running (failed once in 4 runs)
+libcore.java.lang.OldThreadTest#test_yield | triage | timing: compares two counter threads after Thread.sleep(1100); failed once in 4 runs

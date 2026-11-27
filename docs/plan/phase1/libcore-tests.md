@@ -81,13 +81,21 @@ single parameter sets, so the rest of that class is not run (one class,
 
 Pass rate = pass / (pass + fail + crash + timeout); skipped and not-run
 tests are left out. Interpreter and JIT differ only by the intermittent
-crash below and one timing-sensitive test.
+crash below and timing-sensitive tests.
+
+Repeat run (same build, with the expectations file): interpreter 2792 pass
+of 3111, 89.8%; JIT 2813 of 3127, 90.0%. The test count varies because a
+crash in a JUnitParams class leaves the rest of that class unrun. Every
+failure matched an expectation except `OldThreadTest#test_yield` (timing,
+now listed) and two time zone tests that had crashed in the first JIT run
+(their lines were limited to the interpreter; now unlimited).
 
 ### Failures by category (andruna-app)
 
 Every failure of both andruna-app runs is listed in
 `tests/libcore/expectations.txt` with its category (314 lines, the union of
-both modes, plus one line for the intermittent crash):
+both modes, plus one line for the intermittent crash; counts are the
+first run):
 
 | Category | Tests | What |
 | --- | --- | --- |
@@ -99,7 +107,7 @@ both modes, plus one line for the intermittent crash):
 | `icu-data` | 3 | Locale fallbacks for unknown locales, a serialized `Locale` resource |
 | `harness` | 3 | Two classes load `libjavacoretests.so` (test JNI library, not built); `LocaleInternalsTest` has no JUnit 3 test methods in this build |
 | `art` | about 8 per run | Intermittent fault in compiled JNI stubs (below); random tests |
-| `triage` | 13 | Not yet explained (below) |
+| `triage` | 14 | Not yet explained (below), including two timing-sensitive tests |
 
 ## Findings
 
@@ -141,7 +149,7 @@ both modes, plus one line for the intermittent crash):
    crash and one timing-sensitive `ForkJoinPool` test. No JIT-only failure
    was found in this subset.
 
-Not yet explained (`triage`, 13): `List.of().contains(null)`,
+Not yet explained (`triage`, 14): `List.of().contains(null)`,
 `Set.of().contains(null)` and two `Map.of()` cases do not throw
 `NullPointerException` inside `ListOfTest`/`SetOfTest`/`MapOfTest`, although a
 direct check of `List.of().contains(null)` does throw; `Record` reflection
@@ -149,7 +157,9 @@ direct check of `List.of().contains(null)` does throw; `Record` reflection
 `SystemTest#testSystemProperties_mutable` (NPE putting a null property);
 `OldThreadTest#test_getState` hangs; `DecimalFormatTest#test_setMaximumIntegerDigits`;
 `OldFileWriterTest#test_handleEarlyEOFChar_2`; `OldAndroidFileTest#testFile`;
-a missing serialization resource; one `ForkJoinPool` timing failure.
+a missing serialization resource; two timing-sensitive tests
+(`ForkJoinPoolTest#testGetRunningThreadCount`, `OldThreadTest#test_yield`),
+each failed once in four runs.
 
 ## The S1 runner (fallback)
 
