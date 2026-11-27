@@ -1,0 +1,21 @@
+[package]
+name = "andruna-app"
+description = "The per-app host process: starts ART on andruna-linker with a class path and a main class."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "andruna-app"
+path = "src/main.rs"
+
+[dependencies]
+andruna-linker = { path = "../andruna-linker" }
+andruna-lx = { path = "../andruna-lx" }
+
+[lints]
+workspace = true

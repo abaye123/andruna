@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "andruna-app"
+version = "0.1.0"
+dependencies = [
+ "andruna-linker",
+ "andruna-lx",
+]
+
+[[package]]
 name = "andruna-ipc"
 version = "0.1.0"
 dependencies = [

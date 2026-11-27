@@ -16,6 +16,10 @@ Steps (all output in out/guest/<arch>/ of the repository):
   linker-tests  crates/andruna-linker/tests/guest/* (lib<name>.c -> a shared
                 object, anything else a PIE; `// LINK: -lfoo` on the first
                 line adds libraries)
+  art           libart.so, the JNI libraries ART opens at start-up (ICU,
+                libcore), dalvikvm and dex2oat, collected in art/out
+                (aosp/guest/art.cmake; needs the art and libcore patches;
+                not in the default step list)
 
 Usage: python aosp/tools/build_guest.py [--arch x64|arm64] [step...]
 
@@ -202,6 +206,10 @@ def step_linker_tests(arch, out):
           [f"-DANDRUNA_LINKER_TESTS_DIR={ROOT / 'crates' / 'andruna-linker' / 'tests' / 'guest'}"])
 
 
+def step_art(arch, out):
+    stage(arch, out, "art")
+
+
 def step_builtins(arch, out):
     """compiler-rt builtins for arm64 Android (llvm-mingw ships them for
     x86_64 Linux only): every generic and aarch64 source that compiles, and
@@ -247,13 +255,13 @@ def step_builtins(arch, out):
 
 STEPS = {"sysroot": step_sysroot, "builtins": step_builtins, "bionic": step_bionic,
          "libcxx": step_libcxx, "aosp": step_aosp, "tests": step_tests,
-         "linker-tests": step_linker_tests}
+         "linker-tests": step_linker_tests, "art": step_art}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arch", default="x64", choices=ARCH)
-    ap.add_argument("steps", nargs="*", default=list(STEPS))
+    ap.add_argument("steps", nargs="*", default=[s for s in STEPS if s != "art"])
     args = ap.parse_args()
     out = ROOT / "out" / "guest" / args.arch
     out.mkdir(parents=True, exist_ok=True)

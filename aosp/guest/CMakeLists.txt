@@ -9,6 +9,8 @@
 #   ANDRUNA_GUEST_STAGE=tests         bionic_tests (a subset of bionic's
 #                                     own gtest suite)
 #   ANDRUNA_GUEST_STAGE=linker-tests  crates/andruna-linker/tests/guest/*
+#   ANDRUNA_GUEST_STAGE=art           libart.so, the libraries ART opens at
+#                                     start-up, dalvikvm, dex2oat (art.cmake)
 #
 # libc++ is built between the bionic and aosp stages with LLVM's runtimes
 # build (build_guest.py, step libcxx).
@@ -20,7 +22,7 @@ get_filename_component(ANDRUNA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE
 set(ANDRUNA_AOSP_DIR "${ANDRUNA_ROOT}/third_party/aosp" CACHE PATH "AOSP sources")
 get_filename_component(AOSP "${ANDRUNA_AOSP_DIR}" ABSOLUTE)
 set(ANDRUNA_LLVM_PROJECT "" CACHE PATH "llvm-project sources at the compiler's tag")
-set(ANDRUNA_GUEST_STAGE "bionic" CACHE STRING "bionic, aosp, tests or linker-tests")
+set(ANDRUNA_GUEST_STAGE "bionic" CACHE STRING "bionic, aosp, tests, linker-tests or art")
 set(ANDRUNA_LLD "${ANDRUNA_LLVM_MINGW}/bin/ld.lld${CMAKE_EXECUTABLE_SUFFIX}")
 if(CMAKE_HOST_WIN32)
   set(ANDRUNA_LLD "${ANDRUNA_LLVM_MINGW}/bin/ld.lld.exe")
@@ -73,7 +75,15 @@ if(ANDRUNA_GUEST_STAGE STREQUAL "linker-tests")
 endif()
 
 # The AOSP static libraries (built -fPIC); only what is linked is built.
+if(ANDRUNA_GUEST_STAGE STREQUAL "art")
+  set(ANDRUNA_AOSP_RUNTIME ON CACHE BOOL "Also compile libart" FORCE)
+endif()
 add_subdirectory("${ANDRUNA_ROOT}/aosp" aosp EXCLUDE_FROM_ALL)
+
+if(ANDRUNA_GUEST_STAGE STREQUAL "art")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/art.cmake")
+  return()
+endif()
 
 # googletest and googlemock (static, as Android's libgtest/libgmock).
 set(GT "${AOSP}/external/googletest")
