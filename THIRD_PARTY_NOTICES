@@ -77,3 +77,86 @@ Its license text, including the exception, is added here when it is built.
   the ICU, KXML, W3C and fdlibm notices in NOTICE - LICENSE (GPL-2.0 text
   followed by the "CLASSPATH" EXCEPTION TO THE GPL), NOTICE, file
   headers. Not built yet.
+
+The components below ship with the management app (ui/, self-contained
+publish) and the installer (installer/).
+
+.NET runtime
+  Version: 10.0 (the runtime of the .NET SDK used to publish)
+  Source: https://github.com/dotnet/runtime
+  License: MIT
+  Shipped in: Andruna.Manager (self-contained). The runtime's own
+  third-party notices are installed with it.
+
+  Copyright (c) .NET Foundation and Contributors. The MIT license text is
+  the one reproduced above for the windows crates.
+
+Microsoft.Web.WebView2 (SDK, pulled in by WinUI)
+  Version: 1.0.3179.45
+  Source: https://www.nuget.org/packages/Microsoft.Web.WebView2
+  License: BSD-3-Clause
+  Shipped in: Andruna.Manager (Microsoft.Web.WebView2.Core.dll,
+  WebView2Loader.dll)
+
+  Copyright (C) Microsoft Corporation. All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are
+  met:
+     * Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+     * Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+     * The name of Microsoft Corporation, or the names of its contributors
+       may not be used to endorse or promote products derived from this
+       software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+  IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+  THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+  PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+  CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+  EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+  PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+  PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+  LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+NSIS (installer stub and uninstaller, zlib compression module only)
+  Version: 3.11
+  Source: https://nsis.sourceforge.io
+  License: Zlib (zlib/libpng license)
+  Shipped in: the Andruna installer and its uninstaller (ADR 0017)
+
+  Copyright (C) 1999-2025 Contributors
+
+  This software is provided 'as-is', without any express or implied
+  warranty. In no event will the authors be held liable for any damages
+  arising from the use of this software.
+
+  Permission is granted to anyone to use this software for any purpose,
+  including commercial applications, and to alter it and redistribute it
+  freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented; you must not
+     claim that you wrote the original software. If you use this software
+     in a product, an acknowledgment in the product documentation would be
+     appreciated but is not required.
+  2. Altered source versions must be plainly marked as such, and must not
+     be misrepresented as being the original software.
+  3. This notice may not be removed or altered from any source
+     distribution.
+
+The component below is not permissively licensed. It is the platform the
+management app is built on (ADR 0005) and needs the maintainer's
+confirmation as a named exception to ADR 0006.
+
+Windows App SDK (WinUI 3, Foundation, InteractiveExperiences, Base)
+  Version: Microsoft.WindowsAppSDK.WinUI 1.8.251222000
+  Source: https://www.nuget.org/packages/Microsoft.WindowsAppSDK.WinUI
+  License: Microsoft Software License Terms, Microsoft Windows App SDK
+  (redistributable code; the files the package places next to the app may
+  be redistributed with it). The terms are in license.txt of each package.
+  Shipped in: Andruna.Manager (self-contained)
