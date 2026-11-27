@@ -53,6 +53,7 @@ def find_tool(name, env, candidates):
     sys.exit(f"{name} not found (set {env})")
 
 
+CROSS_ARM64 = False
 LOCAL = os.environ.get("LOCALAPPDATA", "")
 CMAKE = find_tool("cmake", "ANDRUNA_CMAKE", ["C:/Program Files/CMake/bin/cmake.exe"])
 NINJA = find_tool("ninja", "ANDRUNA_NINJA", [f"{LOCAL}/Microsoft/WinGet/Links/ninja.exe"])
@@ -178,6 +179,7 @@ def step_aosp(arch, out):
         f"-DANDRUNA_AOSP_DIR={AOSP}",
         f"-DANDRUNA_LIBCXX_DIR={out / 'libcxx-install'}",
         "-DANDRUNA_AOSP_RUNTIME=ON",
+        f"-DANDRUNA_ART_CROSS_ARM64={'ON' if CROSS_ARM64 else 'OFF'}",
     ])
     run(["cmake", "--build", b] + (["--", "-k", "0"] if os.environ.get("KEEP_GOING") else []))
     check_art_symbols(out)
@@ -258,9 +260,16 @@ STEPS = {"sysroot": step_sysroot, "builtins": step_builtins, "libc": step_libc,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arch", default="x64", choices=ARCH)
+    ap.add_argument("--cross-arm64", action="store_true",
+                    help="x64 only: also build the arm64 code generator into libart and "
+                    "dex2oat (ANDRUNA_ART_CROSS_ARM64), output in out/s1art/x64-cross")
     ap.add_argument("steps", nargs="*", default=list(STEPS))
     args = ap.parse_args()
-    out = ROOT / "out" / "s1art" / args.arch
+    global CROSS_ARM64
+    CROSS_ARM64 = args.cross_arm64
+    if CROSS_ARM64 and args.arch != "x64":
+        sys.exit("--cross-arm64 is for the x64 build")
+    out = ROOT / "out" / "s1art" / (args.arch + ("-cross" if CROSS_ARM64 else ""))
     out.mkdir(parents=True, exist_ok=True)
     for s in args.steps:
         STEPS[s](args.arch, out)
