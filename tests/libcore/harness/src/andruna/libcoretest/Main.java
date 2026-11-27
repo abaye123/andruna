@@ -119,7 +119,8 @@ public final class Main {
 
     static String id(Description d) {
         String m = d.getMethodName();
-        return d.getClassName() + "#" + (m == null ? "<class>" : m);
+        // Parameterized test names may contain spaces; ids are one word.
+        return (d.getClassName() + "#" + (m == null ? "<class>" : m)).replaceAll("\\s", "_");
     }
 
     static String reason(Throwable t) {

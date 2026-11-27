@@ -53,7 +53,7 @@ DEFAULT_RUNNER = "s1"
 # Options every runner passes to the VM. The temporary directory is a
 # writable directory inside the guest tree (tests create files there).
 GUEST_TMP = "/data/local/tmp/libcore-tmp"
-VM_PROPS = [f"-Djava.io.tmpdir={GUEST_TMP}", "-Duser.home=/data/local/tmp"]
+VM_PROPS = [f"-Djava.io.tmpdir={GUEST_TMP}"]
 
 
 # --- runners --------------------------------------------------------------------
@@ -181,6 +181,10 @@ def categorize(reason):
     r = reason or ""
     if re.search(r"Unable to configure default providers|sun\.security\.jca\.Providers|"
                  r"UUID\$Holder|TempFileHelper", r):
+        return "bootclasspath"
+    if "sun.nio.fs.UnixPath.normalizeAndCheck" in r:
+        # FilesSetup's tearDown after createTempDirectory failed for lack of
+        # SecureRandom; the NullPointerException hides that first failure.
         return "bootclasspath"
     if "libjavacoretests.so" in r:
         return "harness"

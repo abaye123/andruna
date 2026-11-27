@@ -2,7 +2,9 @@
 #
 # One glob per line, relative to the libcore project (third_party/aosp/libcore).
 # A line starting with "-" removes matching files from the selection; the text
-# after "|" is the reason. Files that do not compile against this boot class
+# after "|" is the reason. A line starting with "+" names support files that
+# are compiled but not run (for example service providers named only in
+# META-INF/services). Files that do not compile against this boot class
 # path and test libraries are dropped by build.py and listed in its report.
 
 # java.lang
@@ -26,3 +28,6 @@ luni/src/test/java/libcore/java/nio/file/*Test.java
 
 # java.text (ICU-backed formatting)
 luni/src/test/java/libcore/java/text/*Test.java
+
+# Support classes named only by META-INF/services in the test resources.
++ luni/src/test/java/libcore/java/nio/charset/SettableCharsetProvider.java

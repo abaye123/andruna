@@ -122,8 +122,9 @@ def d8_jar():
 
 
 def read_selection():
-    """Returns (selected files, {file: reason} removed by the list)."""
-    include, exclude = [], []
+    """Returns (selected test files, {file: reason} removed by the list,
+    support files compiled but not run)."""
+    include, exclude, support = [], [], []
     for raw in (HERE / "tests.txt").read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -131,6 +132,12 @@ def read_selection():
         if line.startswith("-"):
             pat, _, reason = line[1:].partition("|")
             exclude.append((pat.strip(), reason.strip()))
+        elif line.startswith("+"):
+            pat = line[1:].partition("|")[0].strip()
+            matches = sorted(glob.glob(str(LIBCORE / pat)))
+            if not matches:
+                log(f"warning: {pat} matches nothing")
+            support += [Path(m).relative_to(LIBCORE).as_posix() for m in matches]
         else:
             include.append(line)
     files = []
@@ -147,7 +154,7 @@ def read_selection():
                 removed[f] = reason
                 files.remove(f)
                 break
-    return files, removed
+    return files, removed, sorted(set(support) - set(files))
 
 
 def boot_packages(boot):
@@ -168,7 +175,7 @@ def class_name(rel):
     return f"{m.group(1)}.{stem}" if m else stem
 
 
-def javac(files, libs, classes):
+def javac(files, libs, classes, support=()):
     """Compiles files; returns {file (relative to libcore or absolute): first error}."""
     if classes.exists():
         shutil.rmtree(classes)
@@ -184,7 +191,7 @@ def javac(files, libs, classes):
             "-d", str(classes)]
     for p in boot_packages(boot):
         args += ["--add-exports", f"java.base/{p}=ALL-UNNAMED"]
-    args += harness + [str(LIBCORE / f) for f in files]
+    args += harness + [str(LIBCORE / f) for f in list(files) + list(support)]
     argfile = OUT / "javac.args"
     with open(argfile, "w", encoding="utf-8", newline="\n") as f:
         for a in args:
@@ -206,18 +213,23 @@ def javac(files, libs, classes):
     return errors
 
 
-def compile_selection(files, libs, classes):
+def compile_selection(files, libs, classes, support):
     """javac, dropping failing files until the rest compiles. Returns
     (compiled files, {dropped file: reason})."""
     files = list(files)
     dropped = {}
     for round_ in range(1, 30):
         log(f"javac round {round_}: {len(files)} test files")
-        errors = javac(files, libs, classes)
+        errors = javac(files, libs, classes, support)
         if not errors:
             return files, dropped
         progress = False
         for path, err in errors.items():
+            if path in support:
+                support.remove(path)
+                dropped[path] = err
+                progress = True
+                continue
             if path in files:
                 files.remove(path)
                 dropped[path] = err
@@ -284,9 +296,9 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     libs = fetch_libs()
     d8 = d8_jar()
-    selected, removed = read_selection()
+    selected, removed, support = read_selection()
     log(f"selected {len(selected)} test files ({len(removed)} removed by tests.txt)")
-    compiled, dropped = compile_selection(selected, libs, OUT / "classes")
+    compiled, dropped = compile_selection(selected, libs, OUT / "classes", support)
     log(f"compiled {len(compiled)}, dropped {len(dropped)}")
     write_jar(OUT / "classes", libs, d8, OUT / "libcore-tests.jar")
     names = sorted(class_name(f) for f in compiled)
