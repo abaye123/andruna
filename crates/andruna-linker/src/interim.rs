@@ -175,9 +175,10 @@ pub unsafe fn before(n: i64, a: [i64; 6]) -> Option<i64> {
 ///
 /// As for [`before`].
 pub unsafe fn after_error(n: i64, a: [i64; 6]) -> Option<i64> {
-    let (dirfd, path, flags) = match n {
-        nr::OPEN => (AT_FDCWD, a[0] as u64, a[1] as u32),
-        nr::OPENAT => (a[0] as i32, a[1] as u64, a[2] as u32),
+    // Absolute paths only, so the directory descriptor does not matter.
+    let (path, flags) = match n {
+        nr::OPEN => (a[0] as u64, a[1] as u32),
+        nr::OPENAT => (a[1] as u64, a[2] as u32),
         _ => return None,
     };
     if path == 0 {
@@ -185,7 +186,7 @@ pub unsafe fn after_error(n: i64, a: [i64; 6]) -> Option<i64> {
     }
     // SAFETY: a NUL-terminated path (contract).
     let p = unsafe { CStr::from_ptr(path as *const core::ffi::c_char) }.to_bytes();
-    if !p.starts_with(b"/proc/") || dirfd != AT_FDCWD && !p.starts_with(b"/") {
+    if !(p.starts_with(b"/proc/") || p.starts_with(b"/sys/devices/system/cpu/")) {
         return None;
     }
     let data = crate::procfs::contents(p)?;

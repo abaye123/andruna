@@ -7,6 +7,8 @@
 //! - `maps`: the address space from `VirtualQuery`, one line per region
 //!   with Linux permissions; the guest main thread's stack is `[stack]`.
 //! - `cmdline`: the guest `argv`.
+//! - `/sys/devices/system/cpu/{online,possible,present}`: the processor
+//!   list (what `sysconf(_SC_NPROCESSORS_*)` reads).
 //!
 //! Each open takes a snapshot, as reading a Linux `/proc` file does.
 
@@ -91,6 +93,11 @@ impl FileOps for MemFile {
 /// The contents of `path` when it names a `/proc` file the loader
 /// provides for this process.
 pub fn contents(path: &[u8]) -> Option<Vec<u8>> {
+    if let Some(f) = path.strip_prefix(b"/sys/devices/system/cpu/") {
+        // The processor lists bionic's get_nprocs and get_nprocs_conf read
+        // (sysconf(_SC_NPROCESSORS_*), std::thread::hardware_concurrency).
+        return matches!(f, b"online" | b"possible" | b"present").then(cpu_list);
+    }
     let pid = crate::process::guest_pid().to_string();
     let rest = path.strip_prefix(b"/proc/self/").or_else(|| {
         path.strip_prefix(b"/proc/")
@@ -102,6 +109,17 @@ pub fn contents(path: &[u8]) -> Option<Vec<u8>> {
         b"maps" => Some(maps()),
         b"cmdline" => Some(CMDLINE.lock().unwrap_or_else(|e| e.into_inner()).clone()),
         _ => None,
+    }
+}
+
+fn cpu_list() -> Vec<u8> {
+    let n = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    if n == 1 {
+        b"0\n".to_vec()
+    } else {
+        format!("0-{}\n", n - 1).into_bytes()
     }
 }
 
@@ -218,6 +236,8 @@ mod tests {
         assert_eq!(fields[28 - 3], "4660");
         assert!(contents(b"/proc/self/stat").is_some());
         assert!(contents(b"/proc/self/environ").is_none());
+        let cpus = contents(b"/sys/devices/system/cpu/online").unwrap();
+        assert!(cpus.starts_with(b"0") && cpus.ends_with(b"\n"));
         assert!(contents(b"/proc/1/stat").is_none() || crate::process::guest_pid() == 1);
     }
 

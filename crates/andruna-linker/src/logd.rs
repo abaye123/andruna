@@ -4,8 +4,8 @@
 //! `/dev/socket/logdw`. lx has no sockets yet, so the loader answers
 //! `socket(AF_UNIX, SOCK_DGRAM)` with a descriptor of its own
 //! ([`crate::interim`]); `connect` to `/dev/socket/logdw` succeeds on it, and
-//! every datagram written to it (`writev`, `write`, `sendmsg`) is printed on
-//! standard error as `P/tag(tid): message`, for records of the main, system
+//! every datagram written to it (`writev`, `write`, `sendmsg`) is written to
+//! the guest's standard error (descriptor 2) as `P/tag(tid): message`, for records of the main, system
 //! and crash buffers at or above `ANDRUNA_LOG_PRIORITY` (a letter of
 //! `VDIWEF` or a number; default `W`). Binary buffers (events, stats,
 //! security) are dropped. sysd's log service replaces this in phase 2.
@@ -171,11 +171,38 @@ pub fn record(b: &[u8]) {
         _ => '?',
     };
     let tag = String::from_utf8_lossy(tag);
-    let mut e = std::io::stderr().lock();
+    let mut out = Vec::new();
     for line in String::from_utf8_lossy(msg).lines() {
-        let _ = writeln!(e, "{letter}/{tag}({tid}): {line}");
+        let _ = writeln!(out, "{letter}/{tag}({tid}): {line}");
+    }
+    // The guest's descriptor 2, so a redirected stderr gets the records.
+    let mut done = 0usize;
+    while done < out.len() {
+        // SAFETY: writes from a local buffer.
+        let n = unsafe {
+            crate::syscall::lx_raw(
+                WRITE,
+                [
+                    2,
+                    out[done..].as_ptr() as i64,
+                    (out.len() - done) as i64,
+                    0,
+                    0,
+                    0,
+                ],
+            )
+        };
+        if n <= 0 {
+            break;
+        }
+        done += n as usize;
     }
 }
+
+#[cfg(target_arch = "x86_64")]
+const WRITE: i64 = 1;
+#[cfg(target_arch = "aarch64")]
+const WRITE: i64 = 64;
 
 /// Descriptors of the closed set, for tests.
 pub fn sockets() -> HashSet<i32> {
