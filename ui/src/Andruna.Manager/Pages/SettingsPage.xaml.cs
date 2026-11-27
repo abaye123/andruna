@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Andruna.Manager.Core.ViewModels;
 using Andruna.Manager.Localization;
 using Microsoft.UI.Xaml;
@@ -9,8 +8,6 @@ namespace Andruna.Manager.Pages;
 
 public sealed partial class SettingsPage : Page
 {
-    private static readonly string NoticesPath = Path.Combine(AppContext.BaseDirectory, "THIRD_PARTY_NOTICES.txt");
-
     public SettingsPage()
     {
         Vm = new SettingsViewModel(
@@ -26,8 +23,6 @@ public sealed partial class SettingsPage : Page
 
     public SettingsViewModel Vm { get; }
 
-    public bool NoticesAvailable => File.Exists(NoticesPath);
-
     protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
@@ -36,8 +31,5 @@ public sealed partial class SettingsPage : Page
 
     private void OnRestartClick(object sender, RoutedEventArgs e) => App.Restart();
 
-    private void OnNoticesClick(object sender, RoutedEventArgs e)
-    {
-        Process.Start(new ProcessStartInfo(NoticesPath) { UseShellExecute = true });
-    }
+    private void OnNoticesClick(object sender, RoutedEventArgs e) => Frame.Navigate(typeof(NoticesPage));
 }

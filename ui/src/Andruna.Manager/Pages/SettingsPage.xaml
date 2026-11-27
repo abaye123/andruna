@@ -86,7 +86,7 @@
                         <TextBlock Text="{l:Str Key=AboutDescription}" Margin="0,6,0,0" TextWrapping="Wrap" />
                     </StackPanel>
                     <Button Grid.Column="2" VerticalAlignment="Top" Content="{l:Str Key=AboutNoticesButton}"
-                            Click="OnNoticesClick" IsEnabled="{x:Bind NoticesAvailable}" />
+                            Click="OnNoticesClick" />
                 </Grid>
             </Border>
         </StackPanel>

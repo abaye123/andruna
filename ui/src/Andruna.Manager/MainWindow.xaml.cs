@@ -47,6 +47,10 @@ public sealed partial class MainWindow : Window
             case "settings":
                 Nav.SelectedItem = SettingsItem;
                 break;
+            case "notices":
+                Nav.SelectedItem = SettingsItem;
+                Navigate(typeof(NoticesPage), null);
+                break;
             case "app" when start.Package is not null:
                 Navigate(typeof(LibraryPage), null);
                 Navigate(typeof(AppPage), start.Package);
@@ -113,7 +117,7 @@ public sealed partial class MainWindow : Window
     {
         // Keep the selected menu item in step with the page shown (also after Back).
         _syncingSelection = true;
-        Nav.SelectedItem = e.SourcePageType == typeof(SettingsPage) ? SettingsItem
+        Nav.SelectedItem = e.SourcePageType == typeof(SettingsPage) || e.SourcePageType == typeof(NoticesPage) ? SettingsItem
             : e.SourcePageType == typeof(LibraryPage) ? LibraryItem
             : null;
         _syncingSelection = false;

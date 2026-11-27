@@ -246,4 +246,28 @@
   <data name="AboutServiceStatusFormat" xml:space="preserve">
     <value>פועל כבר {0}, תהליכי אפליקציות פעילים: {1}, מזהה תהליך {2}</value>
   </data>
+  <data name="NoticesTitle" xml:space="preserve">
+    <value>הודעות צד שלישי</value>
+  </data>
+  <data name="NoticesOpenExternally" xml:space="preserve">
+    <value>פתיחה בעורך טקסט</value>
+  </data>
+  <data name="NoticesLoading" xml:space="preserve">
+    <value>טוען את ההודעות</value>
+  </data>
+  <data name="NoticesTextLabel" xml:space="preserve">
+    <value>הטקסט של הודעות צד שלישי</value>
+  </data>
+  <data name="NoticesMissingTitle" xml:space="preserve">
+    <value>קובץ ההודעות חסר</value>
+  </data>
+  <data name="NoticesMissingMessage" xml:space="preserve">
+    <value>הקובץ {0} לא נמצא בתיקייה של Andruna. התקנה מחדש של Andruna תחזיר אותו.</value>
+  </data>
+  <data name="NoticesReadFailedTitle" xml:space="preserve">
+    <value>לא ניתן היה לקרוא את קובץ ההודעות</value>
+  </data>
+  <data name="NoticesReadFailedMessage" xml:space="preserve">
+    <value>הודעה מ-Windows: {0}</value>
+  </data>
 </root>

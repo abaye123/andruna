@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="Andruna.Manager.Pages.NoticesPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:l="using:Andruna.Manager.Localization">
+
+    <Page.KeyboardAccelerators>
+        <!-- Alt+Left goes back to Settings, as the back button does. -->
+        <KeyboardAccelerator Key="Left" Modifiers="Menu" Invoked="OnBackAccelerator" />
+    </Page.KeyboardAccelerators>
+
+    <Grid Padding="36,20,36,36" MaxWidth="1000" HorizontalAlignment="Stretch" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Settings > Third-party notices, as in Windows 11 Settings. The first item goes back. -->
+        <Grid ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <BreadcrumbBar x:Name="Breadcrumb" ItemClicked="OnBreadcrumbItemClicked" VerticalAlignment="Center">
+                <BreadcrumbBar.ItemTemplate>
+                    <DataTemplate x:DataType="x:String">
+                        <TextBlock Text="{x:Bind}" Style="{StaticResource TitleTextBlockStyle}" />
+                    </DataTemplate>
+                </BreadcrumbBar.ItemTemplate>
+            </BreadcrumbBar>
+            <Button Grid.Column="1" VerticalAlignment="Center" Click="OnOpenExternallyClick"
+                    IsEnabled="{x:Bind Vm.IsLoaded, Mode=OneWay}"
+                    AutomationProperties.Name="{l:Str Key=NoticesOpenExternally}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE8A7;" FontSize="16" />
+                    <TextBlock Text="{l:Str Key=NoticesOpenExternally}" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <InfoBar Grid.Row="1"
+                 IsOpen="{x:Bind Vm.HasProblem, Mode=OneWay}"
+                 IsClosable="False"
+                 Severity="Error"
+                 Title="{x:Bind Vm.Problem.Title, Mode=OneWay, FallbackValue=''}"
+                 Message="{x:Bind Vm.Problem.Message, Mode=OneWay, FallbackValue=''}" />
+
+        <ProgressRing Grid.Row="2" IsActive="{x:Bind Vm.IsLoading, Mode=OneWay}"
+                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                      AutomationProperties.Name="{l:Str Key=NoticesLoading}" />
+
+        <!--
+            The notices are English whatever the app language, so the text is laid
+            out left to right also when the window is right to left. A read-only
+            TextBox gives a focusable, scrollable text with caret navigation,
+            selection, Ctrl+A and Ctrl+C, and keeps the system colors in high contrast.
+        -->
+        <TextBox x:Name="NoticesText"
+                 Grid.Row="2"
+                 Visibility="{x:Bind Vm.IsLoaded, Mode=OneWay}"
+                 Text="{x:Bind Vm.Text, Mode=OneWay}"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 IsSpellCheckEnabled="False"
+                 FlowDirection="LeftToRight"
+                 TextAlignment="Left"
+                 FontFamily="Cascadia Mono, Consolas, Courier New"
+                 FontSize="13"
+                 Padding="16,12"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 AutomationProperties.Name="{l:Str Key=NoticesTextLabel}" />
+    </Grid>
+</Page>
