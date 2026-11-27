@@ -182,6 +182,12 @@ fn proc_open(dirfd: i32, path: &[u8], flags: u32) -> SysResult<Option<i32>> {
             }
             Box::new(proc::ProcDir::new(linux.to_bytes(), e))
         }
+        proc::Node::Props => {
+            if flags & O_ACCMODE != O_RDONLY {
+                return Err(Errno::EACCES);
+            }
+            Box::new(proc::ProcFile::props())
+        }
         proc::Node::File { content, comm_of } => {
             if flags & O_DIRECTORY != 0 {
                 return Err(Errno::ENOTDIR);
@@ -1053,5 +1059,18 @@ Pid:	{pid}
             Ok(exe_rel.as_bytes().to_vec())
         );
         assert_eq!(read_path("/proc/self/cmdline").unwrap(), b"prog\0-x\0");
+
+        // The property area, as bionic opens and maps it.
+        let st = fstatat(AT_FDCWD, b"/dev/__properties__", 0).unwrap();
+        assert_eq!((st.uid, st.gid, st.mode), (0, 0, S_IFREG | 0o444));
+        let pfd = open("/dev/__properties__", O_RDONLY | O_NOFOLLOW | O_CLOEXEC).unwrap();
+        assert_eq!(fstat(pfd).unwrap().size, st.size);
+        let a = crate::mem::mmap(0, st.size as usize, PROT_READ, MAP_SHARED, pfd, 0).unwrap();
+        // SAFETY: a readable mapping of the area; the magic is at offset 8.
+        let magic = unsafe { *((a + 8) as *const u32) };
+        assert_eq!(magic, 0x504f_5250);
+        crate::mem::munmap(a, st.size as usize).unwrap();
+        close(pfd).unwrap();
+        assert_eq!(open("/dev/__properties__", O_RDWR), Err(Errno::EACCES));
     }
 }
