@@ -139,8 +139,29 @@ impl FileOps for RegularFile {
         true
     }
 
+    /// The path the file was opened by; `" (deleted)"` is appended, as on
+    /// Linux, once that name no longer refers to this file.
     fn path(&self) -> Option<Vec<u8>> {
-        (!self.path.is_empty()).then(|| self.path.clone())
+        if self.path.is_empty() {
+            return None;
+        }
+        let mut p = self.path.clone();
+        let same = match (
+            os::info(self.handle.raw()),
+            super::fstatat(
+                crate::linux::fcntl::AT_FDCWD,
+                &self.path,
+                AT_SYMLINK_NOFOLLOW,
+            ),
+        ) {
+            (Ok(mine), Ok(st)) => st.ino == mine.file_id && st.dev == mine.volume,
+            (Ok(_), Err(_)) => false,
+            _ => true,
+        };
+        if !same {
+            p.extend_from_slice(b" (deleted)");
+        }
+        Some(p)
     }
 }
 

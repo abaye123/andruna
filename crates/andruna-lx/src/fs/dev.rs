@@ -1,5 +1,6 @@
 //! The memory character devices lx serves itself: `/dev/null`,
-//! `/dev/zero`, `/dev/full`, `/dev/random` and `/dev/urandom`.
+//! `/dev/zero`, `/dev/full`, `/dev/random` and `/dev/urandom`, and the
+//! links `/dev/stdin`, `/dev/stdout`, `/dev/stderr` and `/dev/fd`.
 //!
 //! They exist in every process whatever the mount table holds at `/dev`,
 //! with the device numbers of Linux (major 1). `/dev/random` and
@@ -44,6 +45,21 @@ impl Device {
             b"full" => Self::Full,
             b"random" => Self::Random,
             b"urandom" => Self::Urandom,
+            _ => return None,
+        })
+    }
+
+    /// The target of the standard links in `/dev` (`stdin`, `stdout`,
+    /// `stderr`, `fd`), if `p` names one.
+    pub fn link_at(p: &LinuxPath) -> Option<&'static [u8]> {
+        if p.components.len() != 2 || p.components[0] != b"dev" {
+            return None;
+        }
+        Some(match p.components[1].as_slice() {
+            b"stdin" => b"/proc/self/fd/0",
+            b"stdout" => b"/proc/self/fd/1",
+            b"stderr" => b"/proc/self/fd/2",
+            b"fd" => b"/proc/self/fd",
             _ => return None,
         })
     }

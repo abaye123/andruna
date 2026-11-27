@@ -10,8 +10,9 @@
 //! - `..` is resolved lexically ([`path::normalize`]).
 //! - `*at` calls relative to a directory descriptor use the directory's
 //!   path at open time; a directory renamed while open is not followed.
-//! - `O_DIRECT` is accepted and ignored (I/O stays buffered); `O_TMPFILE`
-//!   fails with `EOPNOTSUPP`, as on file systems without support for it.
+//! - `O_DIRECT` is accepted and ignored (I/O stays buffered).
+//! - `O_TMPFILE` files exist under a hidden name for an instant before the
+//!   name is removed, and cannot be given a name later (`linkat`).
 
 mod dev;
 pub mod file;
@@ -276,11 +277,7 @@ fn open_handle(
 /// `openat`. Returns the new descriptor.
 pub fn openat(dirfd: i32, path: &[u8], flags: u32, mode: u32) -> SysResult<i32> {
     if flags & __O_TMPFILE != 0 {
-        return Err(if flags & O_TMPFILE == O_TMPFILE {
-            Errno::EOPNOTSUPP
-        } else {
-            Errno::EINVAL
-        });
+        return open_tmpfile(dirfd, path, flags, mode);
     }
     let path_only = flags & O_PATH != 0;
     // O_PATH ignores every flag except these.
@@ -360,6 +357,44 @@ pub fn openat(dirfd: i32, path: &[u8], flags: u32, mode: u32) -> SysResult<i32> 
     };
     let file = Arc::new(OpenFile::new(ops, flags));
     FDS.insert(file, flags & O_CLOEXEC != 0, 0)
+}
+
+/// `O_TMPFILE`: an unnamed file in directory `path`. lx creates it under a
+/// unique name and removes the name at once, so the file lives until its
+/// last descriptor is closed (`/proc/self/fd` shows it as deleted).
+fn open_tmpfile(dirfd: i32, path: &[u8], flags: u32, mode: u32) -> SysResult<i32> {
+    if flags & O_TMPFILE != O_TMPFILE || flags & O_ACCMODE == O_RDONLY || flags & O_CREAT != 0 {
+        return Err(Errno::EINVAL);
+    }
+    let dir = linux_at(dirfd, path)?;
+    let st = fstatat(AT_FDCWD, &dir.to_bytes(), 0)?;
+    if st.mode & crate::linux::stat::S_IFMT != crate::linux::stat::S_IFDIR {
+        return Err(Errno::ENOTDIR);
+    }
+    let base = dir.to_bytes();
+    let keep = flags & !(O_TMPFILE | O_EXCL);
+    for _ in 0..16 {
+        let mut r = [0u8; 8];
+        crate::sys::random::fill(&mut r)?;
+        let name = format!(".andruna-tmpfile-{:016x}", u64::from_ne_bytes(r));
+        let mut p = base.clone();
+        if p.last() != Some(&b'/') {
+            p.push(b'/');
+        }
+        p.extend_from_slice(name.as_bytes());
+        match openat(AT_FDCWD, &p, keep | O_CREAT | O_EXCL, mode) {
+            Ok(fd) => {
+                if let Err(e) = unlinkat(AT_FDCWD, &p, 0) {
+                    let _ = close(fd);
+                    return Err(e);
+                }
+                return Ok(fd);
+            }
+            Err(e) if e == Errno::EEXIST => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(Errno::EEXIST)
 }
 
 /// `fstatat`.
@@ -543,7 +578,19 @@ pub(crate) mod tests {
         assert_eq!(write(fd, UserBuf::from_ref(b"x")), Err(Errno::EBADF));
         close(fd).unwrap();
         assert_eq!(open(&p, O_ACCMODE), Err(Errno::EINVAL));
-        assert_eq!(open(&p, O_RDWR | O_TMPFILE), Err(Errno::EOPNOTSUPP));
+        assert_eq!(open(&p, O_RDWR | O_TMPFILE), Err(Errno::ENOTDIR));
+        assert_eq!(open(&d, O_RDONLY | O_TMPFILE), Err(Errno::EINVAL));
+        // An unnamed file: usable, and gone from the directory.
+        let fd = open(&d, O_RDWR | O_TMPFILE).unwrap();
+        assert_eq!(write(fd, UserBuf::from_ref(b"tmp")), Ok(3));
+        assert_eq!(fstat(fd).unwrap().size, 3);
+        let link = readlinkat(AT_FDCWD, format!("/proc/self/fd/{fd}").as_bytes(), 4096).unwrap();
+        assert!(
+            link.ends_with(b" (deleted)"),
+            "{}",
+            String::from_utf8_lossy(&link)
+        );
+        close(fd).unwrap();
         assert_eq!(open(&format!("{p}/"), O_RDONLY), Err(Errno::ENOTDIR));
         assert_eq!(open(&p, O_RDONLY | O_DIRECTORY), Err(Errno::ENOTDIR));
         assert_eq!(open(&format!("{p}/y"), O_RDONLY), Err(Errno::ENOTDIR));

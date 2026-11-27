@@ -60,6 +60,7 @@ pub fn is_proc(p: &LinuxPath) -> bool {
     p.components.first().is_some_and(|c| c == b"proc")
         || is_props(p)
         || super::dev::Device::at(p).is_some()
+        || super::dev::Device::link_at(p).is_some()
 }
 
 /// Whether `p` is bionic's property area file, `/dev/__properties__`.
@@ -88,6 +89,9 @@ pub fn lookup(p: &LinuxPath) -> SysResult<Node> {
     }
     if let Some(d) = super::dev::Device::at(p) {
         return Ok(Node::Device(d));
+    }
+    if let Some(t) = super::dev::Device::link_at(p) {
+        return Ok(Node::Link(t.to_vec()));
     }
     let pid = crate::process::getpid() as u32;
     let me = crate::process::gettid() as u32;
