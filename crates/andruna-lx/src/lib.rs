@@ -26,19 +26,26 @@
 //! the host process that sets lx up.
 
 pub mod errno;
+pub mod eventfd;
 pub mod fd;
 mod ffi;
 pub mod fs;
 pub mod futex;
 pub mod linux;
 pub mod mem;
+pub mod pipe;
+pub mod poll;
 pub mod process;
 pub mod properties;
+pub mod rlimit;
 pub mod sched;
 pub mod signal;
+pub mod socket;
 mod sys;
 pub mod time;
+pub mod timer;
 mod util;
+pub mod waitq;
 
 /// The user buffer type of [`fd::FileOps`], for file types defined
 /// outside lx.

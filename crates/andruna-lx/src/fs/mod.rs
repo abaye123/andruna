@@ -13,13 +13,16 @@
 //! - `O_DIRECT` is accepted and ignored (I/O stays buffered); `O_TMPFILE`
 //!   fails with `EOPNOTSUPP`, as on file systems without support for it.
 
+mod dev;
 pub mod file;
+pub mod modes;
 pub mod mount;
 mod names;
 pub mod path;
 pub mod proc;
 pub mod stream;
 
+pub use modes::{fchmod, fchmodat, fchown, fchownat, umask};
 pub use names::*;
 
 use std::sync::{Arc, RwLock};
@@ -31,8 +34,8 @@ use windows::Win32::Foundation::{
 use windows::Win32::Storage::FileSystem::{
     CREATE_NEW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_CREATION_DISPOSITION,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_WRITE_THROUGH,
-    FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ATTRIBUTES, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
-    SYNCHRONIZE,
+    FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ATTRIBUTES, FILE_READ_EA, FILE_WRITE_DATA, FILE_WRITE_EA,
+    OPEN_EXISTING, SYNCHRONIZE,
 };
 
 use self::file::{Directory, RegularFile, is_symlink_tag, stat_from_info};
@@ -182,6 +185,15 @@ fn proc_open(dirfd: i32, path: &[u8], flags: u32) -> SysResult<Option<i32>> {
             }
             Box::new(proc::ProcDir::new(linux.to_bytes(), e))
         }
+        proc::Node::Device(d) => {
+            if flags & O_DIRECTORY != 0 {
+                return Err(Errno::ENOTDIR);
+            }
+            if flags & (O_CREAT | O_EXCL) == O_CREAT | O_EXCL {
+                return Err(Errno::EEXIST);
+            }
+            Box::new(dev::DevFile(d))
+        }
         proc::Node::Props => {
             if flags & O_ACCMODE != O_RDONLY {
                 return Err(Errno::EACCES);
@@ -262,7 +274,7 @@ fn open_handle(
 }
 
 /// `openat`. Returns the new descriptor.
-pub fn openat(dirfd: i32, path: &[u8], flags: u32, _mode: u32) -> SysResult<i32> {
+pub fn openat(dirfd: i32, path: &[u8], flags: u32, mode: u32) -> SysResult<i32> {
     if flags & __O_TMPFILE != 0 {
         return Err(if flags & O_TMPFILE == O_TMPFILE {
             Errno::EOPNOTSUPP
@@ -295,24 +307,39 @@ pub fn openat(dirfd: i32, path: &[u8], flags: u32, _mode: u32) -> SysResult<i32>
     if !path_only {
         access |= match acc {
             O_RDONLY => GENERIC_READ.0,
-            O_WRONLY => GENERIC_WRITE.0,
+            // FILE_READ_EA lets `fstat` see the stored mode.
+            O_WRONLY => GENERIC_WRITE.0 | FILE_READ_EA.0,
             _ => GENERIC_READ.0 | GENERIC_WRITE.0,
         };
         if trunc {
             access |= FILE_WRITE_DATA.0;
         }
     }
-    let disposition = match (creat, flags & O_EXCL != 0) {
-        (true, true) => CREATE_NEW,
-        (true, false) => OPEN_ALWAYS,
-        (false, _) => OPEN_EXISTING,
-    };
     let mut attrs = FILE_ATTRIBUTE_NORMAL;
     if flags & (O_SYNC | O_DSYNC) != 0 {
         attrs |= FILE_FLAG_WRITE_THROUGH;
     }
     let nofollow = flags & O_NOFOLLOW != 0;
-    let (h, info) = open_handle(&r, access, disposition, attrs, nofollow)?;
+    // Creation is tried first so that lx knows whether it created the file
+    // (and records its mode); without O_EXCL an existing file is opened.
+    let (h, mut info, created) = if creat {
+        match open_handle(&r, access | FILE_WRITE_EA.0, CREATE_NEW, attrs, nofollow) {
+            Ok((h, i)) => (h, i, true),
+            Err(e) if e == Errno::EEXIST && flags & O_EXCL == 0 => {
+                let (h, i) = open_handle(&r, access, OPEN_EXISTING, attrs, nofollow)?;
+                (h, i, false)
+            }
+            Err(e) => return Err(e),
+        }
+    } else {
+        let (h, i) = open_handle(&r, access, OPEN_EXISTING, attrs, nofollow)?;
+        (h, i, false)
+    };
+    if created && !info.directory {
+        let m = modes::creation_mode(crate::linux::stat::S_IFREG, mode);
+        modes::set_created(&h, m);
+        info.mode = Some(m);
+    }
 
     if is_symlink_tag(info.reparse_tag) && nofollow && !path_only {
         return Err(Errno::ELOOP);
@@ -354,13 +381,21 @@ pub fn fstatat(dirfd: i32, path: &[u8], flags: u32) -> SysResult<StatData> {
         return Ok(proc::stat(&node));
     }
     let r = resolve_at(dirfd, path)?;
-    let (_h, info) = open_handle(
-        &r,
-        FILE_READ_ATTRIBUTES.0,
-        OPEN_EXISTING,
-        FILE_FLAGS_AND_ATTRIBUTES(0),
-        nofollow,
-    )?;
+    let open = |access: u32| {
+        open_handle(
+            &r,
+            access,
+            OPEN_EXISTING,
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            nofollow,
+        )
+    };
+    // FILE_READ_EA shows the stored mode; a file that grants only its
+    // attributes is still reported, with the derived mode.
+    let (_h, info) = match open(FILE_READ_ATTRIBUTES.0 | FILE_READ_EA.0) {
+        Err(e) if e == Errno::EACCES => open(FILE_READ_ATTRIBUTES.0)?,
+        r => r?,
+    };
     if r.linux.trailing_slash && !info.directory {
         return Err(Errno::ENOTDIR);
     }

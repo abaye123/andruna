@@ -695,5 +695,29 @@ pub(crate) fn deliver_at_syscall_exit() {
     crate::errno::set_errno(Errno(e));
 }
 
+/// Queues the signal of a POSIX timer expiry (`si_code == SI_TIMER`, the
+/// timer id in `si_timerid`) for thread `tid` or the process, unless the
+/// same timer's previous signal is still pending. Returns whether it was
+/// queued; when it was not, the caller counts an overrun, as Linux does.
+pub(crate) fn queue_timer(tid: Option<i32>, info: SigInfo) -> SysResult<bool> {
+    let target = match tid {
+        Some(t) => Some(thread_of(t)?),
+        None => None,
+    };
+    let timer = info.fields[0] as u32;
+    let same = |i: &SigInfo| {
+        i.si_code == SI_TIMER && i.si_signo == info.si_signo && i.fields[0] as u32 == timer
+    };
+    let pending = target
+        .as_ref()
+        .is_some_and(|t| lock(&t.pending).iter().any(same))
+        || lock(&PROCESS_PENDING).iter().any(same);
+    if pending {
+        return Ok(false);
+    }
+    queue(target.as_ref(), info);
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests;

@@ -217,3 +217,32 @@ fn times(kernel: FILETIME, user: FILETIME) -> CpuTimes {
         kernel: filetime_to_u64(kernel),
     }
 }
+
+/// The stack size of the process's main thread: Windows' limits of the
+/// calling thread when it is the main thread, otherwise the stack reserve
+/// of the executable's image (which Windows gives the main thread).
+pub fn main_stack_size() -> u64 {
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::System::Threading::GetCurrentThreadStackLimits;
+    if crate::process::gettid() == crate::process::getpid() {
+        let (mut lo, mut hi) = (0usize, 0usize);
+        // SAFETY: both out pointers are valid locals.
+        unsafe { GetCurrentThreadStackLimits(&mut lo, &mut hi) };
+        if hi > lo {
+            return (hi - lo) as u64;
+        }
+    }
+    // SAFETY: NULL names the executable's module, which stays loaded.
+    let Ok(m) = (unsafe { GetModuleHandleW(None) }) else {
+        return 1 << 20;
+    };
+    let base = m.0 as *const u8;
+    // SAFETY: a loaded image starts with its DOS header, whose `e_lfanew`
+    // (offset 0x3c) locates the NT headers inside the image; in a PE32+
+    // optional header (after the 4-byte signature and the 20-byte file
+    // header) `SizeOfStackReserve` is at offset 72.
+    unsafe {
+        let nt = base.add(base.add(0x3c).cast::<u32>().read_unaligned() as usize);
+        nt.add(4 + 20 + 72).cast::<u64>().read_unaligned()
+    }
+}

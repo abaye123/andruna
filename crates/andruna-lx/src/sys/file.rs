@@ -154,6 +154,8 @@ pub struct Info {
     pub directory: bool,
     pub volume: u64,
     pub file_id: u64,
+    /// The Linux mode stored with the file ([`super::ea`]), if any.
+    pub mode: Option<u32>,
 }
 
 fn query<T: Default>(h: HANDLE, class: FILE_INFO_BY_HANDLE_CLASS) -> SysResult<T> {
@@ -212,6 +214,11 @@ pub fn info(h: HANDLE) -> SysResult<Info> {
         directory: std.Directory,
         volume,
         file_id,
+        mode: if super::ea::ea_size(h) > 0 {
+            super::ea::read_mode(h)
+        } else {
+            None
+        },
     })
 }
 

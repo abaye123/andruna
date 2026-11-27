@@ -163,6 +163,8 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
                 let m = core::slice::from_raw_parts(ptr(2) as *const u8, ptr(1).min(1024));
                 sched::setaffinity(int(0), m).map(|()| 0)
             }
+            // Pipes, polling, timers, sockets, limits and modes.
+            _ => super::syscall_ext::dispatch(sysno, a),
         }
     }
 }

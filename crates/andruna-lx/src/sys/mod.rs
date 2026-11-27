@@ -6,8 +6,12 @@
 //!
 //! [`Errno`]: crate::errno::Errno
 
+pub mod alarm;
+pub mod ea;
 pub mod file;
 pub mod mem;
+pub mod procinfo;
+pub mod random;
 pub mod sync;
 pub mod thread;
 pub mod time;

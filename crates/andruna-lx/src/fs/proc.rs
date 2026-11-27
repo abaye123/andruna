@@ -4,9 +4,14 @@
 //! ([`crate::properties`]).
 //!
 //! Present: `/proc/self` and `/proc/<pid>` (this process only),
-//! `/proc/thread-self`, and in them `exe`, `cmdline`, `status`, `maps`,
-//! `fd/` (links to the open files), `task/` (one directory per thread with
-//! `comm` and `status`). Everything else under `/proc` is `ENOENT`.
+//! `/proc/thread-self`, `/proc/<tid>` for each thread (not listed, as on
+//! Linux), and in them `exe`, `cmdline`, `stat`, `status`, `maps`, `fd/`
+//! (links to the open files), `task/` (one directory per thread with
+//! `comm`, `stat` and `status`). Everything else under `/proc` is `ENOENT`.
+//!
+//! The state in `stat` is the Windows scheduler's: a thread waiting in the
+//! kernel (a futex, a sleep, blocking I/O) is `S`, one waiting for paging
+//! I/O `D`, a suspended one `T`, all others `R`.
 //!
 //! Files are generated when opened and read from that snapshot, as Linux
 //! does for most of `/proc`. Thread names (`comm`) are the Windows thread
@@ -33,6 +38,7 @@ use crate::util::{UserBuf, lock};
 
 use super::file::{DT_DIR, DT_LNK, DT_REG, DirEntry};
 use super::path::LinuxPath;
+use crate::sys::procinfo::{self, ThreadInfo};
 
 /// A `/proc` node.
 #[derive(Debug)]
@@ -45,11 +51,15 @@ pub enum Node {
     Link(Vec<u8>),
     /// `/dev/__properties__` ([`crate::properties`]).
     Props,
+    /// A memory device ([`super::dev`]).
+    Device(super::dev::Device),
 }
 
 /// Whether `p` lies under `/proc`.
 pub fn is_proc(p: &LinuxPath) -> bool {
-    p.components.first().is_some_and(|c| c == b"proc") || is_props(p)
+    p.components.first().is_some_and(|c| c == b"proc")
+        || is_props(p)
+        || super::dev::Device::at(p).is_some()
 }
 
 /// Whether `p` is bionic's property area file, `/dev/__properties__`.
@@ -76,6 +86,9 @@ pub fn lookup(p: &LinuxPath) -> SysResult<Node> {
     if is_props(p) {
         return Ok(Node::Props);
     }
+    if let Some(d) = super::dev::Device::at(p) {
+        return Ok(Node::Device(d));
+    }
     let pid = crate::process::getpid() as u32;
     let me = crate::process::gettid() as u32;
     let c: Vec<&[u8]> = p.components.iter().skip(1).map(|c| c.as_slice()).collect();
@@ -93,27 +106,37 @@ pub fn lookup(p: &LinuxPath) -> SysResult<Node> {
         b"thread-self" if rest.is_empty() => {
             Ok(Node::Link(format!("{pid}/task/{me}").into_bytes()))
         }
-        b"self" => process_node(pid, rest),
+        b"self" => process_node(pid, pid, rest),
         b"thread-self" => thread_node(me, rest),
-        n if num(n) == Some(pid) => process_node(pid, rest),
+        n if num(n) == Some(pid) => process_node(pid, pid, rest),
+        // Every thread has a directory at `/proc/<tid>` too, not listed in
+        // `/proc`, as on Linux.
+        n if num(n).is_some_and(|t| t != 0 && crate::sys::thread::is_own_thread(t)) => {
+            process_node(pid, num(n).unwrap_or(pid), rest)
+        }
         _ => Err(Errno::ENOENT),
     }
 }
 
-fn process_node(pid: u32, rest: &[&[u8]]) -> SysResult<Node> {
+/// The directory of process `pid` seen through thread `tid` (`pid` itself
+/// for `/proc/<pid>`, another thread for `/proc/<tid>`): `stat` and
+/// `status` describe that thread.
+fn process_node(pid: u32, tid: u32, rest: &[&[u8]]) -> SysResult<Node> {
     let Some((&first, rest)) = rest.split_first() else {
         return Ok(Node::Dir(
-            [".", "..", "exe", "cmdline", "status", "maps", "fd", "task"]
-                .iter()
-                .map(|n| {
-                    let k = match *n {
-                        "exe" => DT_LNK,
-                        "cmdline" | "status" | "maps" => DT_REG,
-                        _ => DT_DIR,
-                    };
-                    entry(n, k)
-                })
-                .collect(),
+            [
+                ".", "..", "exe", "cmdline", "stat", "status", "maps", "fd", "task",
+            ]
+            .iter()
+            .map(|n| {
+                let k = match *n {
+                    "exe" => DT_LNK,
+                    "cmdline" | "stat" | "status" | "maps" => DT_REG,
+                    _ => DT_DIR,
+                };
+                entry(n, k)
+            })
+            .collect(),
         ));
     };
     let file = |content: Vec<u8>| Node::File {
@@ -125,7 +148,8 @@ fn process_node(pid: u32, rest: &[&[u8]]) -> SysResult<Node> {
             .map(Node::Link)
             .ok_or(Errno::ENOENT),
         (b"cmdline", []) => Ok(file(crate::process::cmdline())),
-        (b"status", []) => Ok(file(status(pid, None))),
+        (b"status", []) => Ok(file(status(pid, (tid != pid).then_some(tid)))),
+        (b"stat", []) => Ok(file(stat_line(pid, tid)?)),
         (b"maps", []) => Ok(file(crate::mem::maps())),
         (b"fd", []) => {
             let mut v = vec![entry(".", DT_DIR), entry("..", DT_DIR)];
@@ -165,8 +189,13 @@ fn thread_node(tid: u32, rest: &[&[u8]]) -> SysResult<Node> {
             entry(".", DT_DIR),
             entry("..", DT_DIR),
             entry("comm", DT_REG),
+            entry("stat", DT_REG),
             entry("status", DT_REG),
         ])),
+        [b"stat"] => Ok(Node::File {
+            content: stat_line(crate::process::getpid() as u32, tid)?,
+            comm_of: None,
+        }),
         [b"comm"] => {
             let mut name = thread_name(tid);
             name.push(b'\n');
@@ -210,13 +239,80 @@ fn status(pid: u32, tid: Option<u32>) -> Vec<u8> {
     let (uid, gid) = (crate::process::uid(), crate::process::gid());
     let threads = crate::sys::thread::threads().len();
     format!(
-        "Name:\t{}\nUmask:\t0077\nState:\tR (running)\nTgid:\t{pid}\nNgid:\t0\nPid:\t{tid}\n\
+        "Name:\t{}\nUmask:\t{:04o}\nState:\tR (running)\nTgid:\t{pid}\nNgid:\t0\nPid:\t{tid}\n\
          PPid:\t0\nTracerPid:\t0\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\nGid:\t{gid}\t{gid}\t{gid}\t{gid}\n\
          FDSize:\t{}\nGroups:\t\nThreads:\t{threads}\n",
         String::from_utf8_lossy(&name),
+        super::modes::current_umask(),
         crate::fd::NOFILE_MAX,
     )
     .into_bytes()
+}
+
+/// The Linux state letter of a Windows thread: `R` running or runnable,
+/// `S` waiting, `D` waiting for paging I/O, `T` suspended.
+fn state_letter(t: &ThreadInfo) -> u8 {
+    match t.state {
+        procinfo::STATE_WAITING => match t.wait_reason {
+            procinfo::WAIT_SUSPENDED | procinfo::WAIT_WR_SUSPENDED => b'T',
+            procinfo::WAIT_FREE_PAGE
+            | procinfo::WAIT_PAGE_IN
+            | procinfo::WAIT_POOL_ALLOCATION
+            | procinfo::WAIT_WR_PAGE_IN => b'D',
+            _ => b'S',
+        },
+        _ => b'R',
+    }
+}
+
+/// `USER_HZ`: the unit of times in `stat`.
+const USER_HZ: u64 = 100;
+
+/// The `stat` line of thread `tid`: its id, name and state; CPU times of
+/// the whole process for the main thread and of the thread itself for the
+/// others; memory counters of the process.
+fn stat_line(pid: u32, tid: u32) -> SysResult<Vec<u8>> {
+    let info = procinfo::current_process()?;
+    let w = crate::process::windows_tid(tid);
+    let me = info
+        .threads
+        .iter()
+        .find(|t| t.tid == w && t.state != procinfo::STATE_TERMINATED)
+        .ok_or(Errno::ENOENT)?;
+    let ticks = |v: u64| v / (10_000_000 / USER_HZ);
+    let (user, kernel) = if tid == pid {
+        info.threads
+            .iter()
+            .fold((0, 0), |(u, k), t| (u + t.user, k + t.kernel))
+    } else {
+        (me.user, me.kernel)
+    };
+    // Start time in ticks since boot: creation (FILETIME) minus the boot
+    // instant on the same clock.
+    let boot = crate::sys::time::realtime(true) - crate::sys::time::interrupt_time() as i64;
+    let created = me.created as i64 - crate::sys::time::UNIX_EPOCH_AS_FILETIME;
+    let start = ticks(created.saturating_sub(boot).max(0) as u64);
+    let policy = crate::sched::getscheduler(tid as i32).unwrap_or(0);
+    let name = thread_name(tid);
+    let threads = info
+        .threads
+        .iter()
+        .filter(|t| t.state != procinfo::STATE_TERMINATED)
+        .count();
+    // Fields Linux hides from other users or that Windows does not track
+    // (fault counts, addresses of the stack and code, wait channel) are 0,
+    // as Linux shows them to readers without access.
+    let s = format!(
+        "{tid} ({}) {} 0 {pid} {pid} 0 -1 0 0 0 0 0 {} {} 0 0 20 0 {threads} 0 {start} {} {}          18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 {policy} 0 0 0 0 0 0 0 0 0 0 0
+",
+        String::from_utf8_lossy(&name),
+        state_letter(me) as char,
+        ticks(user),
+        ticks(kernel),
+        info.virtual_size,
+        info.working_set / 4096,
+    );
+    Ok(s.into_bytes())
 }
 
 /// `stat` of a node.
@@ -228,6 +324,7 @@ pub fn stat(n: &Node) -> StatData {
         Node::File { .. } => (S_IFREG | 0o444, 0),
         Node::Dir(_) => (S_IFDIR | 0o555, 0),
         Node::Link(t) => (S_IFLNK | 0o777, t.len() as i64),
+        Node::Device(d) => return d.stat(),
         Node::Props => {
             // Owned by root and not writable, as bionic requires.
             return StatData {

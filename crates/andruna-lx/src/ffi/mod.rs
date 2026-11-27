@@ -26,6 +26,7 @@ mod fs;
 mod host;
 mod mem;
 mod syscall;
+mod syscall_ext;
 mod time;
 
 use core::ffi::{CStr, c_char, c_void};
