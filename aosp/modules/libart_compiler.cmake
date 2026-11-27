@@ -115,7 +115,11 @@ else()
     optimizing/fast_compiler_arm64.cc
     utils/arm64/assembler_arm64.cc
     utils/arm64/jni_macro_assembler_arm64.cc
-    utils/arm64/managed_register_arm64.cc)
+    utils/arm64/managed_register_arm64.cc
+    # Shared with the arm (32-bit) back end, which Soong builds alongside
+    # arm64 for a device; the arm64 code generator needs these two.
+    optimizing/instruction_simplifier_shared.cc
+    optimizing/nodes_shared.cc)
   target_compile_definitions(libart_compiler PUBLIC ART_ENABLE_CODEGEN_arm64)
 
   # external/vixl (BSD-3-Clause): the AArch64 assembler, disassembler and
