@@ -172,9 +172,6 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Test
-        run: dotnet test ui/tests/Andruna.Manager.Tests -nologo
-
       - name: Rust toolchain
         run: |
           rustup show active-toolchain
@@ -210,6 +207,11 @@ jobs:
       # for both and builds one unsigned installer.
       - name: Installer
         run: ./installer/build.ps1 -Unsigned
+
+      # After the installer step, so RealSysdTests runs against the
+      # andruna-sysd.exe it built.
+      - name: Test
+        run: dotnet test ui/tests/Andruna.Manager.Tests -nologo
 
       - uses: actions/upload-artifact@v4
         with:
