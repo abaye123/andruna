@@ -1,11 +1,12 @@
 //! Process and thread identity: `getpid`, `gettid`, `sched_yield`, and the
 //! user and group ids lx reports.
 //!
-//! Deviation: Linux gives the main thread `tid == pid`. Windows process and
-//! thread ids come from one namespace and never coincide, so `gettid()` on
-//! the main thread differs from `getpid()`. Code that compares them to find
-//! the main thread needs lx to designate a main thread (TODO with the
-//! thread layer).
+//! Linux gives the main thread `tid == pid` (bionic relies on it: the main
+//! thread's tid is `getpid()`). Windows process and thread ids come from
+//! one namespace and never coincide, so the host designates the thread that
+//! runs the program's `main` ([`set_main_thread`]); `gettid()` on it is the
+//! process id, and lx maps that id back to the Windows thread wherever it
+//! takes a thread id. Other threads keep their Windows thread ids.
 
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -19,8 +20,40 @@ pub fn getpid() -> i32 {
     thread::current_process_id() as i32
 }
 
+/// The Windows id of the main thread (0 until designated).
+static MAIN_THREAD: AtomicU32 = AtomicU32::new(0);
+
+/// Designates the calling thread as the main thread.
+pub fn set_main_thread() {
+    MAIN_THREAD.store(thread::current_thread_id(), Ordering::Relaxed);
+}
+
 pub fn gettid() -> i32 {
-    thread::current_thread_id() as i32
+    let w = thread::current_thread_id();
+    if w == MAIN_THREAD.load(Ordering::Relaxed) {
+        getpid()
+    } else {
+        w as i32
+    }
+}
+
+/// The Windows thread id of Linux thread id `tid`.
+pub fn windows_tid(tid: u32) -> u32 {
+    let main = MAIN_THREAD.load(Ordering::Relaxed);
+    if main != 0 && tid == getpid() as u32 {
+        main
+    } else {
+        tid
+    }
+}
+
+/// The Linux thread id of Windows thread id `w`.
+pub fn linux_tid(w: u32) -> u32 {
+    if w != 0 && w == MAIN_THREAD.load(Ordering::Relaxed) {
+        getpid() as u32
+    } else {
+        w
+    }
 }
 
 pub fn sched_yield() {
@@ -86,14 +119,14 @@ pub unsafe fn prctl(
             // SAFETY: a 16-byte buffer (contract).
             let b = unsafe { core::slice::from_raw_parts(a2 as *const u8, 16) };
             let n = &b[..b.iter().position(|&c| c == 0).unwrap_or(15).min(15)];
-            thread::set_description(thread::current_thread_id(), &String::from_utf8_lossy(n))?;
+            thread::set_description(gettid() as u32, &String::from_utf8_lossy(n))?;
             Ok(0)
         }
         PR_GET_NAME => {
             if a2 == 0 {
                 return Err(Errno::EFAULT);
             }
-            let n = crate::fs::proc::thread_name(thread::current_thread_id());
+            let n = crate::fs::proc::thread_name(gettid() as u32);
             let mut b = [0u8; 16];
             b[..n.len()].copy_from_slice(&n);
             // SAFETY: a 16-byte buffer (contract).

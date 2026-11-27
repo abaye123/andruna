@@ -31,6 +31,7 @@ pub fn processor_count() -> usize {
 }
 
 fn open_for_affinity(tid: u32) -> SysResult<OwnedHandle> {
+    let tid = crate::process::windows_tid(tid);
     // SAFETY: opens a new handle that the result owns.
     let h = unsafe {
         OpenThread(
@@ -92,7 +93,7 @@ pub fn threads() -> Vec<u32> {
     let mut ok = unsafe { Thread32First(owned.raw(), &mut e) }.is_ok();
     while ok {
         if e.th32OwnerProcessID == pid {
-            out.push(e.th32ThreadID);
+            out.push(crate::process::linux_tid(e.th32ThreadID));
         }
         // SAFETY: as above.
         ok = unsafe { Thread32Next(owned.raw(), &mut e) }.is_ok();
@@ -105,6 +106,7 @@ fn open_named(
     tid: u32,
     access: windows::Win32::System::Threading::THREAD_ACCESS_RIGHTS,
 ) -> Option<OwnedHandle> {
+    let tid = crate::process::windows_tid(tid);
     // SAFETY: opens a new handle that the result owns.
     let h = unsafe { OpenThread(access, false, tid) }.ok()?;
     Some(OwnedHandle::from_raw(h))
@@ -138,6 +140,7 @@ pub fn set_description(tid: u32, name: &str) -> SysResult<()> {
 
 /// Whether `tid` is a running thread of this process.
 pub fn is_own_thread(tid: u32) -> bool {
+    let tid = crate::process::windows_tid(tid);
     // SAFETY: opens a new handle that `owned` closes.
     let Ok(h) = (unsafe { OpenThread(THREAD_QUERY_LIMITED_INFORMATION, false, tid) }) else {
         return false;

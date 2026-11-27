@@ -324,6 +324,8 @@ fn clone_thread(
         // SAFETY: as above.
         unsafe { ctid.write_volatile(tid) };
     }
+    // The new thread starts with the creator's signal mask, as on Linux.
+    andruna_lx::signal::inherit_to(tid);
     // SAFETY: resumes and releases the thread handle.
     unsafe {
         ResumeThread(h);

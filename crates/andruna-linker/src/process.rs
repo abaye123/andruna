@@ -255,6 +255,8 @@ gfn! {
 
 fn start(ctx: MainCtx) -> Result<std::convert::Infallible> {
     let MainCtx { program, stack } = ctx;
+    // This thread runs `main`: its tid is the process id (andruna-lx).
+    andruna_lx::process::set_main_thread();
     // For /proc/self/exe and /proc/self/cmdline (andruna-lx).
     andruna_lx::process::set_program(std::path::Path::new(&program.exe), &program.args);
     let (hwcap, hwcap2) = hwcaps();

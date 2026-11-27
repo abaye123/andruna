@@ -174,6 +174,14 @@ pub fn current() -> Arc<ThreadSignals> {
     })
 }
 
+/// Gives the thread `tid`, created by the calling thread and not started
+/// yet, the caller's signal mask (Linux threads inherit it; the alternate
+/// stack is not inherited).
+pub fn inherit_to(tid: i32) {
+    let mask = current().blocked();
+    entry(tid).set_blocked(mask);
+}
+
 /// The calling thread's state if it exists already (no allocation).
 fn current_if_any() -> Option<Arc<ThreadSignals>> {
     ME.try_with(|m| m.get().map(|r| r.0.clone())).ok().flatten()
