@@ -46,6 +46,16 @@ impl RegularFile {
         }
     }
 
+    /// Takes ownership of the Windows file handle `h` (for example one
+    /// another process passed in, as binder does with file descriptors).
+    ///
+    /// # Safety
+    ///
+    /// `h` must be a valid file handle that nothing else closes.
+    pub unsafe fn from_raw_handle(h: windows::Win32::Foundation::HANDLE) -> Self {
+        Self::new(OwnedHandle::from_raw(h))
+    }
+
     fn size(&self) -> SysResult<u64> {
         Ok(os::info(self.handle.raw())?.size as u64)
     }

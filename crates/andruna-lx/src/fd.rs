@@ -108,6 +108,27 @@ pub trait FileOps: core::any::Any + Send + Sync + fmt::Debug {
         use crate::linux::poll::*;
         POLLIN | POLLOUT | POLLRDNORM | POLLWRNORM
     }
+
+    /// `ioctl`. `arg` is the raw argument (often a pointer into the
+    /// caller's memory). Objects without control requests give `ENOTTY`.
+    fn ioctl(&self, _file: &OpenFile, _cmd: u32, _arg: usize) -> SysResult<i64> {
+        Err(Errno::ENOTTY)
+    }
+
+    /// A mapping the object makes itself (a device with its own memory,
+    /// such as the binder receive buffer), instead of lx's file mapping.
+    /// `None` lets lx map the object as a file ([`Self::mappable`]).
+    fn device_mmap(
+        &self,
+        _file: &OpenFile,
+        _addr: usize,
+        _len: usize,
+        _prot: u32,
+        _flags: u32,
+        _offset: i64,
+    ) -> Option<SysResult<usize>> {
+        None
+    }
 }
 
 /// An open file description.

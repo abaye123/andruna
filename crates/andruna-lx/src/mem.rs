@@ -232,6 +232,12 @@ fn map_file(
         return Err(Errno::EINVAL);
     }
     let file = crate::fd::FDS.get(fd)?;
+    if let Some(r) = file
+        .ops()
+        .device_mmap(&file, addr, len, prot, flags, offset)
+    {
+        return r;
+    }
     use crate::linux::fcntl::{O_RDONLY, O_RDWR};
     if !matches!(file.access(), O_RDONLY | O_RDWR) {
         return Err(Errno::EACCES);

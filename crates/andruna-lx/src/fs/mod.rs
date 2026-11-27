@@ -14,7 +14,7 @@
 //! - `O_TMPFILE` files exist under a hidden name for an instant before the
 //!   name is removed, and cannot be given a name later (`linkat`).
 
-mod dev;
+pub mod dev;
 pub mod file;
 pub mod modes;
 pub mod mount;
@@ -357,6 +357,12 @@ pub fn openat(dirfd: i32, path: &[u8], flags: u32, mode: u32) -> SysResult<i32> 
     }
     if let Some(fd) = proc_open(dirfd, path, flags)? {
         return Ok(fd);
+    }
+    if let Ok(linux) = linux_at(dirfd, path)
+        && let Some(open) = dev::registered(&linux)
+    {
+        let file = Arc::new(OpenFile::new(open(flags)?, flags));
+        return FDS.insert(file, flags & O_CLOEXEC != 0, 0);
     }
     let r = resolve_at(dirfd, path)?;
     let creat = flags & O_CREAT != 0;

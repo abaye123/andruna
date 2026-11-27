@@ -23,6 +23,34 @@ use crate::util::UserBuf;
 
 use super::path::LinuxPath;
 
+/// Opens a device registered by the host process: the object for the
+/// `open` flags given.
+pub type DeviceOpen = fn(flags: u32) -> SysResult<Box<dyn FileOps>>;
+
+/// Devices the host process provides from outside lx (for example
+/// `/dev/binder` from andruna-binder), by name below `/dev`.
+static REGISTERED: std::sync::RwLock<Vec<(&'static [u8], DeviceOpen)>> =
+    std::sync::RwLock::new(Vec::new());
+
+/// Registers the device `/dev/<name>`, served by `open`. A later
+/// registration of the same name replaces the earlier one.
+pub fn register(name: &'static [u8], open: DeviceOpen) {
+    let mut r = crate::util::write(&REGISTERED);
+    r.retain(|(n, _)| *n != name);
+    r.push((name, open));
+}
+
+/// The opener of the registered device at `p`, if `p` names one.
+pub fn registered(p: &LinuxPath) -> Option<DeviceOpen> {
+    if p.components.len() != 2 || p.components[0] != b"dev" {
+        return None;
+    }
+    crate::util::read(&REGISTERED)
+        .iter()
+        .find(|(n, _)| *n == p.components[1].as_slice())
+        .map(|(_, o)| *o)
+}
+
 /// A memory device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Device {
@@ -220,5 +248,63 @@ mod tests {
             fs::openat(AT_FDCWD, b"/dev/null", O_RDWR | O_CREAT | O_EXCL, 0),
             Err(Errno::EEXIST)
         );
+    }
+
+    #[derive(Debug)]
+    struct TestDevice;
+    impl FileOps for TestDevice {
+        fn stat(&self) -> SysResult<StatData> {
+            Ok(StatData::default())
+        }
+        fn ioctl(&self, _file: &OpenFile, cmd: u32, arg: usize) -> SysResult<i64> {
+            match cmd {
+                1 => Ok(arg as i64 + 1),
+                _ => Err(Errno::EINVAL),
+            }
+        }
+        fn device_mmap(
+            &self,
+            _file: &OpenFile,
+            _addr: usize,
+            len: usize,
+            _prot: u32,
+            _flags: u32,
+            _offset: i64,
+        ) -> Option<SysResult<usize>> {
+            Some(if len == 4096 {
+                Ok(0x1234_0000)
+            } else {
+                Err(Errno::ENOMEM)
+            })
+        }
+    }
+
+    fn open_test_device(_flags: u32) -> SysResult<Box<dyn FileOps>> {
+        Ok(Box::new(TestDevice))
+    }
+
+    #[test]
+    fn registered_device_ioctl_and_mmap() {
+        use crate::linux::mman::*;
+        register(b"lx-test-device", open_test_device);
+        let fd = open(b"/dev/lx-test-device", O_RDWR | O_CLOEXEC);
+        assert_eq!(FDS.cloexec(fd), Ok(true));
+        let f = FDS.get(fd).unwrap();
+        assert_eq!(f.ops().ioctl(&f, 1, 41), Ok(42));
+        assert_eq!(f.ops().ioctl(&f, 2, 0), Err(Errno::EINVAL));
+        assert_eq!(
+            crate::mem::mmap(0, 4096, PROT_READ, MAP_PRIVATE, fd, 0),
+            Ok(0x1234_0000)
+        );
+        assert_eq!(
+            crate::mem::mmap(0, 8192, PROT_READ, MAP_PRIVATE, fd, 0),
+            Err(Errno::ENOMEM)
+        );
+        fs::close(fd).unwrap();
+        // Other objects have no control requests.
+        let fd = open(b"/dev/null", O_RDONLY);
+        let f = FDS.get(fd).unwrap();
+        assert_eq!(f.ops().ioctl(&f, 1, 0), Err(Errno::ENOTTY));
+        fs::close(fd).unwrap();
     }
 }
