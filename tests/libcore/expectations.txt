@@ -14,30 +14,19 @@
 # that pass now are removed, and failures that the missing providers hid are
 # listed under their own causes. The S1 runner has no expectations here.
 
-# --- art (2) -----------------------------------------------------------
-libcore.java.math.BigIntegerTest#test_Constructor_IILjava_util_Random | art | thousands of NativeBN calls through the boot image's compiled JNI stubs hit the null Thread* fault (finding 2): a crash, or a timeout with the JIT; passes with --no-boot-image
-libcore.java.math.BigIntegerTest#test_probablePrime | art | thousands of NativeBN calls through the boot image's compiled JNI stubs hit the null Thread* fault (finding 2): a crash, or a timeout with the JIT; passes with --no-boot-image
-
-# --- lx-syscall (47) --------------------------------------------------
+# --- lx-syscall (29) --------------------------------------------------
 libcore.java.io.ConsoleTest#testReadPassword | lx-syscall | tcgetattr on a non-terminal must fail with ENOTTY
 libcore.java.io.ConsoleTest#testReadPasswordWithPrompt | lx-syscall | tcgetattr on a non-terminal must fail with ENOTTY
 libcore.java.io.FileDescriptorTest#test_isSocket | lx-syscall | fail: java.io.FileNotFoundException: /dev/null: open failed: ENOENT (No such file or directory) @ libcore.io.IoBridge.open(IoBridge.java:574) / root cause android.system.ErrnoException:
-libcore.java.io.FileInputStreamTest#testSkipInPipes | lx-syscall | fail: android.system.ErrnoException: pipe2 failed: ENOSYS (Function not implemented) @ libcore.io.Linux.pipe2(Native Method)
 libcore.java.io.FileInputStreamTest#testSkipOnLargeFiles | lx-syscall | fail: android.system.ErrnoException: statvfs failed: ENOSYS (Function not implemented) @ libcore.io.Linux.statvfs(Native Method)
 libcore.java.io.FileInputStreamTest#test_available_on_nonIOCTL_supported_file | lx-syscall | fail: java.io.FileNotFoundException: /dev/zero: open failed: ENOENT (No such file or directory) @ libcore.io.IoBridge.open(IoBridge.java:574) / root cause android.system.ErrnoException:
-libcore.java.io.InterruptedStreamTest#testInterruptReadablePipeChannel | lx-syscall | fail: java.io.IOException: Function not implemented @ sun.nio.ch.IOUtil.makePipe(Native Method)
 libcore.java.io.InterruptedStreamTest#testInterruptReadableSocketChannel | lx-syscall | fail: java.net.SocketException: Function not implemented @ sun.nio.ch.Net.socket0(Native Method)
-libcore.java.io.InterruptedStreamTest#testInterruptWritablePipeChannel | lx-syscall | fail: java.io.IOException: Function not implemented @ sun.nio.ch.IOUtil.makePipe(Native Method)
 libcore.java.io.InterruptedStreamTest#testInterruptWritableSocketChannel | lx-syscall | fail: java.net.SocketException: Function not implemented @ sun.nio.ch.Net.socket0(Native Method)
 libcore.java.io.OldFilterInputStreamTest#test_available | lx-syscall | fail: java.io.IOException: Function not implemented @ java.io.FileInputStream.available0(Native Method)
-libcore.java.lang.OldSystemTest#test_currentTimeMillis | lx-syscall | System.currentTimeMillis() is 0: the wall clock (gettimeofday) reads the epoch
-libcore.java.lang.OldThreadTest#test_sleepJ | lx-syscall | measures Thread.sleep with System.currentTimeMillis(), which is 0 (wall clock reads the epoch)
-libcore.java.lang.OldThreadTest#test_sleepJI | lx-syscall | measures Thread.sleep with System.currentTimeMillis(), which is 0 (wall clock reads the epoch)
 libcore.java.nio.file.DefaultFileSystemProvider2Test#test_move_CopyOption | lx-syscall | setting file times (futimens or utimensat) fails with ENOSYS
 libcore.java.nio.file.DefaultFileSystemProvider2Test#test_newFileChannel_withFileAttributes | lx-syscall | setting file times (futimens or utimensat) fails with ENOSYS
 libcore.java.nio.file.DefaultFileSystemProvider2Test#test_readAttributes | lx-syscall | setting file times (futimens or utimensat) fails with ENOSYS
 libcore.java.nio.file.DefaultFileSystemProviderTest#test_copy_CopyOption | lx-syscall | setting file times (futimens or utimensat) fails with ENOSYS
-libcore.java.nio.file.DefaultFileSystemProviderTest#test_createDirectory$String$FileAttr | lx-syscall | mkdir does not apply the requested mode (rwx------ reads back as rwxr-xr-x)
 libcore.java.nio.file.LinuxFileSystemTest#dataFilestore | lx-syscall | no FileStore: /proc/mounts lists no mount for / and /data
 libcore.java.nio.file.LinuxFileSystemTest#rootFilestore | lx-syscall | no FileStore: /proc/mounts lists no mount for / and /data
 libcore.java.nio.file.LinuxFileSystemTest#test_getFileStores | lx-syscall | no FileStore: /proc/mounts lists no mount for / and /data
@@ -55,22 +44,11 @@ libcore.java.nio.file.WatchServiceTest#test_multipleServices | lx-syscall | no i
 libcore.java.nio.file.WatchServiceTest#test_removeTarget | lx-syscall | no inotify for WatchService (ENOSYS)
 libcore.java.nio.file.WatchServiceTest#test_singleDirectory | lx-syscall | no inotify for WatchService (ENOSYS)
 libcore.java.nio.file.WatchServiceTest#test_singleFile | lx-syscall | no inotify for WatchService (ENOSYS)
-libcore.java.text.DecimalFormatTest#testLocaleGroupingSeparator | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the currency of de_AT is ATS
-libcore.java.text.NumberFormatTest#test_currencyFromLocale | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the locale's currency is the one of 1970 (FRF, ATS)
-libcore.java.text.NumberFormatTest#test_currencyWithPatternDigits | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the locale's currency is the one of 1970 (FRF, ATS)
-libcore.java.text.OldDecimalFormatSymbolsTest#test_DecimalFormatSymbols_France | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the currency of fr_FR is FRF
-libcore.java.text.OldNumberFormatTest#test_getCurrencyInstanceLjava_util_Locale | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the locale's currency is the one of 1970 (FRF, ATS)
-libcore.java.text.SimpleDateFormatTest#test2DigitYearStartIsCloned | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0) (two-digit year start)
-libcore.java.util.CurrencyTest#test_getSymbol_38622 | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the locale's currency is the one of 1970 (FRF, ATS)
-libcore.java.util.OldAndroidLocaleTest#testICULocales | lx-syscall | the wall clock reads 1970 (System.currentTimeMillis() is 0), so the currency of fr_FR is FRF
-libcore.java.util.TimeZoneTest#testDisplayNames | lx-syscall | probably the wall clock: it reads 1970 (System.currentTimeMillis() is 0), and the zone's rules of 1970 are used (zones without a metazone name then)
-libcore.java.util.TimeZoneTest#testDisplayNames_nonUS | lx-syscall | probably the wall clock: it reads 1970 (System.currentTimeMillis() is 0), and the zone's rules of 1970 are used (zones without a metazone name then)
-libcore.java.util.TimeZoneTest#test_useDaylightTime_Taiwan | lx-syscall | probably the wall clock: it reads 1970 (System.currentTimeMillis() is 0), and the zone's rules of 1970 are used (Taiwan had daylight saving time after 1970)
 
 # --- bootclasspath (1) ------------------------------------------------
 libcore.java.util.PropertiesTest#storeToXml_withCharset_andBack | bootclasspath | no XML transformer (Xalan is not on the boot class path)
 
-# --- icu-data (2) ------------------------------------------------------
+# --- icu-data (2) -----------------------------------------------------
 libcore.java.text.DateFormatSymbolsTest#test_getInstance_unknown_locale | icu-data | fail: junit.framework.AssertionFailedError: expected:<java.text.DateFormatSymbols@16886a77> but was:<java.text.DateFormatSymbols@17bff917> @ junit.framework.Assert.fail(Assert.java:57)
 libcore.java.text.DecimalFormatSymbolsTest#test_getInstance_unknown_or_invalid_locale | icu-data | fail: junit.framework.AssertionFailedError: expected:<java.text.DecimalFormatSymbols@9c0a6846> but was:<java.text.DecimalFormatSymbols@a2dd4e46> @ junit.framework.Assert.fail(Assert.java
 
@@ -91,21 +69,20 @@ libcore.java.nio.BufferTest#initializationError | harness | fail: java.lang.Unsa
 libcore.java.nio.file.FileSystemsTest#test_newFileSystem$Path$ClassLoader_customClassLoader | harness | the test resource filesystemstest.jar is not built into the test jar
 libcore.java.nio.file.FileSystemsTest#test_newFileSystem$URI$Map$ClassLoader_customClassLoader | harness | the test resource filesystemstest.jar is not built into the test jar
 
-# --- triage (17) ------------------------------------------------------
+# --- triage (16) ------------------------------------------------------
 libcore.java.io.ObjectStreamClassSuidTest#computeDefaultSUID_targetSdkVersion_23(class_libcore.java.io.ObjectStreamClassSuidTest$InheritStaticInitializer,_509356435664048990,_-6712883765570708525)_[4] | triage | the SUID computed for targetSdkVersion 23 is the current one (was hidden behind the missing MessageDigest)
-libcore.java.io.OldAndroidFileTest#testFile | triage | fail: java.lang.IllegalArgumentException: Prefix string too short @ java.io.File.createTempFile(File.java:1996)
 libcore.java.io.OldFileWriterTest#test_handleEarlyEOFChar_2 | triage | fail: junit.framework.ComparisonFailure: expected:<...AAAAAAAAAAAAAAAAAAAA[BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-libcore.java.lang.OldThreadTest#test_getState | triage | hangs (no result for 120 s): Thread.getState of a sleeping or waiting thread
 libcore.java.lang.OldThreadTest#test_yield | triage | timing: compares two counter threads after Thread.sleep(1100); failed once in 4 runs, and again in the JIT run of round 2
 libcore.java.lang.RecordTest#gettingRecordFieldOffset_shouldThrow_afterBaklava | triage | fail: java.lang.AssertionError: expected java.lang.UnsupportedOperationException to be thrown, but nothing was thrown @ org.junit.Assert.assertThrows(Assert.java:1028)
 libcore.java.lang.RecordTest#testReflection | triage | fail: java.lang.AssertionError @ org.junit.Assert.fail(Assert.java:87)
 libcore.java.lang.SystemTest#testSystemProperties_mutable | triage | fail: java.lang.NullPointerException @ java.util.concurrent.ConcurrentHashMap.putVal(ConcurrentHashMap.java:1023)
+libcore.java.math.BigIntegerTest#test_Constructor_IILjava_util_Random | triage | with the JIT the run hangs after thousands of NativeBN allocations: ART aborts with a thread suspend timeout while the main thread and HeapTaskDaemon (in a GC) both spin in system time; passes with the interpreter | jit
+libcore.java.math.BigIntegerTest#test_probablePrime | triage | with the JIT the run hangs after thousands of NativeBN allocations: ART aborts with a thread suspend timeout while the main thread and HeapTaskDaemon (in a GC) both spin in system time; passes with the interpreter | jit
+libcore.java.nio.charset.StandardCharsetsEncoderTest#testCharset(UTF-16LE)_[4] | triage | hung once with the JIT (no result for 60 s; 170 ms in the other runs), possibly the same hang as BigIntegerTest | jit
 libcore.java.nio.file.LinuxPathTest#test_toRealPath | triage | toRealPath with '..' and a symbolic link fails an assertion (was hidden behind the temporary directory failure)
 libcore.java.nio.file.LinuxPathTest#test_toURI | triage | toURI of /dir/.. ends with '/': the path resolves as a directory although /dir does not exist (was hidden behind the temporary directory failure)
 libcore.java.text.DecimalFormatTest#test_setMaximumIntegerDigits | triage | fail: junit.framework.AssertionFailedError: expected:<309> but was:<400> @ junit.framework.Assert.fail(Assert.java:57)
-libcore.java.text.OldDecimalFormatSymbolsTest#test_RIHarmony_compatible | triage | fail: junit.framework.AssertionFailedError: Failed to load /serialization/java/text/DecimalFormatSymbols.ser @ junit.framework.Assert.fail(Assert.java:57)
 libcore.java.util.ListOfTest#empty | triage | List.of().contains(null) did not throw NullPointerException here; a direct check does throw
 libcore.java.util.MapOfTest#empty[OF] | triage | Map.of(): a null key or value check did not throw NullPointerException here
 libcore.java.util.MapOfTest#manyEntries[OF] | triage | Map.of(): a null key or value check did not throw NullPointerException here
 libcore.java.util.SetOfTest#empty | triage | Set.of().contains(null) did not throw NullPointerException here
-libcore.java.util.concurrent.ForkJoinPoolTest#testGetRunningThreadCount | triage | timing: a worker still counted as running (failed once in 4 runs)

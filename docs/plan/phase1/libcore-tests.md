@@ -1,6 +1,11 @@
 # libcore tests
 
-**Status:** 2026-11-27, first round (branch `phase1-libcore-tests`). The
+**Status:** 2026-11-27, second round (branch `p1-conscrypt-tzdata`):
+Conscrypt, Bouncy Castle, BoringSSL (NativeBN) and the time zone data are
+in the ART root. With main's wall clock, JNI stub and Linux layer fixes the
+pass rate is **98.2% (interpreter) and 98.1% (JIT)**; the providers and the
+time zone data alone took it from 89.8% to 97.4%. First round: branch
+`phase1-libcore-tests`. The
 phase 1 exit criterion "selected libcore tests pass" is measured here: a
 subset of libcore's own luni tests, compiled for ART and run in-process on
 andruna-app (ART on andruna-linker with bionic), on x64, with the
@@ -28,6 +33,12 @@ cargo xtask libcore-tests --no-build --mode jit
   class after a crash or a hang (no result for 120 s in the interpreter, 60 s
   with the JIT) without the tests already done, and matches the results
   against `tests/libcore/expectations.txt`.
+- Since round 2, `build_boot.py` also builds `bouncycastle.jar` and
+  `conscrypt.jar` (`spikes/s1/java/build_security.py`; it compiles two host
+  tools, flatc and Conscrypt's constants generator, with llvm-mingw's
+  clang++), and the art stage of `build_guest.py` stages `libcrypto.so`,
+  `libssl.so`, `libjavacrypto.so` and the time zone module files
+  (`<ART root>/tzdata`, mounted at `/apex/com.android.tzdata`); ADR 0021.
 - andruna-app runs with the boot image (dex2oat `--compile-boot`), so the
   boot class path runs as AOT code in both modes; `--mode int` interprets the
   test code, `--mode jit` JIT-compiles it.
@@ -52,7 +63,84 @@ and run; 12 are dropped by the build:
 | `lang.ThreadTest`, `lang.PackageTest`, `util.HashMapTest`, `nio.file.FilesTest`, `Files2Test`, `SimpleFileVisitorTest` (and `lang.ClassTest`, `lang.StackWalkerTest`, which use `ThreadTest`) | need Mockito (needs a dex-capable mocking backend; not set up) |
 | `io.FileTest`, `util.FormatterTest`, `util.RandomTest`, `util.regex.MatcherTest` | need `CoreCompatChangeRule` (test-rules `platform_compat`, which needs Guava) |
 
-## Results (x64)
+## Round 2 results (x64)
+
+Same machine and selection, andruna-app release
+(`x86_64-pc-windows-gnullvm`), boot image of the five boot jars. Two
+builds: this branch on main at `8b4cf96` (the round 1 base: only the
+providers and time zone data changed), and rebased on main at `db2f059`
+(with the wall clock fix, the JNI stub fix `art/0005` and andruna-lx round
+2).
+
+| Build, mode | Tests | Pass | Fail | Crash | Timeout | Not run | Pass rate | Wall |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **on `db2f059`, interpreter** | 3149 | 3088 | 58 | 0 | 0 | 0 | **98.2%** | 112 s |
+| **on `db2f059`, JIT** | 3149 | 3084 | 58 | 0 | 3 | 1 | **98.1%** | 142 s |
+| on `8b4cf96`, interpreter | 3145 | 3058 | 77 | 5 | 1 | 1 | 97.4% | 142 s |
+| on `8b4cf96`, JIT | 3124 | 3032 | 78 | 9 | 1 | 1 | 97.2% | 88 s |
+| round 1, interpreter | 3145 | 2823 | 312 | 8 | 1 | 1 | 89.8% | 138 s |
+
+What changed:
+
+- **Security providers.** `bouncycastle.jar` and `conscrypt.jar` are on the
+  boot class path with Conscrypt's natives (`libjavacrypto.so` over
+  BoringSSL's `libcrypto.so` and `libssl.so`), so
+  `sun.security.jca.Providers` initializes: `SecureRandom`
+  (`AndroidOpenSSL`), `MessageDigest`, `UUID.randomUUID` and temporary files
+  work. 197 of the 198 `bootclasspath` failures pass (the last needs Xalan);
+  the java.nio.file tests that could not create their temporary directory
+  now run and show their own causes (below).
+- **NativeBN.** `libjavacore.so` links BoringSSL's `libcrypto_static` and
+  registers `libcore.math.NativeBN` (patches/libcore/0001 is removed). The 3
+  `missing-native` tests pass with the interpreter; with the JIT the two
+  prime generation tests hang (below).
+- **Time zone data.** `system/timezone` at the pinned tag gives the
+  `com.android.tzdata` files (tzdata 2025c, format 10, with ICU's overlay).
+  All 60 `tzdata` failures pass once the wall clock is fixed; before it, 3
+  `TimeZoneTest` cases failed because ICU used the zones' rules of 1970.
+- **Test resources.** The harness now packages
+  `harmony-tests/src/test/resources` like core-tests (a serialization
+  resource of `LocaleTest`).
+
+By package (on `db2f059`, interpreter; pass / tests run):
+
+| Package | Pass / tests |
+| --- | --- |
+| java.lang | 632 / 644 |
+| java.math | 140 / 140 |
+| java.util | 1105 / 1110 |
+| java.util.concurrent | 266 / 266 |
+| java.util.regex | 48 / 48 |
+| java.io | 438 / 449 |
+| java.nio, java.nio.charset | 44 / 45 |
+| java.nio.file | 176 / 201 |
+| java.text | 239 / 242 |
+
+Failures by category (on `db2f059`; `tests/libcore/expectations.txt`, 61
+lines):
+
+| Category | Interpreter | JIT | What |
+| --- | --- | --- | --- |
+| `lx-syscall` | 29 | 29 | Sockets, `statvfs`, `FIONREAD`, `/dev` entries, mounts, ENOTTY from `tcgetattr` (round 1), plus what the providers hid: no inotify (`WatchService`, 14), setting file times (`futimens`/`utimensat`) ENOSYS (4) |
+| `triage` | 13 | 16 | Round 1's, plus three tests the providers hid (`LinuxPathTest#test_toRealPath`, `#test_toURI`, `ObjectStreamClassSuidTest` for target SDK 23); with the JIT, three hangs (below) |
+| `environment` | 8 | 8 | Unchanged |
+| `harness` | 5 | 5 | Round 1's 3, plus `filesystemstest.jar` (a built test resource) for two `FileSystemsTest` cases |
+| `icu-data` | 2 | 2 | Root-locale fallbacks for unknown locales |
+| `bootclasspath` | 1 | 1 | No XML transformer (Xalan is not on the boot class path) |
+
+**JIT hangs (new finding).** With the JIT, `BigIntegerTest`'s two prime
+generation tests (thousands of NativeBN allocations each) give no result in
+60 s, and once `StandardCharsetsEncoderTest` (UTF-16LE) did too. A probe
+with the same loop under `--mode jit` finishes the loop and then hangs: ART
+aborts with "Thread suspend timeout" while the main thread and
+HeapTaskDaemon (in a GC) both hold the mutator lock shared and have spent
+over 100 s in system time. It did not reproduce with
+`registerNativeAllocation` pressure alone or with plain BigInteger
+arithmetic. On `8b4cf96` the same tests crashed in the JNI stubs instead
+(finding 2), so whether the hang comes from the newer madvise retry in
+andruna-lx or from ART is open. Owner: ART integration and andruna-lx.
+
+## Round 1 results (x64)
 
 | Runner, mode | Tests | Pass | Fail | Crash | Timeout | Not run | Pass rate | Wall |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -172,12 +260,12 @@ and its wildcard line removed:
    With the old ART root every crash is `artJniMethodEnd` or
    `artJniMethodStart` reading address 0; with only patch 0005, the lx
    retry refused card table faults after four of them.
-3. **Time zone data.** 60 failures need `/apex/com.android.tzdata`
+3. **Time zone data (resolved in round 2).** 60 failures needed `/apex/com.android.tzdata`
    (`tzdata` and ICU's `icu_tzdata.dat`). The pinned AOSP projects
    (`aosp/aosp.lock`) do not include `system/timezone`, so the ART root has
    no time zone files; adding the project and staging its files into the
    ART root would turn these into passes.
-4. **Security providers.** The largest group (198) is the missing Conscrypt
+4. **Security providers (resolved in round 2, ADR 0021).** The largest group (198) was the missing Conscrypt
    and Bouncy Castle: Android's `Providers` asserts that every configured
    provider loads. Building Conscrypt (Java and its BoringSSL natives) into
    the boot class path is the fix; until then file-system tests that create
@@ -231,11 +319,9 @@ test support code are compiled from the fetched AOSP tree, never copied
 
 ## What remains
 
-- Fix the wall clock (finding 1); then the
-  clock-related expectations should be removed (they will show as
-  unexpected passes).
-- Time zone data and Conscrypt in the ART root (findings 3 and 4): about
-  260 of the 314 known failures.
+- The JIT hangs of round 2 (above).
+- Linux layer: inotify, file times, sockets, `statvfs`, `FIONREAD`, mounts
+  (29 tests).
 - Mockito for 8 dropped classes needs a dex-capable mocking backend (for
   example dexmaker); `CoreCompatChangeRule` needs Guava. Both are test-only
   and would be fetched like JUnit.
