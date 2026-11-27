@@ -1,0 +1,24 @@
+Do not restore x18 in longjmp on arm64 in the ANDRUNA build.
+
+On Windows ARM64, x18 always points to the thread environment block, and
+a fault taken with another value in x18 ends the process. bionic's
+longjmp restores the low bits of x18 (the shadow call stack pointer) from
+the jmp_buf. The ANDRUNA build has no shadow call stack (patch 0004), so
+x18 is left alone; setjmp still stores the value, and the jmp_buf layout
+is unchanged.
+
+diff --git a/libc/arch-arm64/bionic/setjmp.S b/libc/arch-arm64/bionic/setjmp.S
+--- a/libc/arch-arm64/bionic/setjmp.S
++++ b/libc/arch-arm64/bionic/setjmp.S
+@@ -253,9 +253,11 @@ L(load_registers):
+   m_unmangle_registers x2, sp_reg=x10
+   mov sp, x10
+
++#if !defined(ANDRUNA)
+   // Restore the low bits of the shadow call stack pointer.
+   and x18, x18, #~SCS_MASK
+   orr x18, x3, x18
++#endif
+
+   // Restore floating point registers.
+   ldp d14, d15, [x0, #(_JB_D14_D15 * 8)]

@@ -150,8 +150,8 @@ NSIS (installer stub and uninstaller, zlib compression module only)
      distribution.
 
 The component below is not permissively licensed. It is the platform the
-management app is built on (ADR 0005) and needs the maintainer's
-confirmation as a named exception to ADR 0006.
+management app is built on (ADR 0005) and is a named exception to ADR 0006
+(amendment of 2026-11-27).
 
 Windows App SDK (WinUI 3, Foundation, InteractiveExperiences, Base)
   Version: Microsoft.WindowsAppSDK.WinUI 1.8.251222000

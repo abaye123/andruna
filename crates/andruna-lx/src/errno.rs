@@ -27,6 +27,7 @@ impl fmt::Debug for Errno {
 
 impl Errno {
     pub const EPERM: Self = Self(EPERM);
+    pub const ERANGE: Self = Self(ERANGE);
     pub const ENOENT: Self = Self(ENOENT);
     pub const EINTR: Self = Self(EINTR);
     pub const EIO: Self = Self(EIO);

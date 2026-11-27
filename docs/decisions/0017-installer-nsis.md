@@ -1,6 +1,6 @@
 # 0017 - Installer built with NSIS
 
-**Status:** proposed, 2026-11-27
+**Status:** accepted, 2026-11-27
 
 ## Context
 P-1, P-2 and P-4 ask for one signed per-user installer, no administrator

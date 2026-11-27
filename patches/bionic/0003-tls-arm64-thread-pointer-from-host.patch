@@ -1,0 +1,34 @@
+Let the host set the arm64 thread pointer in the ANDRUNA build.
+
+Andruna runs bionic as Android ELF inside a Windows process (ADR 0013).
+On Windows ARM64, TPIDR_EL0 is documented as reserved, and whether a user
+write to it survives context switches is not established (spike S4).
+Under ANDRUNA, __set_tls calls the host function __andruna_set_tls, which
+sets the thread pointer for the current thread by whatever mechanism the
+platform needs and registers it. Reading it (__get_tls) is unchanged.
+
+diff --git a/libc/platform/bionic/tls.h b/libc/platform/bionic/tls.h
+--- a/libc/platform/bionic/tls.h
++++ b/libc/platform/bionic/tls.h
+@@ -38,9 +38,21 @@
+   return result;
+ }
+ 
++#if defined(ANDRUNA)
++// The host owns the thread pointer register (TPIDR_EL0 is reserved on
++// Windows); it sets it and keeps it for this thread.
++__BEGIN_DECLS
++void __andruna_set_tls(void* tls);
++__END_DECLS
++
++static inline void __set_tls(void* tls) {
++  __andruna_set_tls(tls);
++}
++#else
+ static inline void __set_tls(void* tls) {
+   __asm__("msr tpidr_el0, %0" : : "r" (tls));
+ }
++#endif
+ 
+ #elif defined(__arm__)
+ 

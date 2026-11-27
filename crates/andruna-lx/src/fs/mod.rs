@@ -16,6 +16,7 @@
 pub mod file;
 pub mod mount;
 pub mod path;
+pub mod stream;
 
 use std::sync::{Arc, RwLock};
 
@@ -51,6 +52,23 @@ pub fn set_cwd(dir: &str) -> SysResult<()> {
     let p = normalize(b"/", dir.as_bytes())?;
     *util::write(&CWD) = p.to_bytes();
     Ok(())
+}
+
+/// `chdir`: the directory must exist (`ENOENT`) and be a directory
+/// (`ENOTDIR`).
+pub fn chdir(path: &[u8]) -> SysResult<()> {
+    let st = fstatat(AT_FDCWD, path, 0)?;
+    if st.mode & crate::linux::stat::S_IFMT != crate::linux::stat::S_IFDIR {
+        return Err(Errno::ENOTDIR);
+    }
+    let p = normalize(&cwd(), path)?;
+    *util::write(&CWD) = p.to_bytes();
+    Ok(())
+}
+
+/// The working directory, an absolute Linux path.
+pub fn getcwd() -> Vec<u8> {
+    cwd()
 }
 
 fn cwd() -> Vec<u8> {

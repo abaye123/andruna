@@ -1,0 +1,10 @@
+# Exports of the bridge ld-android.so (aosp/bionic/ld_android_bridge.cpp):
+# the loader's shared globals, which libc.so reads, and the functions
+# andruna-linker calls (crates/andruna-linker/src/bridge.rs).
+{
+  global:
+    __loader_shared_globals;
+    __andruna_bridge_*;
+  local:
+    *;
+};
