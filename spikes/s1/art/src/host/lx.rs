@@ -362,7 +362,11 @@ gfn! {
     /// waiters that would have been requeued instead of moving them (a
     /// spurious wake-up, which every futex user must tolerate).
     pub unsafe fn h_syscall(n: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64) -> i64 {
+        // __NR_futex: 202 on x86_64, 98 in the generic table arm64 uses.
+        #[cfg(target_arch = "x86_64")]
         const NR_FUTEX: i64 = 202;
+        #[cfg(target_arch = "aarch64")]
+        const NR_FUTEX: i64 = 98;
         const FUTEX_WAKE: i64 = 1;
         const FUTEX_REQUEUE: i64 = 3;
         const FUTEX_CMP_REQUEUE: i64 = 4;
