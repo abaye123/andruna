@@ -51,12 +51,65 @@ stays open.
 | StartPackage | 0x0003 | `str` package | Started (0x8003): `u32` host pid, `bool` already running |
 | FocusWindow | 0x0004 | `str` package | Focused (0x8004) |
 | ListPackages | 0x0005 | - | Packages (0x8005): `u32` count, `str` each, sorted |
+| WaitEvents | 0x0010 | `u64` epoch, `u64` after, `u32` timeout ms | Events (0x8010): `u64` epoch, `u64` next, `bool` missed, `u32` count, events |
+| GetMissingFunctions | 0x0011 | `str` package | MissingFunctions (0x8011): `u64` updated ms, `u32` count, (`str` name, `u64` calls) each, most-called first |
+| ReportMissingFunctions | 0x0012 | `u32` count, (`str` name, `u64` calls) each | Reported (0x8012) |
+| StartActivity | 0x0013 | `str` package, `str` activity | Started (0x8003) |
 | (any) | | | Error (0x80FF): `u16` code, `str` message |
 
 Error codes: 1 UnsupportedVersion, 2 Malformed, 3 UnknownRequest,
 4 InvalidPackageName, 5 NotInstalled, 6 NotRunning, 7 NoWindow,
-8 HostStartFailed, 9 Busy, 10 Internal. Clients treat unknown codes as
-failures.
+8 HostStartFailed, 9 Busy, 10 Internal, 16 NotPermitted. Clients treat
+unknown codes as failures.
+
+### Number ranges
+
+New kinds are added without a version change: an older server answers
+them with `UnknownRequest`, which clients show as "not available yet".
+To keep parallel work from colliding:
+
+| Range | Owner |
+| --- | --- |
+| 0x0001..=0x000F | sysd basics and the package manager (install, uninstall, package details) |
+| 0x0010..=0x001F | events, crash reports, diagnostics, activity starts (manager and launcher) |
+
+Responses use the same number with the high bit set. Error codes 16..=31
+belong to the 0x0010 range.
+
+### Events (0x0010)
+
+A long poll. The client sends the `epoch` and `next` of its last answer
+(first call: epoch 0, after `u64::MAX`, which returns the current position
+at once). sysd answers as soon as an event newer than `after` exists, or
+with none after the timeout (at most 30 s). sysd keeps the last 256 events;
+`missed` says some were dropped, or that the epoch (a new sysd instance)
+changed. A connection that sends WaitEvents stops keeping sysd alive, so a
+background notifier does not hold sysd running.
+
+Each event: `u64` seq, `u64` time (ms since the Unix epoch), `u16` type,
+`u32` body length, body. Unknown types are skipped.
+
+| Type | Event | Body |
+| --- | --- | --- |
+| 1 | NotificationPosted | `str` package, `i32` id, `str` tag, `str` channel, `str` title, `str` text |
+| 2 | NotificationRemoved | `str` package, `i32` id, `str` tag |
+| 3 | AppCrashed | `str` package, `u32` pid, `u32` exit code, `str` reason |
+
+sysd publishes AppCrashed when a host process ends on its own with a
+non-zero exit code. Nothing posts notifications yet: the notification
+service arrives with the framework, and publishes through
+`andruna_sysd::events::Events::publish`.
+
+### Missing functions (0x0011, 0x0012)
+
+Names are `<area>:<entry point>`, for example `lx:epoll_pwait2` or
+`service:package.getInstalledModules`. Only a host process sysd started
+may report (sysd takes the package from the caller's process id, never from
+the message; anyone else gets NotPermitted). sysd adds reports to
+`diagnostics\<package>.missing`.
+
+`tests/golden/v1-events.txt` (checked by `tests/golden_events.rs`) holds
+the golden payloads of this range.
 
 Launcher and sysd speak this pipe protocol; app processes and the manager
 will use Binder once it exists, as the architecture says.

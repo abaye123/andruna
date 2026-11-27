@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use andruna_ipc::proto::{self, DecodeError};
 use andruna_ipc::{
@@ -12,7 +12,7 @@ use andruna_ipc::{
 
 use crate::activity::Activity;
 use crate::supervisor::Supervisor;
-use crate::{Layout, info, packages, warn};
+use crate::{Layout, diagnostics, info, packages, warn};
 
 /// Most client connections served at once.
 pub const MAX_CONNECTIONS: u32 = 64;
@@ -26,8 +26,13 @@ pub struct Context {
 }
 
 impl Context {
-    /// Answers one request.
+    /// Answers one request from an unknown process.
     pub fn handle(&self, req: Request) -> Response {
+        self.handle_from(req, None)
+    }
+
+    /// Answers one request from the process `peer_pid`, when known.
+    pub fn handle_from(&self, req: Request, peer_pid: Option<u32>) -> Response {
         match req {
             Request::Ping => Response::Pong {
                 protocol: PROTOCOL_VERSION,
@@ -69,28 +74,99 @@ impl Context {
                     format!("cannot read the package directory: {e}"),
                 ),
             },
+            Request::WaitEvents {
+                epoch,
+                after,
+                timeout_ms,
+            } => self.supervisor.events().wait(
+                epoch,
+                after,
+                Duration::from_millis(u64::from(timeout_ms.min(proto::MAX_WAIT_MS))),
+            ),
+            Request::GetMissingFunctions { package } => {
+                if !andruna_ipc::is_valid_package_name(&package) {
+                    return Response::error(
+                        ErrorCode::InvalidPackageName,
+                        format!("`{package}` is not a valid package name"),
+                    );
+                }
+                match diagnostics::read(&self.layout.diagnostics_dir(), &package) {
+                    Ok((updated_ms, entries)) => Response::MissingFunctions {
+                        updated_ms,
+                        entries,
+                    },
+                    Err(e) => Response::error(
+                        ErrorCode::Internal,
+                        format!("cannot read the counters: {e}"),
+                    ),
+                }
+            }
+            Request::ReportMissingFunctions { entries } => {
+                // The package is the one sysd started this process for;
+                // nothing the caller says about itself is trusted.
+                let Some(package) = peer_pid.and_then(|p| self.supervisor.package_for_pid(p))
+                else {
+                    return Response::error(
+                        ErrorCode::NotPermitted,
+                        "only app processes started by sysd report missing functions",
+                    );
+                };
+                match diagnostics::add(&self.layout.diagnostics_dir(), &package, &entries) {
+                    Ok(()) => Response::Reported,
+                    Err(e) => Response::error(
+                        ErrorCode::Internal,
+                        format!("cannot write the counters: {e}"),
+                    ),
+                }
+            }
+            Request::StartActivity { package, activity } => {
+                match self.supervisor.start_activity(&package, &activity) {
+                    Ok((pid, already_running)) => Response::Started {
+                        pid,
+                        already_running,
+                    },
+                    Err(f) => {
+                        info!(
+                            "start_activity_refused",
+                            package = package,
+                            activity = activity,
+                            code = format!("{:?}", f.code),
+                            reason = f.message
+                        );
+                        Response::error(f.code, f.message)
+                    }
+                }
+            }
         }
     }
 
     /// Serves one connection until the client closes it or sends a frame
-    /// that cannot be answered.
-    pub fn serve(&self, conn: &mut Connection) {
+    /// that cannot be answered. Returns true when the connection became
+    /// passive ([`Activity::connection_passive`]).
+    pub fn serve(&self, conn: &mut Connection) -> bool {
+        let mut passive = false;
         loop {
             let payload = match conn.read_frame() {
                 Ok(Some(p)) => p,
-                Ok(None) => return,
+                Ok(None) => return passive,
                 Err(e) => {
                     warn!(
                         "client_read_failed",
                         client_pid = conn.peer_pid(),
                         error = e
                     );
-                    return;
+                    return passive;
                 }
             };
             let id = proto::decode_header(&payload).map(|h| h.id).unwrap_or(0);
             let (resp, keep_open) = match Request::decode(&payload) {
-                Ok((_, req)) => (self.handle(req), true),
+                Ok((_, req)) => {
+                    if !passive && matches!(req, Request::WaitEvents { .. }) {
+                        passive = true;
+                        self.activity.connection_passive();
+                    }
+                    (self.handle_from(req, Some(conn.peer_pid())), true)
+                }
                 Err(DecodeError::UnsupportedVersion(v)) => (
                     Response::error(
                         ErrorCode::UnsupportedVersion,
@@ -120,7 +196,7 @@ impl Context {
                 );
             }
             if conn.write_frame(&resp.encode(id)).is_err() || !keep_open {
-                return;
+                return passive;
             }
         }
     }
@@ -166,8 +242,9 @@ impl Server {
                         thread::Builder::new()
                             .name("pipe-client".into())
                             .spawn(move || {
-                                client_ctx.serve(&mut conn);
-                                client_ctx.activity.connection_closed();
+                                if !client_ctx.serve(&mut conn) {
+                                    client_ctx.activity.connection_closed();
+                                }
                             });
                     if let Err(e) = spawned {
                         // The connection was dropped with the closure; the

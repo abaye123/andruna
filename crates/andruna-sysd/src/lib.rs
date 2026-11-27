@@ -20,6 +20,8 @@
 
 pub mod activity;
 pub mod appcontainer;
+pub mod diagnostics;
+pub mod events;
 pub mod host;
 pub mod l10n;
 pub mod log;
@@ -71,6 +73,11 @@ impl Layout {
     pub fn app_dir(&self) -> PathBuf {
         self.root.join("app")
     }
+
+    /// Missing-function counters: `diagnostics\<package>.missing`.
+    pub fn diagnostics_dir(&self) -> PathBuf {
+        self.root.join("diagnostics")
+    }
 }
 
 /// How sysd was asked to run.
@@ -81,6 +88,8 @@ pub enum Mode {
     Host {
         root: Option<PathBuf>,
         package: String,
+        /// The activity to start (`--activity`), when not the launcher one.
+        activity: Option<String>,
     },
 }
 
@@ -96,7 +105,7 @@ pub struct ServerConfig {
 
 pub const USAGE: &str = "\
 usage: andruna-sysd [--instance <name>] [--root <dir>] [--idle-timeout-ms <n>] [--ready-event <handle>]
-       andruna-sysd --host <package> [--root <dir>]";
+       andruna-sysd --host <package> [--activity <name>] [--root <dir>]";
 
 /// Parses the command line (without the program name).
 pub fn parse_args(args: &[String]) -> Result<Mode, String> {
@@ -105,6 +114,7 @@ pub fn parse_args(args: &[String]) -> Result<Mode, String> {
     let mut idle_timeout = DEFAULT_IDLE_TIMEOUT;
     let mut ready_event = None;
     let mut host = None;
+    let mut activity = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || {
@@ -141,11 +151,22 @@ pub fn parse_args(args: &[String]) -> Result<Mode, String> {
                 }
                 host = Some(p);
             }
+            "--activity" => {
+                let a = value()?;
+                if !andruna_ipc::is_valid_activity_name(&a) {
+                    return Err(format!("invalid activity name `{a}`"));
+                }
+                activity = Some(a);
+            }
             other => return Err(format!("unexpected argument `{other}`")),
         }
     }
     Ok(match host {
-        Some(package) => Mode::Host { root, package },
+        Some(package) => Mode::Host {
+            root,
+            package,
+            activity,
+        },
         None => Mode::Server(ServerConfig {
             instance,
             root,
@@ -173,8 +194,12 @@ pub fn main_with_args(args: &[String]) -> i32 {
             eprintln!("andruna-sysd: {e}\n{USAGE}");
             EXIT_USAGE
         }
-        Ok(Mode::Host { root, package }) => match layout(root) {
-            Ok(l) => host::run(&l, &package),
+        Ok(Mode::Host {
+            root,
+            package,
+            activity,
+        }) => match layout(root) {
+            Ok(l) => host::run(&l, &package, activity.as_deref()),
             Err(_) => EXIT_STARTUP_FAILED,
         },
         Ok(Mode::Server(cfg)) => run_server(cfg),

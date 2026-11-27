@@ -9,7 +9,9 @@ use windows::Win32::Foundation::{HANDLE, HWND, WAIT_OBJECT_0};
 use windows::Win32::Globalization::GetUserDefaultUILanguage;
 use windows::Win32::Security::SECURITY_ATTRIBUTES;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-use windows::Win32::System::Threading::{CreateEventW, WaitForMultipleObjects};
+use windows::Win32::System::Threading::{
+    CreateEventW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE, WaitForMultipleObjects,
+};
 use windows::Win32::UI::Controls::{
     TASKDIALOG_FLAGS, TASKDIALOGCONFIG, TD_ERROR_ICON, TDCBF_CLOSE_BUTTON,
     TDF_ALLOW_DIALOG_CANCELLATION, TDF_RTL_LAYOUT,
@@ -60,6 +62,22 @@ pub fn allow_foreground(pid: u32) {
     // SAFETY: no memory preconditions.
     unsafe {
         let _ = AllowSetForegroundWindow(pid);
+    }
+}
+
+/// Whether a named mutex exists in this session.
+pub fn mutex_exists(name: &str) -> bool {
+    let w = wide(name);
+    // SAFETY: `w` is a NUL-terminated UTF-16 string that outlives the call;
+    // the returned handle is owned and closed right away.
+    unsafe {
+        match OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, PCWSTR(w.as_ptr())) {
+            Ok(h) => {
+                drop(OwnedHandle::from_raw_handle(h.0));
+                true
+            }
+            Err(_) => false,
+        }
     }
 }
 

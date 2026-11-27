@@ -19,5 +19,8 @@ mod sys;
 pub use pipe::{
     Client, Connection, DEFAULT_INSTANCE, Endpoint, Error, PipeListener, PipeSecurity, Waker,
 };
-pub use proto::{ErrorCode, PROTOCOL_VERSION, Request, Response, Status, is_valid_package_name};
+pub use proto::{
+    ErrorCode, Event, EventKind, MissingFunction, Notification, PROTOCOL_VERSION, Request,
+    Response, Status, is_valid_activity_name, is_valid_package_name,
+};
 pub use sys::Sid;
