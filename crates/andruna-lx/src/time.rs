@@ -304,10 +304,10 @@ mod tests {
         let p = make_process_cpuclock(process::getpid(), CPUCLOCK_VIRT);
         assert!(clock_gettime(p).is_ok());
         assert_eq!(clock_gettime(-1), Err(Errno::EINVAL)); // kind 3
-        // A thread id of another process (the System process has id 4 and
-        // its threads are not ours; id 4 itself is a process).
+        // A process that does not exist (other processes' clocks are
+        // readable when Windows lets this process query them).
         assert_eq!(
-            clock_gettime(make_process_cpuclock(4, CPUCLOCK_SCHED)),
+            clock_gettime(make_process_cpuclock(0x7fff_fff0, CPUCLOCK_SCHED)),
             Err(Errno::EINVAL)
         );
     }
