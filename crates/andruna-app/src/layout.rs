@@ -5,17 +5,18 @@
 //! | `/` | the data directory (`--data`) |
 //! | `/apex/com.android.art` | the ART root (`lib64`, `bin`, `javalib`) |
 //! | `/apex/com.android.i18n/etc/icu` | `<ART root>/icu` (ICU's data file) |
+//! | `/apex/com.android.tzdata` | `<ART root>/tzdata` (time zone data) |
 //! | `/data/app/cp<N>` | the directory of class path entry N |
 //!
 //! The ART root is what `python aosp/tools/build_guest.py art` stages in
 //! `out/guest/<arch>/art-root`: bionic, libc++ and ART's libraries in
 //! `lib64`, `dalvikvm` and `dex2oat` in `bin`, the boot class path jars
 //! (and, after `--compile-boot`, the boot image in `javalib/<isa>`) in
-//! `javalib`, ICU's data in `icu`.
+//! `javalib`, ICU's data in `icu`, the time zone module's files in `tzdata`.
 
 use std::path::{Path, PathBuf};
 
-use crate::{BOOT_JARS, ICU_DATA, ISA};
+use crate::{BOOT_JARS, ICU_DATA, ISA, TZDATA_APEX};
 
 /// The ART module on disk.
 #[derive(Clone, Debug)]
@@ -85,6 +86,11 @@ impl ArtRoot {
         self.dir.join("icu")
     }
 
+    /// The time zone module (`etc/tz/...`).
+    pub fn tzdata(&self) -> PathBuf {
+        self.dir.join("tzdata")
+    }
+
     /// The primary boot image file for this architecture.
     pub fn boot_image(&self) -> PathBuf {
         self.javalib().join(ISA).join("boot.art")
@@ -146,6 +152,7 @@ impl Layout {
             ("/".to_string(), self.data.clone()),
             (crate::ART_APEX.to_string(), self.art.dir.clone()),
             (ICU_DATA.to_string(), self.art.icu()),
+            (TZDATA_APEX.to_string(), self.art.tzdata()),
         ];
         for (i, p) in classpath.iter().enumerate() {
             if !p.is_file() {
@@ -171,6 +178,9 @@ impl Layout {
         std::fs::create_dir_all(self.data.join("data/dalvik-cache").join(ISA))
             .map_err(|e| e.to_string())?;
         std::fs::create_dir_all(self.art.javalib().join(ISA)).map_err(|e| e.to_string())?;
+        // An ART root staged without time zone data still mounts (every
+        // zone is then GMT).
+        std::fs::create_dir_all(self.art.tzdata()).map_err(|e| e.to_string())?;
         for (guest, host) in self.mounts(classpath)? {
             let host = absolute(&host)?;
             andruna_lx::fs::mount::mount(&guest, &host)
@@ -233,7 +243,8 @@ mod tests {
         assert_eq!(m[0].0, "/");
         assert_eq!(m[1].0, "/apex/com.android.art");
         assert_eq!(m[2].0, ICU_DATA);
-        assert_eq!(m[3], ("/data/app/cp0".to_string(), absolute(&d).unwrap()));
+        assert_eq!(m[3].0, TZDATA_APEX);
+        assert_eq!(m[4], ("/data/app/cp0".to_string(), absolute(&d).unwrap()));
         assert!(l.mounts(&[d.join("missing.dex")]).is_err());
     }
 }

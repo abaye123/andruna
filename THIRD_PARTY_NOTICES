@@ -71,6 +71,27 @@ in the fetched project (third_party/aosp/<path>).
 - LZMA SDK, including its SHA-1 (dex2oat's oat build IDs, spike S1) -
   platform/external/lzma - public domain (explicit dedication) - NOTICE,
   file headers
+- BoringSSL (libcrypto, libssl; linked into Conscrypt's libjavacrypto and
+  libcore's libjavacore and libopenjdk) - platform/external/boringssl -
+  Apache-2.0 - src/LICENSE (Apache-2.0 text, upstream relicensed from the
+  OpenSSL and SSLeay licenses; at this tag every file built carries the
+  Apache-2.0 header), NOTICE (the same text). The fiat-crypto files in
+  src/third_party/fiat are Apache-2.0 (LICENSE there). Android.bp also
+  lists BSD, ISC, MIT and OpenSSL license kinds for the whole project; the
+  Go-licensed (BSD-3-Clause) TLS test code in src/ssl/test is not built
+- Conscrypt (conscrypt.jar, libjavacrypto) - platform/external/conscrypt -
+  Apache-2.0 - LICENSE, NOTICE (with the Apache-2.0 portions from Netty and
+  Apache Harmony, licenses/)
+- Bouncy Castle (bouncycastle.jar, the repackaged bcprov sources) -
+  platform/external/bouncycastle - MIT (Bouncy Castle License) - NOTICE
+- flatbuffers-java (compiled into conscrypt.jar as
+  com.android.org.conscrypt.internal.flatbuffers) - platform/external/flatbuffers
+  - Apache-2.0 - LICENSE. Its flatc compiler is a build tool only
+- Time zone data (staged as /apex/com.android.tzdata) -
+  platform/system/timezone - output_data/iana/tzdata: public domain (IANA
+  tz database, explicit dedication) - output_data/iana/NOTICE;
+  output_data/icu_overlay/*.res: Unicode-3.0 - output_data/icu_overlay/LICENSE;
+  output_data/android and version files: Apache-2.0 (the project)
 
 The AOSP component below is fetched at the same tag but not built yet. It
 is not permissively licensed; it is allowed as a named exception to ADR

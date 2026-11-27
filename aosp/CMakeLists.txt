@@ -64,6 +64,8 @@ if(ANDRUNA_AOSP_RUNTIME)
     # (spike S1 round 3, Android ELF build only).
     include(modules/art_elf.cmake)
     include(modules/icu.cmake)
+    include(modules/boringssl.cmake)
     include(modules/libcore_natives.cmake)
+    include(modules/conscrypt.cmake)
   endif()
 endif()

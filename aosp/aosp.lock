@@ -40,6 +40,24 @@ commit = "498b3de1a06e8cd87b2f9d49d1d8a23ebba5cc5a"
 purpose = "arm64 string routines of the guest bionic"
 
 [[project]]
+name = "platform/external/boringssl"
+path = "external/boringssl"
+commit = "0cd1f6a94b670e6b61af95a06e71e690ae8e3262"
+purpose = "libcrypto and libssl for Conscrypt and libcore's NativeBN (Apache-2.0 with OpenSSL/SSLeay and ISC parts)"
+
+[[project]]
+name = "platform/external/bouncycastle"
+path = "external/bouncycastle"
+commit = "c404048739e9a35cd51ad82906aadf910cca09dd"
+purpose = "Bouncy Castle security provider of the boot class path (MIT)"
+
+[[project]]
+name = "platform/external/conscrypt"
+path = "external/conscrypt"
+commit = "fd1a430323b5ab9945a15fce6c4a824aeffff685"
+purpose = "Conscrypt, the default security provider (Java and libjavacrypto natives, Apache-2.0)"
+
+[[project]]
 name = "platform/external/cpu_features"
 path = "external/cpu_features"
 commit = "76df2471cbea083fd15823ef051bbd85a7cddabb"
@@ -62,6 +80,12 @@ name = "platform/external/fdlibm"
 path = "external/fdlibm"
 commit = "34840811850a2924f1fcc7eee23dde1193e39eb6"
 purpose = "StrictMath natives for libcore"
+
+[[project]]
+name = "platform/external/flatbuffers"
+path = "external/flatbuffers"
+commit = "a321165845235e5fa63a5455ee866f4a5008b7c6"
+purpose = "flatbuffers-java in Conscrypt, and flatc (build tool) for its log store schema (Apache-2.0)"
 
 [[project]]
 name = "platform/external/fmtlib"
@@ -197,6 +221,12 @@ name = "platform/system/logging"
 path = "system/logging"
 commit = "d35ba620451b28512f46ebb5421f783fd77968d5"
 purpose = "liblog"
+
+[[project]]
+name = "platform/system/timezone"
+path = "system/timezone"
+commit = "cbd571efcf6b551ba83a31147ec7a06182f8ec31"
+purpose = "time zone data files of the tzdata module (tzdata, ICU overlay, tz_version)"
 
 [[project]]
 name = "platform/system/unwinding"

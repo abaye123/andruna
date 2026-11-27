@@ -9,7 +9,7 @@ name: libcore tests
 
 on:
   push:
-    branches: [phase1-libcore-tests]
+    branches: [phase1-libcore-tests, p1-conscrypt-tzdata]
     paths:
       - 'tests/libcore/**'
       - '.github/workflows/libcore-tests.yml'
