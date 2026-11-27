@@ -232,6 +232,39 @@ pub fn list_info(store: &Store, loc: &str) -> Response {
     Response::PackageInfos { packages }
 }
 
+/// The package manager's install hooks: each package gets its AppContainer
+/// profile and directory security at install ([`crate::appcontainer`]),
+/// from the per-install salt stored in its record; the profile is deleted
+/// at uninstall.
+pub struct AppContainerHooks {
+    pub layout: crate::Layout,
+}
+
+impl andruna_pkg::hooks::InstallHooks for AppContainerHooks {
+    fn installed(&self, p: &andruna_pkg::hooks::InstalledPackage<'_>) -> Result<(), String> {
+        let salt =
+            crate::appcontainer::Salt::parse(&p.record.install_salt).map_err(|e| e.to_string())?;
+        crate::appcontainer::install(&self.layout, &p.record.package, &salt)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn removed(&self, record: &andruna_pkg::db::PackageRecord, _keep_data: bool) {
+        // With keep_data the profile goes too: a reinstall gets a new salt
+        // and so a new identity, and re-secures the kept data directory
+        // for it.
+        let result = crate::appcontainer::Salt::parse(&record.install_salt)
+            .and_then(|salt| crate::appcontainer::uninstall(&record.package, &salt));
+        if let Err(e) = result {
+            warn!(
+                "appcontainer_delete_failed",
+                package = record.package,
+                error = e
+            );
+        }
+    }
+}
+
 pub fn list_names(store: &Store) -> Response {
     Response::Packages {
         packages: store.list().into_iter().map(|r| r.package).collect(),

@@ -243,6 +243,9 @@ pub fn open_store(layout: &Layout, product: bool) -> std::io::Result<andruna_pkg
     let launch_exe = exe_dir.join("andruna-launch.exe");
     let mut cfg = StoreConfig::new(layout.root.clone());
     cfg.compiler.app_exe = Some(exe_dir.join("andruna-app.exe"));
+    cfg.hooks = std::sync::Arc::new(pkg::AppContainerHooks {
+        layout: layout.clone(),
+    });
     cfg.ui_locale = match l10n::Lang::current() {
         l10n::Lang::He => "he".into(),
         l10n::Lang::En => "en".into(),

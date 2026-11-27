@@ -37,6 +37,19 @@ message to stderr without a dialog. Exit codes: 0 started or focused,
 1 bad command line, 2 sysd unavailable, 3 request refused (for example,
 package not installed).
 
+## Uninstall
+
+```
+andruna-launch.exe [--quiet [--keep-data]] [--instance <name>] [--root <dir>] --uninstall <package>
+```
+
+What a package's entry in Windows "Installed apps" runs
+([ADR 0027](../../docs/decisions/0027-installed-apps-entries.md)): asks
+"Uninstall <label>?" with a "Keep the app's data" check box, then sends
+`UninstallPackage`. `--quiet` asks nothing and removes the data unless
+`--keep-data` is given. A running app is not removed (the user is asked to
+close it first).
+
 ## Shortcuts
 
 Start menu shortcuts of installed apps follow one convention, shared by the

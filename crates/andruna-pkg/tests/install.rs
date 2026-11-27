@@ -414,10 +414,7 @@ fn several_launchers_get_one_shortcut_each() {
     let second = r.record.launchers[1].shortcut.clone().unwrap();
     assert_eq!(second.file_name().unwrap(), "Test App (Notes).lnk");
     let s = sys::read_shortcut(&second).unwrap();
-    assert_eq!(
-        s.arguments,
-        "--activity org.example.multi.Notes org.example.multi"
-    );
+    assert_eq!(s.arguments, "org.example.multi/org.example.multi.Notes");
     assert_eq!(s.app_user_model_id, app_user_model_id("org.example.multi"));
 }
 

@@ -272,4 +272,12 @@ fn refusals_map_to_error_codes() {
         c.request(&Request::Ping).unwrap(),
         Response::Pong { .. }
     ));
+    // Uninstall also deletes the AppContainer profile created at install.
+    let r = c
+        .request(&Request::UninstallPackage {
+            package: "org.example.ok".into(),
+            keep_data: false,
+        })
+        .unwrap();
+    assert_eq!(r, Response::Uninstalled);
 }

@@ -3,9 +3,11 @@
 //! "Installed apps" (ADR 0027, proposed).
 //!
 //! - One shortcut per launcher activity, in the Start menu's `Programs`
-//!   folder, named after the label. It starts `andruna-launch.exe
-//!   <package>`; shortcuts of further launcher activities pass
-//!   `--activity <class>` too.
+//!   folder, named after the label, by the convention of ADR 0034 and
+//!   `crates/andruna-launch/README.md` (shared with the manager's "Pin to
+//!   Start"): `andruna-launch.exe <package>`, or `<package>/<activity>`
+//!   for further launcher activities. A file of the same name that is not
+//!   this package's gets ` (Android)` appended instead of being replaced.
 //! - Every shortcut carries the AppUserModelID [`app_user_model_id`], so
 //!   the app's windows (which set the same ID, D-5) group under its
 //!   taskbar button and pinning works.
@@ -48,10 +50,16 @@ pub fn app_user_model_id(package: &str) -> String {
 /// A label made safe as a file name: no reserved characters, no trailing
 /// dots or spaces, not a reserved device name, at most 80 characters.
 pub fn file_name_for(label: &str, fallback: &str) -> String {
+    // As the manager's "Pin to Start" names the same file (ADR 0034):
+    // characters not allowed in file names become spaces.
     let mut s: String = label
         .chars()
-        .filter(|c| {
-            !c.is_control() && !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+        .map(|c| {
+            if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                ' '
+            } else {
+                c
+            }
         })
         .take(80)
         .collect();
@@ -89,8 +97,8 @@ pub struct Desktop {
 pub struct LauncherShortcut<'a> {
     pub activity: &'a str,
     pub name: String,
-    /// Whether this is the package's first launcher (started without
-    /// `--activity`).
+    /// Whether this is the package's first launcher (started without an
+    /// activity: `<package>`).
     pub primary: bool,
 }
 
@@ -138,15 +146,16 @@ impl Desktop {
             let arguments = if l.primary {
                 package.to_string()
             } else {
-                format!("--activity {} {package}", l.activity)
+                format!("{package}/{}", l.activity)
             };
+            let _ = description;
             sys::write_shortcut(
                 &path,
                 &Shortcut {
                     target: self.launch_exe.clone(),
                     arguments,
                     icon: icon.map(Path::to_path_buf),
-                    description: description.to_string(),
+                    description: l.name.clone(),
                     app_user_model_id: aumid.clone(),
                 },
             )
@@ -260,7 +269,7 @@ mod tests {
 
     #[test]
     fn file_names() {
-        assert_eq!(file_name_for("My: App?", "x.y"), "My App");
+        assert_eq!(file_name_for("My: App?", "x.y"), "My  App");
         assert_eq!(file_name_for("  ...", "x.y"), "x.y");
         assert_eq!(file_name_for("CON", "x.y"), "x.y");
         assert_eq!(file_name_for("com1.txt", "x.y"), "x.y");
