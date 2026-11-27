@@ -11,6 +11,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "andruna-binder"
+version = "0.1.0"
+dependencies = [
+ "andruna-lx",
+ "windows",
+]
+
+[[package]]
 name = "andruna-ipc"
 version = "0.1.0"
 dependencies = [

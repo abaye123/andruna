@@ -1,0 +1,31 @@
+[package]
+name = "andruna-binder"
+description = "Binder without a kernel driver: the broker (in sysd), the transport and the /dev/binder device of guest processes."
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# The /dev/binder device for guest processes (links andruna-lx, whose C
+# exports must not end up in sysd).
+device = ["dep:andruna-lx"]
+
+[dependencies]
+andruna-lx = { path = "../andruna-lx", optional = true }
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+]
+
+[lints]
+workspace = true
