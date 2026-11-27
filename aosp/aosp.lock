@@ -181,7 +181,7 @@ purpose = "SDK level helpers used by libartbase (android-modules-utils/sdk_level
 name = "platform/frameworks/native"
 path = "frameworks/native"
 commit = "ae266dcb706d083868578cfedce381ef44488a07"
-purpose = "libbinder and servicemanager"
+purpose = "libbinder, servicemanager, and the native framework headers and AIDL interfaces the framework uses"
 
 [[project]]
 name = "platform/libcore"
