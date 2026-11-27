@@ -18,7 +18,7 @@ windows (Rust crates for Windows APIs)
   windows-future 0.3.2, windows-numerics 0.3.1, windows-threading 0.2.1
   Source: https://crates.io/crates/windows
   License: MIT OR Apache-2.0 (used under MIT)
-  Linked into: andruna-lx
+  Linked into: andruna-lx, andruna-compositor
 
   Copyright (c) Microsoft Corporation.
 

@@ -28,6 +28,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "andruna-compositor"
+version = "0.1.0"
+dependencies = [
+ "windows",
+ "windows-numerics",
+]
+
+[[package]]
 name = "andruna-ipc"
 version = "0.1.0"
 dependencies = [
