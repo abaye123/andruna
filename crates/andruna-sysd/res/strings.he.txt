@@ -1,0 +1,4 @@
+# User-visible strings of andruna-sysd, Hebrew.
+# The placeholder host window is shown until andruna-app exists.
+host_title = {package} - Andruna (ממלא מקום)
+host_text = החלון הזה מחזיק מקום עבור האפליקציה {package}.\n\nAndruna עדיין לא מריצה אפליקציות Android: סביבת הריצה של האפליקציות (andruna-app) עדיין בבנייה. התהליך הזה מראה שהמפעיל, שרת המערכת וניהול התהליכים עובדים.\n\nסגרו את החלון כדי לסיים אותו.

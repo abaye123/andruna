@@ -9,6 +9,7 @@ Build orchestration in Rust, run as `cargo xtask <command>` (the alias is in
 | `fetch [--project <path>]...` | Shallow-clones the AOSP projects in `aosp/aosp.lock` at the pinned tag and verifies each commit; leaves out the directories a project lists in `exclude` (see aosp/README.md) |
 | `patch [--project <path>]...` | Applies `patches/<path>/*.patch` in order; already applied patches are skipped |
 | `build [--arch x64\|arm64] [--release]` | Builds the Rust workspace for the gnullvm target (more parts are added as they appear) |
+| `sign [--arch x64\|arm64] [--release] [<file>...]` | Signs files with signtool (SHA-256, RFC 3161 timestamp); without files, the shipped executables of `build` |
 
 `fetch` and `patch` also take `--lock <file>`, `--aosp-dir <dir>` and (for
 `patch`) `--patches-dir <dir>`, mainly for testing.
@@ -16,6 +17,16 @@ Build orchestration in Rust, run as `cargo xtask <command>` (the alias is in
 Dependencies are kept small and permissively licensed: `serde`, `toml` and
 `sha2`. Downloads use `curl` and zip extraction uses the `tar.exe` that ships
 with Windows.
+
+## Code signing
+
+`cargo xtask sign` selects the certificate by thumbprint from the
+certificate store: set `ANDRUNA_SIGN_THUMBPRINT` to its SHA-1 thumbprint on
+the signing machine (never commit it with a key). signtool is
+`ANDRUNA_SIGNTOOL`, else the newest Windows SDK signtool for the host
+architecture. The command is
+`signtool sign /sha1 <thumbprint> /fd sha256 /tr http://timestamp.digicert.com /td sha256 <files>`.
+The shipped executables are listed in `src/sign.rs` (`SHIPPED`).
 
 ## llvm-mingw location
 

@@ -1,0 +1,12 @@
+# User-visible strings of andruna-launch, English.
+title = Andruna
+usage = Andruna could not start the app because the shortcut is incomplete.\nUsage: andruna-launch.exe <package>
+invalid_package = "{package}" is not a valid Android package name. The shortcut may be damaged.
+sysd_missing = Andruna could not start because a program file is missing ({file}). Reinstall Andruna to repair it.
+sysd_start_failed = The Andruna system server could not start.\n\n{detail}
+sysd_timeout = The Andruna system server did not respond in time. Try again in a moment.
+sysd_untrusted = The connection to the Andruna system server was refused because it belongs to another user.
+not_installed = The app {package} is not installed in Andruna. The shortcut may be left over from an app that was removed.
+host_failed = The app {package} could not be started.\n\n{detail}
+busy = Too many apps are open. Close one and try again.
+internal = Andruna could not start the app {package}.\n\n{detail}

@@ -3,9 +3,32 @@
 version = 4
 
 [[package]]
+name = "andruna-ipc"
+version = "0.0.0"
+dependencies = [
+ "windows",
+]
+
+[[package]]
+name = "andruna-launch"
+version = "0.0.0"
+dependencies = [
+ "andruna-ipc",
+ "windows",
+]
+
+[[package]]
 name = "andruna-lx"
 version = "0.0.0"
 dependencies = [
+ "windows",
+]
+
+[[package]]
+name = "andruna-sysd"
+version = "0.0.0"
+dependencies = [
+ "andruna-ipc",
  "windows",
 ]
 
