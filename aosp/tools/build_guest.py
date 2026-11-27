@@ -216,6 +216,8 @@ def step_art(arch, out):
     out/s1/java, built by spikes/s1/java/build_boot.py) and icu (ICU's
     data file)."""
     b = stage(arch, out, "art")
+    if arch == "x64":
+        check_no_gs_access(b / "out")
     root = out / "art-root"
     for d in ("lib64", "bin", "javalib", "icu"):
         (root / d).mkdir(parents=True, exist_ok=True)
@@ -236,6 +238,30 @@ def step_art(arch, out):
     if dat:
         shutil.copy2(dat, root / "icu" / dat.name)
     print(f"ART root: {root}")
+
+
+# x86_64 nterp still uses %gs (patches/art/0003 keeps it disabled).
+NTERP_PREFIXES = ("nterp_", "Nterp", "ExecuteNterp", "artNterp", "EndExecuteNterp")
+
+
+def check_no_gs_access(lib_dir):
+    """On Windows x64 GS is the TEB, so an %gs: access in ART's x86_64 code
+    reads the TEB instead of the Thread (ADR 0015). Fails the build when one
+    is left outside nterp."""
+    objdump = LLVM_MINGW / "bin" / "llvm-objdump.exe"
+    found = []
+    for lib in sorted(lib_dir.glob("*.so")):
+        text = subprocess.run([objdump, "-d", "--no-show-raw-insn", lib],
+                              capture_output=True, text=True, check=True).stdout
+        symbol = ""
+        for line in text.splitlines():
+            if line.endswith(">:"):
+                symbol = line[line.find("<") + 1:-2]
+            elif "%gs:" in line and not symbol.startswith(NTERP_PREFIXES):
+                found.append(f"{lib.name}: {symbol}: {line.strip()}")
+    if found:
+        sys.exit("\n".join(["%gs: access in x86_64 code (GS is the TEB on Windows):"] + found))
+    print("no %gs: access outside nterp")
 
 
 def step_builtins(arch, out):

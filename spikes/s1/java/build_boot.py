@@ -409,7 +409,7 @@ def build_tests(jars):
         shutil.rmtree(classes)
     os.makedirs(classes)
     boot_classes = os.path.join(OUT, "classes", "boot")
-    for name in ("Hello", "Bench", "Faults"):
+    for name in ("Hello", "Bench", "Faults", "JniStress"):
         javac([
             "-encoding", "UTF-8",
             "-source", JAVA_VERSION, "-target", JAVA_VERSION,
