@@ -12,8 +12,11 @@
 //! - [`fd`]: the descriptor table and open file descriptions.
 //! - [`fs`]: paths, the mount table, files and directories.
 //! - [`mem`]: anonymous memory on Windows placeholders.
-//! - [`futex`], [`time`], [`process`]: synchronization, clocks, identity.
-//! - [`signal`]: the boundary for signal delivery (not implemented yet).
+//! - [`futex`], [`time`], [`process`], [`sched`]: synchronization,
+//!   clocks, identity, `prctl`, scheduling policy and affinity.
+//! - [`signal`]: actions, masks, alternate stacks, Linux signal frames for
+//!   Windows exceptions and queued signals.
+//! - [`properties`]: the read-only system property area bionic maps.
 //! - `ffi`: the C exports with bionic names, each catching panics and
 //!   reporting errors through `errno`.
 //! - `sys`: the wrappers around Windows APIs, where the `unsafe` calls
