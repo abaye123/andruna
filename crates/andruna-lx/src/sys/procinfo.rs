@@ -54,11 +54,12 @@ pub const WAIT_WR_PAGE_IN: u32 = 9;
 /// Reads the scheduler's information about this process.
 pub fn current_process() -> SysResult<ProcessInfo> {
     // The buffer holds every process and thread of the system (about 1 MB
-    // on a desktop). It starts at the size the last call needed, so a call
-    // normally queries once, and grows by an eighth over what Windows asks
-    // for: zeroing a much larger buffer cost more than the query itself
-    // (`/proc/self/stat`, which bionic reads at start-up, took 11 ms).
-    static LAST: AtomicUsize = AtomicUsize::new(64 * 1024);
+    // on a desktop). It starts at 2 MiB or the size the last call needed,
+    // so a call normally queries once, and grows by an eighth over what
+    // Windows asks for instead of to 16 times its size: the retried query
+    // and the larger buffer doubled the cost of opening `/proc/self/stat`,
+    // which bionic does twice while ART starts.
+    static LAST: AtomicUsize = AtomicUsize::new(256 * 1024);
     let pid = current_process_id() as usize;
     let mut buf: Vec<u64> = vec![0; LAST.load(Ordering::Relaxed)];
     loop {
