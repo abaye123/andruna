@@ -181,5 +181,7 @@ can).
 - **AppUserModelID per package (D-5)**, taskbar badges, the system menu's
   Android entries, Windows text scale to `fontScale` (D-9, reported as
   1.0), high contrast.
-- **ARM64**: the crate builds for `aarch64-pc-windows-gnullvm` in CI; the
-  window tests ran only on x64 here.
+- **Hardware input on ARM64**: CI (hosted x64 and ARM64 runners) builds
+  the crate and passes every test, the window tests included; foreground
+  input injection and the compositor clock parts report "skipped" where
+  the runner does not offer them (the CI log does not show which ran).
