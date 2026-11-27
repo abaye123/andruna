@@ -134,8 +134,12 @@ class Expectation:
         self.line = line
         self.used = False
 
-    def matches(self, test_id, mode):
-        if self.modes and mode not in self.modes:
+    def matches(self, test_id, mode, runner):
+        # "only" holds runner names and mode names; each kind that is
+        # present must match.
+        runners = self.modes & set(RUNNERS)
+        modes = self.modes - set(RUNNERS)
+        if (runners and runner not in runners) or (modes and mode not in modes):
             return False
         cls = test_id.split("#", 1)[0]
         return fnmatch.fnmatchcase(test_id, self.pattern) or self.pattern == cls
@@ -168,10 +172,13 @@ def load_expectations(path):
             continue
         parts = [p.strip() for p in line.split("|")]
         if len(parts) < 3:
-            raise SystemExit(f"{path}:{n}: expected '<test> | <category> | <reason> [| modes]'")
+            raise SystemExit(f"{path}:{n}: expected '<test> | <category> | <reason> [| runners and modes]'")
         if parts[1] not in CATEGORIES:
             raise SystemExit(f"{path}:{n}: unknown category {parts[1]}")
         modes = set(m.strip() for m in parts[3].split(",")) if len(parts) > 3 and parts[3] else set()
+        unknown = modes - set(RUNNERS) - {"int", "jit", "jit0"}
+        if unknown:
+            raise SystemExit(f"{path}:{n}: unknown runner or mode {sorted(unknown)}")
         exps.append(Expectation(parts[0], parts[1], parts[2], modes, n))
     return exps
 
@@ -221,6 +228,13 @@ def run_class(runner, cls, logdir, test_timeout, max_restarts):
             logf.flush()
             pending, done, exit_code, timed_out, tail = run_process(cmd, env, logf, test_timeout,
                                                                     results, order)
+            if done == "noexclude":
+                cid = f"{cls}#<rest>"
+                order.append(cid)
+                results[cid] = {"id": cid, "status": "notrun", "ms": 0, "reason":
+                                "the tests after the crash were not run: this class's runner "
+                                "cannot skip single parameter sets"}
+                break
             if done:
                 break
             # The process ended (or hung) before reporting DONE.
@@ -314,6 +328,8 @@ def run_process(cmd, env, logf, test_timeout, results, order):
                                 "reason": sub[2] + ": " + (sub[3] if len(sub) > 3 else "")}
         elif kind == "DONE":
             done = True
+        elif kind == "NOEXCLUDE":
+            done = "noexclude"
     try:
         code = proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
@@ -342,6 +358,8 @@ def kill(proc):
 
 
 def main():
+    # Failure reasons may hold any character; the console code page may not.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--mode", default="int", choices=["int", "jit", "jit0"])
     ap.add_argument("--runner", default=os.environ.get("LIBCORE_RUNNER", DEFAULT_RUNNER),
@@ -408,7 +426,7 @@ def main():
     tests = []
     for cls in classes:
         for t in all_results.get(cls, []):
-            exp = next((e for e in exps if e.matches(t["id"], a.mode)), None)
+            exp = next((e for e in exps if e.matches(t["id"], a.mode, a.runner)), None)
             if exp:
                 exp.used = True
                 t["expected"] = {"category": exp.category, "reason": exp.reason, "line": exp.line}
@@ -426,7 +444,7 @@ def main():
     status = {}
     for t in tests:
         status[t["status"]] = status.get(t["status"], 0) + 1
-    ran = sum(v for k, v in status.items() if k != "skip")
+    ran = sum(v for k, v in status.items() if k not in ("skip", "notrun"))
     passed = status.get("pass", 0)
     unexpected = [t for t in tests if t["outcome"] == "unexpected-failure"]
     upass = [t for t in tests if t["outcome"] == "unexpected-pass"]

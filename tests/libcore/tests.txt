@@ -29,5 +29,7 @@ luni/src/test/java/libcore/java/nio/file/*Test.java
 # java.text (ICU-backed formatting)
 luni/src/test/java/libcore/java/text/*Test.java
 
-# Support classes named only by META-INF/services in the test resources.
+# Support classes named only by META-INF/services in the test resources, or
+# loaded by reflection.
 + luni/src/test/java/libcore/java/nio/charset/SettableCharsetProvider.java
++ support/src/test/java/tests/support/Support_ClassLoaderDalvik.java

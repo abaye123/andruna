@@ -68,12 +68,14 @@ and the finished ones excluded (`--exclude-file`).
 `expectations.txt` has one line per known failure:
 
 ```
-<class>#<method> | <category> | <reason> [| <modes>]
+<class>#<method> | <category> | <reason> [| <only>]
 ```
 
-The test may be a whole class (`<class>`) or a glob. Categories are listed
-in `run.py` (`CATEGORIES`): `lx-syscall`, `missing-native`, `icu-data`,
-`environment`, `art`, `slow`, `harness`, `triage`. A listed test that passes
+The test may be a whole class (`<class>`) or a glob. `<only>` limits the
+line to runners (`s1`, `app`) and modes (`int`, `jit`, `jit0`). Categories
+are listed in `run.py` (`CATEGORIES`): `lx-syscall`, `s1-libc`,
+`missing-native`, `bootclasspath`, `icu-data`, `environment`, `art`, `slow`,
+`harness`, `triage`. A listed test that passes
 is reported as an unexpected pass, so the list shrinks as fixes land.
 
 ## Test libraries

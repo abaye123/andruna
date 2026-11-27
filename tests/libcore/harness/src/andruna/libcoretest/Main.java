@@ -29,6 +29,7 @@ import org.junit.runner.notification.RunListener;
  * ##lt FAIL  &lt;class&gt;#&lt;method&gt; &lt;ms&gt; &lt;reason&gt;
  * ##lt SKIP  &lt;class&gt;#&lt;method&gt; 0 &lt;reason&gt;
  * ##lt CLASS &lt;class&gt; &lt;status&gt; &lt;reason&gt;
+ * ##lt NOEXCLUDE &lt;class&gt;#&lt;method&gt;   (an excluded test started: exit 4)
  * ##lt DONE
  * </pre>
  *
@@ -108,7 +109,7 @@ public final class Main {
             }
         }
         JUnitCore core = new JUnitCore();
-        core.addListener(new Listener(out));
+        core.addListener(new Listener(out, excluded));
         try {
             Result r = core.run(runner);
             emit(out, "CLASS " + name + " RAN " + r.getRunCount());
@@ -139,9 +140,14 @@ public final class Main {
         if (st != null && st.length > 0) {
             sb.append(" @ ").append(st[0]);
         }
+        // The root cause usually names the real problem.
         Throwable cause = t.getCause();
+        for (int depth = 0; cause != null && cause.getCause() != null
+                && cause.getCause() != cause && depth < 20; depth++) {
+            cause = cause.getCause();
+        }
         if (cause != null && cause != t) {
-            sb.append(" | caused by ").append(cause.getClass().getName());
+            sb.append(" | root cause ").append(cause.getClass().getName());
             if (cause.getMessage() != null) {
                 sb.append(": ").append(cause.getMessage());
             }
@@ -162,12 +168,21 @@ public final class Main {
         private String skipReason;
         private long start;
 
-        Listener(PrintStream out) {
+        private final Set<String> excluded;
+
+        Listener(PrintStream out, Set<String> excluded) {
             this.out = out;
+            this.excluded = excluded;
         }
 
         @Override
         public void testStarted(Description d) {
+            if (excluded.contains(id(d))) {
+                // Some runners (JUnitParams) cannot filter single parameter
+                // sets; stop instead of running a test that crashed before.
+                emit(out, "NOEXCLUDE " + id(d));
+                System.exit(4);
+            }
             failure = null;
             skipped = false;
             skipReason = null;
