@@ -32,3 +32,21 @@ opt-level = 1
 
 [profile.dev.package.andruna-linker]
 opt-level = 1
+
+# Signature verification (andruna-pkg) and the test keys its tests generate
+# (RSA 2048) take seconds unoptimized; optimize the bignum and curve crates
+# in debug builds too.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3
+
+[profile.dev.package.p256]
+opt-level = 3
+
+[profile.dev.package.primeorder]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
