@@ -1,0 +1,30 @@
+// Resources of andruna-launch.exe: the application manifest and version
+// information. Compiled by build.rs with llvm-mingw's windres.
+
+// CREATEPROCESS_MANIFEST_RESOURCE_ID, RT_MANIFEST
+1 24 "andruna-launch.manifest"
+
+1 VERSIONINFO
+FILEVERSION 0,0,0,0
+PRODUCTVERSION 0,0,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Andruna"
+      VALUE "FileDescription", "Andruna app launcher"
+      VALUE "FileVersion", "0.0.0"
+      VALUE "InternalName", "andruna-launch"
+      VALUE "OriginalFilename", "andruna-launch.exe"
+      VALUE "ProductName", "Andruna"
+      VALUE "ProductVersion", "0.0.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

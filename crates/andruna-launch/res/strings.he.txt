@@ -1,0 +1,12 @@
+# User-visible strings of andruna-launch, Hebrew.
+title = Andruna
+usage = Andruna לא הצליחה להפעיל את האפליקציה כי קיצור הדרך חסר.\nשימוש: andruna-launch.exe <package>
+invalid_package = "{package}" אינו שם חבילה תקין של Android. ייתכן שקיצור הדרך פגום.
+sysd_missing = Andruna לא הצליחה לפעול כי קובץ תוכנה חסר ({file}). התקינו את Andruna מחדש כדי לתקן.
+sysd_start_failed = שרת המערכת של Andruna לא הצליח לפעול.\n\n{detail}
+sysd_timeout = שרת המערכת של Andruna לא הגיב בזמן. נסו שוב בעוד רגע.
+sysd_untrusted = החיבור לשרת המערכת של Andruna נדחה כי הוא שייך למשתמש אחר.
+not_installed = האפליקציה {package} אינה מותקנת ב-Andruna. ייתכן שקיצור הדרך נשאר מאפליקציה שהוסרה.
+host_failed = לא ניתן היה להפעיל את האפליקציה {package}.\n\n{detail}
+busy = יותר מדי אפליקציות פתוחות. סגרו אחת ונסו שוב.
+internal = Andruna לא הצליחה להפעיל את האפליקציה {package}.\n\n{detail}

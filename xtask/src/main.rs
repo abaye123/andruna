@@ -3,6 +3,7 @@
 mod aosp;
 mod aosp_build;
 mod build_cmd;
+mod sign;
 mod toolchain;
 mod util;
 
@@ -32,6 +33,12 @@ Commands:
         Patches already applied (recorded with their SHA-256) are skipped.
         --reset first restores each checkout to the locked commit, which is
         needed after a patch changed or was removed.
+  sign [--arch x64|arm64] [--release] [<file>...]
+        Sign files with signtool (SHA-256 digest, RFC 3161 timestamp from
+        timestamp.digicert.com), selecting the certificate by the thumbprint
+        in $ANDRUNA_SIGN_THUMBPRINT. Without files, signs the shipped
+        executables of `build` for that arch and profile. signtool is
+        $ANDRUNA_SIGNTOOL, else the newest Windows SDK's.
   toolchain [--dir <dir>] [--force]
         Download and install the pinned llvm-mingw release, verified by
         SHA-256, into <dir> (default: $ANDRUNA_LLVM_MINGW, else
@@ -55,6 +62,34 @@ fn run(args: &[String]) -> Result<()> {
         print!("{USAGE}");
         return Ok(());
     };
+    if command == "sign" {
+        // `sign` takes file names, which the option parser does not.
+        let (mut flags, mut files) = (Vec::new(), Vec::new());
+        let mut it = rest.iter();
+        while let Some(a) = it.next() {
+            if a == "--arch" {
+                flags.push(a.clone());
+                flags.extend(it.next().cloned());
+            } else if a.starts_with("--") {
+                flags.push(a.clone());
+            } else {
+                files.push(a.clone());
+            }
+        }
+        let mut opts = Options::parse(&flags)?;
+        let arch = match opts.value("--arch")? {
+            Some(a) => build_cmd::Arch::parse(&a)?,
+            None => build_cmd::Arch::host(),
+        };
+        let release = opts.flag("--release");
+        opts.finish()?;
+        let files: Vec<PathBuf> = if files.is_empty() {
+            sign::default_files(arch, release)
+        } else {
+            files.into_iter().map(PathBuf::from).collect()
+        };
+        return sign::sign(&files);
+    }
     let mut opts = Options::parse(rest)?;
     match command.as_str() {
         "build" => {

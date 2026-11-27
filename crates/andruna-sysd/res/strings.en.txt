@@ -1,0 +1,4 @@
+# User-visible strings of andruna-sysd, English.
+# The placeholder host window is shown until andruna-app exists.
+host_title = {package} - Andruna (placeholder)
+host_text = This window stands in for the app {package}.\n\nAndruna cannot run Android apps yet: the app runtime (andruna-app) is still being built. This placeholder process shows that the launcher, the system server and process supervision work.\n\nClose this window to end it.
