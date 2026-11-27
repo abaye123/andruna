@@ -184,12 +184,28 @@ unsafe extern "C" fn on_host_stack(sp: u64, f: u64, a0: u64, a1: u64) -> ! {
 }
 
 gfn! {
-    /// Unmaps the guest stack and ends the thread, on the host stack.
+    /// The end of a guest thread, on its Windows stack: unmaps the guest
+    /// stack if asked, then clears the tid word and wakes the joiner. As
+    /// with the kernel, the word is cleared only once the thread no longer
+    /// uses its guest stack, because the joiner may free that stack.
     unsafe fn teardown(stack: u64, size: u64) -> () {
-        let _ = andruna_lx::mem::munmap(stack as usize, size as usize);
-        // SAFETY: ends the current thread; nothing on this stack is used
-        // afterwards.
+        if size != 0 {
+            let _ = andruna_lx::mem::munmap(stack as usize, size as usize);
+        }
+        clear_tid();
+        // SAFETY: ends the current thread; nothing on the guest stack is
+        // used afterwards.
         unsafe { ExitThread(0) }
+    }
+}
+
+fn clear_tid() {
+    let ctid = CLEAR_TID.with(|c| c.replace(0));
+    if ctid != 0 && ctid.is_multiple_of(4) {
+        // SAFETY: the word registered by clone or set_tid_address, an
+        // aligned i32 the thread's owner keeps alive until it is cleared.
+        unsafe { (*(ctid as *const AtomicI32)).store(0, Ordering::Release) };
+        andruna_lx::futex::wake(ctid as usize, 1);
     }
 }
 
@@ -201,25 +217,18 @@ pub fn set_tid_address(p: u64) -> i64 {
 
 /// Ends the current thread (`exit`, `_exit_with_stack_teardown`).
 pub fn exit_current(status: i32, unmap: Option<(u64, u64)>) -> ! {
-    let ctid = CLEAR_TID.with(|c| c.replace(0));
-    if ctid != 0 && ctid.is_multiple_of(4) {
-        // SAFETY: the word registered by clone or set_tid_address, an
-        // aligned i32 the thread's owner keeps alive until it is cleared.
-        unsafe { (*(ctid as *const AtomicI32)).store(0, Ordering::Release) };
-        andruna_lx::futex::wake(ctid as usize, 1);
-    }
     let (base, limit) = SAVED_BOUNDS.with(|c| c.get());
     let host_sp = HOST_SP.with(|c| c.get());
     if base != 0 {
         set_stack_bounds(base, limit);
     }
-    if let Some((stack, size)) = unmap
-        && host_sp != 0
-    {
+    if host_sp != 0 {
+        let (stack, size) = unmap.unwrap_or((0, 0));
         // SAFETY: `host_sp` is this thread's Windows stack, unused since the
         // switch; `teardown` never returns.
         unsafe { on_host_stack(host_sp, teardown as usize as u64, stack, size) }
     }
+    clear_tid();
     // SAFETY: ends the current thread.
     unsafe { ExitThread(status as u32) }
 }
