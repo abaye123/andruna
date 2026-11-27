@@ -60,6 +60,9 @@ thread_local! {
     static THREAD_DTORS: RefCell<Vec<(DtorFn, usize)>> = const { RefCell::new(Vec::new()) };
 }
 
+/// (tid, thread pointer) of every guest thread started, for the watchdog.
+pub static GUEST_TPS: Mutex<Vec<(i32, u64)>> = Mutex::new(Vec::new());
+
 const MAX_KEYS: usize = 256;
 static KEYS: Mutex<[(bool, usize); MAX_KEYS]> = Mutex::new([(false, 0); MAX_KEYS]);
 
@@ -68,6 +71,10 @@ static KEYS: Mutex<[(bool, usize); MAX_KEYS]> = Mutex::new([(false, 0); MAX_KEYS
 pub fn enter_guest_thread(t: *mut GuestThread) -> ThreadArea {
     let area = ThreadArea::new();
     area.activate();
+    GUEST_TPS
+        .lock()
+        .unwrap()
+        .push((andruna_lx::process::gettid(), area.tp));
     SELF.with(|c| c.set(t as usize));
     // SAFETY: `t` is a live thread record.
     unsafe {
@@ -282,10 +289,14 @@ fn tid() -> u32 {
 
 fn lock_word(word: &AtomicU32, deadline: Option<&Timespec>) -> i32 {
     let mut w = word.load(Ordering::Relaxed);
+    // Once this thread has waited, other waiters may be asleep: the lock is
+    // then always taken as contended (2), or their wake-up would be lost.
+    let mut waited = false;
     loop {
         let ty = w & !3;
         if w & 3 == 0 {
-            match word.compare_exchange_weak(w, ty | 1, Ordering::Acquire, Ordering::Relaxed) {
+            let locked = if waited { ty | 2 } else { ty | 1 };
+            match word.compare_exchange_weak(w, locked, Ordering::Acquire, Ordering::Relaxed) {
                 Ok(_) => return 0,
                 Err(x) => {
                     w = x;
@@ -312,18 +323,8 @@ fn lock_word(word: &AtomicU32, deadline: Option<&Timespec>) -> i32 {
             Err(e) if e.0 == ETIMEDOUT => return ETIMEDOUT,
             _ => {}
         }
+        waited = true;
         w = word.load(Ordering::Relaxed);
-        // After a wait, take the lock as contended so the unlock wakes the
-        // next waiter.
-        if w & 3 == 0 {
-            if word
-                .compare_exchange(w, ty | 2, Ordering::Acquire, Ordering::Relaxed)
-                .is_ok()
-            {
-                return 0;
-            }
-            w = word.load(Ordering::Relaxed);
-        }
     }
 }
 
@@ -653,6 +654,7 @@ gfn! {
                     Ok(_) => {
                         // SAFETY: the guest's init routine (no arguments, so
                         // the convention does not matter for the call).
+                        #[allow(clippy::useless_transmute)] // the same type on arm64
                         let g: GuestVoidFn = unsafe { core::mem::transmute(f) };
                         g();
                         w.store(2, Ordering::Release);
@@ -876,4 +878,48 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("__andruna_libc_thread_exit", h_libc_thread_exit as usize),
         ("__tls_get_addr", h_tls_get_addr as usize),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Many threads on one normal mutex: every increment is counted and
+    /// no thread is left asleep (a lost wake-up hangs this test).
+    #[test]
+    fn mutex_contention() {
+        const THREADS: usize = 8;
+        const ROUNDS: usize = 20_000;
+        struct Shared(
+            core::cell::UnsafeCell<[u32; 10]>,
+            core::cell::UnsafeCell<u64>,
+        );
+        // SAFETY: the counter is only touched under the mutex.
+        unsafe impl Sync for Shared {}
+        let s = std::sync::Arc::new(Shared(
+            core::cell::UnsafeCell::new([0; 10]),
+            core::cell::UnsafeCell::new(0),
+        ));
+        let hs: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let s = s.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..ROUNDS {
+                        let m = s.0.get() as *mut u32;
+                        // SAFETY: a zeroed (normal) mutex shared by the threads.
+                        unsafe {
+                            assert_eq!(mutex_lock(m, None, false), 0);
+                            *s.1.get() += 1;
+                            assert_eq!(mutex_unlock(m), 0);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for h in hs {
+            h.join().unwrap();
+        }
+        // SAFETY: all threads joined.
+        assert_eq!(unsafe { *s.1.get() }, (THREADS * ROUNDS) as u64);
+    }
 }

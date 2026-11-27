@@ -66,6 +66,11 @@ in the fetched project (third_party/aosp/<path>).
 - tinyxml2 - platform/external/tinyxml2 - Zlib - LICENSE.txt
 - dlmalloc header (read by the libart attempt) - platform/external/dlmalloc
   - public domain (explicit dedication) - NOTICE
+- VIXL (AArch64 assembler for ART's arm64 code generator, spike S1) -
+  platform/external/vixl - BSD-3-Clause - LICENCE
+- LZMA SDK, including its SHA-1 (dex2oat's oat build IDs, spike S1) -
+  platform/external/lzma - public domain (explicit dedication) - NOTICE,
+  file headers
 
 The AOSP component below is fetched at the same tag but not built yet. It
 is not permissively licensed; it is allowed as a named exception to ADR

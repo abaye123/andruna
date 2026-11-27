@@ -634,7 +634,11 @@ fn map_object(path: &Path, name: &str) -> Result<Object, String> {
     for i in 1..nsyms {
         let s = obj.sym(i);
         let bind = s.st_info >> 4;
-        if s.st_shndx == SHN_UNDEF || bind == STB_LOCAL || (s.st_other & 3) != STV_DEFAULT {
+        // STV_PROTECTED symbols are exported too (ART marks its API so,
+        // for example Runtime::instance_, which dex2oat reads); only
+        // hidden and internal ones are not.
+        let vis = s.st_other & 3;
+        if s.st_shndx == SHN_UNDEF || bind == STB_LOCAL || (vis != STV_DEFAULT && vis != 3) {
             continue;
         }
         let n = obj.str_at(s.st_name);

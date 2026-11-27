@@ -1,0 +1,119 @@
+Keep R11 (TMP) live where an x86_64 Thread access follows in the ANDRUNA build.
+
+Under ANDRUNA, gs() loads the Thread* into R11 (patch 0002). Four code
+generator sites have TMP live across such an access:
+
+- The inline cache check of JIT code passes the InlineCache* to
+  art_quick_update_inline_cache in TMP; gs()->call replaced it with the
+  Thread*, so the stub stored receiver classes into the Thread's first
+  words (tls32_.suspend_count among them). The thread then kept a
+  suspend request no ResumeAll could clear, and every thread that
+  suspended it hung (the deadlock with -Xjitthreshold:0). The call now
+  takes the Thread* through R10, which the stub uses as scratch too.
+- The read barrier slow path of the System.arraycopy intrinsic marks the
+  reference in TMP with art_quick_read_barrier_mark_reg11; the Thread*
+  now goes through src_stop_addr, saved around the call.
+- The class initialization check at method entry compares TMP (the
+  initializing thread id) with Thread::tid; TMP is kept on the stack.
+- The method trace fast path keeps the buffer entry in TMP; the Thread*
+  goes through init_entry.
+
+Without ANDRUNA the code is unchanged.
+
+diff --git a/compiler/optimizing/code_generator_x86_64.cc b/compiler/optimizing/code_generator_x86_64.cc
+index 5194af0..256a65e 100644
+--- a/compiler/optimizing/code_generator_x86_64.cc
++++ b/compiler/optimizing/code_generator_x86_64.cc
+@@ -1810,15 +1810,28 @@ void InstructionCodeGeneratorX86_64::GenerateMethodEntryExitHook(HInstruction* i
+   __ gs()->movq(CpuRegister(curr_entry),
+                 Address::Absolute(trace_buffer_curr_entry_offset, /* no_rip= */ true));
+   __ subq(CpuRegister(curr_entry), Immediate(slots_required * sizeof(void*)));
++#if defined(ANDRUNA)
++  // `curr_entry` is TMP, which gs() would use for the Thread*: use
++  // `init_entry` instead (its value is only needed for the comparison).
++  __ gs(init_entry)->movq(init_entry,
++                Address::Absolute(Thread::TraceBufferPtrOffset<kX86_64PointerSize>().SizeValue(),
++                                  /* no_rip= */ true));
++#else
+   __ gs()->movq(init_entry,
+                 Address::Absolute(Thread::TraceBufferPtrOffset<kX86_64PointerSize>().SizeValue(),
+                                   /* no_rip= */ true));
++#endif
+   __ cmpq(curr_entry, init_entry);
+   __ j(kLess, slow_path->GetEntryLabel());
+ 
+   // Update the index in the `Thread`.
++#if defined(ANDRUNA)
++  __ gs(init_entry)->movq(Address::Absolute(trace_buffer_curr_entry_offset, /* no_rip= */ true),
++                CpuRegister(curr_entry));
++#else
+   __ gs()->movq(Address::Absolute(trace_buffer_curr_entry_offset, /* no_rip= */ true),
+                 CpuRegister(curr_entry));
++#endif
+ 
+   // Record method pointer only for method enter events.
+   CpuRegister method = init_entry;
+@@ -1963,9 +1976,20 @@ void CodeGeneratorX86_64::GenerateFrameEntry() {
+ 
+     __ movl(CpuRegister(TMP),
+             Address(CpuRegister(TMP), mirror::Class::ClinitThreadIdOffset().Int32Value()));
++#if defined(ANDRUNA)
++    // gs() needs a register for the Thread* and TMP is the value compared:
++    // keep it on the stack (POP does not change the flags).
++    __ pushq(CpuRegister(TMP));
++    __ gs()->movl(
++        CpuRegister(TMP),
++        Address::Absolute(Thread::TidOffset<kX86_64PointerSize>().Int32Value(), /*no_rip=*/ true));
++    __ cmpl(CpuRegister(TMP), Address(CpuRegister(RSP), 0));
++    __ popq(CpuRegister(TMP));
++#else
+     __ gs()->cmpl(
+         CpuRegister(TMP),
+         Address::Absolute(Thread::TidOffset<kX86_64PointerSize>().Int32Value(), /*no_rip=*/ true));
++#endif
+     __ j(kEqual, &frame_entry_label_);
+     __ Bind(&resolution);
+ 
+@@ -3292,8 +3316,18 @@ void CodeGeneratorX86_64::MaybeGenerateInlineCacheCheck(HInstruction* instructio
+       // Fast path for a monomorphic cache.
+       __ cmpl(Address(CpuRegister(TMP), InlineCache::ClassesOffset().Int32Value()), klass);
+       __ j(kEqual, &done);
++#if defined(ANDRUNA)
++      // art_quick_update_inline_cache takes the cache in TMP, so the
++      // Thread* for the call goes through R10: a caller-save register that
++      // is neither an argument nor live across the invoke (the stub uses it
++      // as its scratch too).
++      __ gs(CpuRegister(R10))->call(Address::Absolute(
++          GetThreadOffset<kX86_64PointerSize>(kQuickUpdateInlineCache).Int32Value(),
++          /* no_rip= */ true));
++#else
+       GenerateInvokeRuntime(
+           GetThreadOffset<kX86_64PointerSize>(kQuickUpdateInlineCache).Int32Value());
++#endif
+       __ Bind(&done);
+     } else {
+       // This is unexpected, but we don't guarantee stable compilation across
+diff --git a/compiler/optimizing/intrinsics_x86_64.cc b/compiler/optimizing/intrinsics_x86_64.cc
+index 01368ff..d098b25 100644
+--- a/compiler/optimizing/intrinsics_x86_64.cc
++++ b/compiler/optimizing/intrinsics_x86_64.cc
+@@ -131,8 +131,19 @@ class ReadBarrierSystemArrayCopySlowPathX86_64 : public SlowPathCode {
+     // entrypoint. Also, there is no need to update the stack mask,
+     // as this runtime call will not trigger a garbage collection.
+     int32_t entry_point_offset = Thread::ReadBarrierMarkEntryPointsOffset<kX86_64PointerSize>(TMP);
++#if defined(ANDRUNA)
++    // The reference to mark is in TMP, which gs() would overwrite with the
++    // Thread*: load the Thread* into `src_stop_addr`, saved around the call
++    // (twice, to keep the stack 16-byte aligned for the entrypoint).
++    __ pushq(src_stop_addr);
++    __ pushq(src_stop_addr);
++    __ gs(src_stop_addr)->call(Address::Absolute(entry_point_offset, /* no_rip= */ true));
++    __ popq(src_stop_addr);
++    __ popq(src_stop_addr);
++#else
+     // This runtime call does not require a stack map.
+     x86_64_codegen->InvokeRuntimeWithoutRecordingPcInfo(entry_point_offset, instruction_, this);
++#endif
+     __ MaybePoisonHeapReference(CpuRegister(TMP));
+     __ movl(Address(dst_curr_addr, 0), CpuRegister(TMP));
+     __ addl(src_curr_addr, Immediate(element_size));

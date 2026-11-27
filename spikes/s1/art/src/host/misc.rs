@@ -631,7 +631,6 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("recvmsg", h_enosys as usize),
         ("sendmsg", h_enosys as usize),
         ("sendfile", h_enosys as usize),
-        ("ftruncate", h_enosys as usize),
         ("symlink", h_enosys as usize),
         ("link", h_enosys as usize),
         ("malloc_info", h_enosys as usize),
