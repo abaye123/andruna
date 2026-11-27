@@ -1,0 +1,185 @@
+# Selected libcore tests on ART (x64): tests/libcore/README.md.
+#
+# Builds the boot class path, the guest userland and ART (cached), the ART
+# root and andruna-app, then the test jar, and runs the tests on andruna-app
+# with the interpreter and the JIT. The job fails when a test fails that
+# tests/libcore/expectations.txt does not list.
+
+name: libcore tests
+
+on:
+  push:
+    branches: [phase1-libcore-tests]
+    paths:
+      - 'tests/libcore/**'
+      - '.github/workflows/libcore-tests.yml'
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: libcore-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ANDRUNA_LLVM_MINGW: C:\tools\llvm-mingw
+
+jobs:
+  x64:
+    name: libcore tests (x64)
+    runs-on: windows-latest
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: libcore-tests-cargo-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: libcore-tests-cargo-
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: |
+          cargo xtask toolchain
+          "$env:ANDRUNA_LLVM_MINGW\x86_64-w64-mingw32\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: CMake, Ninja
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { python -m pip install ninja }
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { python -m pip install cmake }
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # Same key as the S1 ART jobs, so the cache is shared.
+      - name: Cache AOSP sources (all projects)
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-all-${{ hashFiles('aosp/aosp.lock') }}
+
+      - name: Fetch and patch AOSP
+        run: |
+          git config --global core.longpaths true
+          cargo xtask fetch
+          if ($LASTEXITCODE -ne 0) { throw "fetch failed" }
+          cargo xtask patch
+          if ($LASTEXITCODE -ne 0) { throw "patch failed" }
+
+      - name: Cache llvm-project
+        uses: actions/cache@v4
+        with:
+          path: out/llvm-project
+          key: llvm-project-llvmorg-23.1.6-v1
+
+      - name: Fetch llvm-project
+        run: |
+          if (-not (Test-Path out/llvm-project/runtimes)) {
+            git clone --depth 1 --filter=blob:none --sparse --branch llvmorg-23.1.6 https://github.com/llvm/llvm-project out/llvm-project
+            if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+            git -C out/llvm-project sparse-checkout set libcxx libcxxabi libunwind runtimes cmake llvm/cmake llvm/utils/llvm-lit compiler-rt/lib/builtins libc
+            if ($LASTEXITCODE -ne 0) { throw "sparse checkout failed" }
+          }
+
+      - name: Cache guest and boot class path
+        id: guest-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            out/guest/x64
+            out/s1/java
+            out/s1/tools
+          key: libcore-guest-x64-${{ hashFiles('aosp/aosp.lock', 'aosp/**', 'patches/**', 'spikes/s1/java/**', 'xtask/src/toolchain.rs') }}
+
+      - name: Boot class path
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        run: |
+          python spikes/s1/java/build_boot.py --skip-verify
+          if ($LASTEXITCODE -ne 0) { throw "boot class path build failed" }
+
+      - name: Guest userland and ART root
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        run: |
+          python aosp/tools/build_guest.py --arch x64 sysroot bionic libcxx aosp art
+          if ($LASTEXITCODE -ne 0) { throw "guest build failed" }
+
+      - name: andruna-app
+        run: |
+          cargo build -p andruna-app --release --target x86_64-pc-windows-gnullvm
+          if ($LASTEXITCODE -ne 0) { throw "andruna-app build failed" }
+
+      # andruna-app starts ART with the boot image when the ART root has one.
+      - name: Boot image
+        run: |
+          if (-not (Test-Path out/guest/x64/art-root/javalib/x86_64/boot.art)) {
+            target/x86_64-pc-windows-gnullvm/release/andruna-app.exe --art-root out/guest/x64/art-root --compile-boot
+            if ($LASTEXITCODE -ne 0) { throw "boot image failed" }
+          }
+          Get-ChildItem out/guest/x64/art-root/javalib -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
+
+      - name: Build tests
+        run: |
+          python tests/libcore/build.py
+          if ($LASTEXITCODE -ne 0) { throw "test build failed" }
+
+      - name: Run (interpreter)
+        id: int
+        continue-on-error: true
+        run: |
+          python tests/libcore/run.py --mode int --jobs 2
+          if ($LASTEXITCODE -ne 0) { throw "unexpected results" }
+
+      - name: Run (JIT)
+        id: jit
+        continue-on-error: true
+        run: |
+          python tests/libcore/run.py --mode jit --jobs 2
+          if ($LASTEXITCODE -ne 0) { throw "unexpected results" }
+
+      - name: Summary
+        if: always()
+        run: |
+          "## libcore tests (x64)" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          foreach ($m in 'int', 'jit') {
+            $f = "out/libcore-tests/app-$m/summary.txt"
+            if (Test-Path $f) {
+              "`n``````text" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+              Get-Content $f | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+              "``````" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            }
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libcore-tests-x64
+          path: |
+            out/libcore-tests/build-report.json
+            out/libcore-tests/classes.txt
+            out/libcore-tests/app-*
+
+      - name: Result
+        if: steps.int.outcome != 'success' || steps.jit.outcome != 'success'
+        run: throw "unexpected libcore test results, see the summary"

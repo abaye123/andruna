@@ -28,6 +28,11 @@ Commands:
         Shallow-clone the AOSP projects in aosp/aosp.lock at the pinned tag
         into third_party/aosp/<path>, and verify each commit. Projects that
         are already present at the locked commit are skipped.
+  libcore-tests [--no-build] [<run.py options>...]
+        Build the selected libcore tests (tests/libcore/build.py) and run
+        them on ART (tests/libcore/run.py, e.g. --mode int|jit). Needs
+        `fetch`, the boot class path and the ART guest build; see
+        tests/libcore/README.md.
   patch [--project <path>]... [--reset] [--lock <file>] [--aosp-dir <dir>] [--patches-dir <dir>]
         Apply patches/<path>/*.patch in file-name order with `git apply`.
         Patches already applied (recorded with their SHA-256) are skipped.
@@ -89,6 +94,28 @@ fn run(args: &[String]) -> Result<()> {
             files.into_iter().map(PathBuf::from).collect()
         };
         return sign::sign(&files);
+    }
+    if command == "libcore-tests" {
+        // The options belong to tests/libcore/run.py.
+        let root = util::repo_root();
+        let (build, run_args) = match rest.split_first() {
+            Some((first, tail)) if first == "--no-build" => (false, tail),
+            _ => (true, rest),
+        };
+        let python = std::env::var("PYTHON").unwrap_or_else(|_| "python".into());
+        if build {
+            util::run(
+                std::process::Command::new(&python)
+                    .arg(root.join("tests/libcore/build.py"))
+                    .current_dir(&root),
+            )?;
+        }
+        return util::run(
+            std::process::Command::new(&python)
+                .arg(root.join("tests/libcore/run.py"))
+                .args(run_args)
+                .current_dir(&root),
+        );
     }
     let mut opts = Options::parse(rest)?;
     match command.as_str() {

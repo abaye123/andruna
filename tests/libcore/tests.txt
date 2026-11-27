@@ -1,0 +1,35 @@
+# The libcore test subset run on Andruna (tests/libcore/README.md).
+#
+# One glob per line, relative to the libcore project (third_party/aosp/libcore).
+# A line starting with "-" removes matching files from the selection; the text
+# after "|" is the reason. A line starting with "+" names support files that
+# are compiled but not run (for example service providers named only in
+# META-INF/services). Files that do not compile against this boot class
+# path and test libraries are dropped by build.py and listed in its report.
+
+# java.lang
+luni/src/test/java/libcore/java/lang/*Test.java
+- luni/src/test/java/libcore/java/lang/ProcessBuilderTest.java | starts child processes (fork/exec), not in phase 1
+- luni/src/test/java/libcore/java/lang/VirtualThreadTest.java | virtual threads are outside the phase 1 scope
+
+# java.math
+luni/src/test/java/libcore/java/math/*Test.java
+
+# java.util, java.util.regex, java.util.concurrent
+luni/src/test/java/libcore/java/util/*Test.java
+luni/src/test/java/libcore/java/util/regex/*Test.java
+luni/src/test/java/libcore/java/util/concurrent/*Test.java
+
+# java.io, java.nio (buffers, charsets, files)
+luni/src/test/java/libcore/java/io/*Test.java
+luni/src/test/java/libcore/java/nio/*Test.java
+luni/src/test/java/libcore/java/nio/charset/*Test.java
+luni/src/test/java/libcore/java/nio/file/*Test.java
+
+# java.text (ICU-backed formatting)
+luni/src/test/java/libcore/java/text/*Test.java
+
+# Support classes named only by META-INF/services in the test resources, or
+# loaded by reflection.
++ luni/src/test/java/libcore/java/nio/charset/SettableCharsetProvider.java
++ support/src/test/java/tests/support/Support_ClassLoaderDalvik.java
