@@ -4,9 +4,11 @@
 pub mod android;
 pub mod channel;
 pub mod clock;
+pub mod compositor;
 pub mod config;
 pub mod geom;
 pub mod input;
 pub mod surface;
 pub mod sys;
+pub mod vsync;
 pub mod wire;

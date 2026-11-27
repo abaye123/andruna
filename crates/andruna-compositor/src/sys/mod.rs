@@ -4,6 +4,7 @@
 pub mod capture;
 pub mod gfx;
 pub mod ime;
+pub mod inject;
 pub mod pointer;
 pub mod shm;
 pub mod swapchain;

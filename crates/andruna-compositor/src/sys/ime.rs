@@ -149,6 +149,20 @@ pub fn current_layout() -> isize {
     unsafe { GetKeyboardLayout(0) }.0 as isize
 }
 
+/// The first UTF-16 unit of the character a key types now (with the
+/// current keyboard state), without changing the keyboard state; this is
+/// the `WM_CHAR` the key's translation will produce. The bool is true for
+/// a dead key (its `WM_DEADCHAR`).
+pub fn translated_unit(vk: u32, scan: u16) -> Option<(bool, u16)> {
+    let mut state = [0u8; 256];
+    // SAFETY: a 256-byte buffer as required.
+    unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardState(&mut state) }.ok()?;
+    let mut buf = [0u16; 8];
+    // SAFETY: valid buffers; flag 0x4 keeps the keyboard state.
+    let n = unsafe { ToUnicodeEx(vk, scan as u32, &state, &mut buf, 0x4, None) };
+    (n != 0).then_some((n < 0, buf[0]))
+}
+
 /// What a key types in the given layout and modifier state, without
 /// changing the keyboard state (dead keys stay pending in nobody's
 /// state).

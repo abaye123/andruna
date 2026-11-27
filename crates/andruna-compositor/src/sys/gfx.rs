@@ -422,7 +422,9 @@ impl Gfx {
     }
 }
 
-fn create_d3d() -> io::Result<(ID3D11Device, bool)> {
+/// A Direct3D 11 device on the default adapter (WARP if none); the bool
+/// is true for WARP.
+pub fn create_d3d() -> io::Result<(ID3D11Device, bool)> {
     let mut last = None;
     for (driver, warp) in [(D3D_DRIVER_TYPE_HARDWARE, false), (D3D_DRIVER_TYPE_WARP, true)] {
         let mut d = None;

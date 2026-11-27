@@ -485,6 +485,77 @@ pub fn pump_one(thread_msg: &mut dyn FnMut(u32)) -> bool {
     true
 }
 
+/// Creates the thread's message queue, so other threads can post to it.
+pub fn ensure_queue() {
+    let mut m = MSG::default();
+    // SAFETY: `m` is a valid out pointer; nothing is removed.
+    unsafe {
+        let _ = PeekMessageW(&mut m, None, WM_USER, WM_USER, PM_NOREMOVE);
+    }
+}
+
+/// True when the next queued keyboard message is right Alt with the given
+/// message time: Windows sends a fake left Ctrl before AltGr.
+pub fn next_is_altgr(time: u32) -> bool {
+    let mut m = MSG::default();
+    // SAFETY: `m` is a valid out pointer; nothing is removed.
+    let found = unsafe { PeekMessageW(&mut m, None, WM_KEYFIRST, WM_KEYLAST, PM_NOREMOVE) };
+    found.as_bool()
+        && m.time == time
+        && matches!(m.message, WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP)
+        && m.wParam.0 == 0x12 // VK_MENU
+        && (m.lParam.0 >> 24) & 1 == 1
+}
+
+/// The window's outer rectangle in screen coordinates.
+pub fn window_rect(h: Hwnd) -> Rect {
+    let mut r = RECT::default();
+    // SAFETY: valid out pointer.
+    unsafe {
+        let _ = GetWindowRect(h.raw(), &mut r);
+    }
+    Rect::new(r.left, r.top, r.right, r.bottom)
+}
+
+/// Removes the resize border (non-resizable apps) or restores it.
+pub fn set_resizable(h: Hwnd, resizable: bool) {
+    // SAFETY: no pointers; the style change is applied with SWP_FRAMECHANGED.
+    unsafe {
+        let style = GetWindowLongPtrW(h.raw(), GWL_STYLE);
+        let thick = WS_THICKFRAME.0 as isize;
+        let new = if resizable { style | thick } else { style & !thick };
+        SetWindowLongPtrW(h.raw(), GWL_STYLE, new);
+        let _ = SetWindowPos(
+            h.raw(),
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
+pub fn is_resizable(h: Hwnd) -> bool {
+    // SAFETY: no pointers.
+    unsafe { GetWindowLongPtrW(h.raw(), GWL_STYLE) & WS_THICKFRAME.0 as isize != 0 }
+}
+
+pub fn set_timer(h: Hwnd, id: usize, ms: u32) {
+    // SAFETY: no callback; WM_TIMER goes to the window.
+    unsafe {
+        SetTimer(Some(h.raw()), id, ms, None);
+    }
+}
+
+pub fn kill_timer(h: Hwnd, id: usize) {
+    // SAFETY: no pointers.
+    unsafe {
+        let _ = KillTimer(Some(h.raw()), id);
+    }
+}
+
 pub fn quit() {
     // SAFETY: no pointers.
     unsafe { PostQuitMessage(0) };

@@ -104,6 +104,13 @@ impl From<io::Error> for SurfaceError {
     }
 }
 
+/// A Direct3D 11 device on the default adapter (WARP when there is no
+/// hardware device), with BGRA support. Producers that have their own
+/// device (ANGLE's) use that instead.
+pub fn create_device() -> io::Result<ID3D11Device> {
+    crate::sys::gfx::create_d3d().map(|d| d.0)
+}
+
 /// What the compositor hands to the producer of a surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SurfaceHandle {
