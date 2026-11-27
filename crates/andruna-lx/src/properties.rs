@@ -1,5 +1,5 @@
 //! System properties as bionic reads them: a read-only property area at
-//! `/dev/__properties__` (ADR 0018, proposed).
+//! `/dev/__properties__` (ADR 0019, proposed).
 //!
 //! bionic maps `/dev/__properties__` when it is a regular file (its
 //! "pre-split" layout): a `prop_area` header followed by a trie of
@@ -47,7 +47,7 @@ pub fn define(props: &[(&str, &str)]) -> bool {
     AREA.get().is_none()
 }
 
-/// Andruna's defaults: facts about the build and the machine. See ADR 0018.
+/// Andruna's defaults: facts about the build and the machine. See ADR 0019.
 pub fn defaults() -> Vec<(String, String)> {
     let (abi, abilist64) = if cfg!(target_arch = "x86_64") {
         ("x86_64", "x86_64")

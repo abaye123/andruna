@@ -98,7 +98,7 @@ the 16 KiB patch; the test runs with 16 KiB there.
   `prctl` (names, dumpable, no-new-privs, VMA names).
 - `/proc/self` (`exe`, `cmdline`, `status`, `maps`, `fd/`, `task/`).
 - System properties: a read-only area at `/dev/__properties__` with the
-  defaults of ADR 0018 (proposed).
+  defaults of ADR 0019 (proposed).
 
 ## What still fails, by cause
 

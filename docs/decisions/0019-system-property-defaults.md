@@ -1,4 +1,4 @@
-# 0018 - System properties: a read-only area with Andruna defaults
+# 0019 - System properties: a read-only area with Andruna defaults
 
 **Status:** proposed, 2026-11-27
 
