@@ -3,8 +3,8 @@
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetCurrentThreadId,
-    GetProcessIdOfThread, GetProcessTimes, GetThreadTimes, OpenThread, SwitchToThread,
-    THREAD_QUERY_LIMITED_INFORMATION,
+    GetExitCodeThread, GetProcessIdOfThread, GetProcessTimes, GetThreadTimes, OpenThread,
+    SwitchToThread, THREAD_QUERY_LIMITED_INFORMATION, TerminateProcess,
 };
 
 use super::OwnedHandle;
@@ -19,6 +19,28 @@ pub fn current_process_id() -> u32 {
 pub fn current_thread_id() -> u32 {
     // SAFETY: no arguments; returns a value.
     unsafe { GetCurrentThreadId() }
+}
+
+/// Whether `tid` is a running thread of this process.
+pub fn is_own_thread(tid: u32) -> bool {
+    // SAFETY: opens a new handle that `owned` closes.
+    let Ok(h) = (unsafe { OpenThread(THREAD_QUERY_LIMITED_INFORMATION, false, tid) }) else {
+        return false;
+    };
+    let owned = OwnedHandle::from_raw(h);
+    let mut code = 0u32;
+    // SAFETY: `owned` is a live thread handle; `code` is a valid out pointer.
+    let alive = unsafe { GetExitCodeThread(owned.raw(), &mut code) }.is_ok() && code == 259;
+    // SAFETY: as above.
+    alive && unsafe { GetProcessIdOfThread(owned.raw()) } == current_process_id()
+}
+
+/// Ends the process at once with `code` (no exit handlers run, as for a
+/// Linux process killed by a signal).
+pub fn terminate_process(code: u32) -> ! {
+    // SAFETY: the pseudo handle of the current process is always valid.
+    let _ = unsafe { TerminateProcess(GetCurrentProcess(), code) };
+    std::process::abort()
 }
 
 /// Gives up the processor to another ready thread, if any.

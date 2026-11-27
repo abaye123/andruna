@@ -131,6 +131,11 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     if code == 0xC000_0005 && crate::tls::lazy_restore(pc) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+    // Guest signal handlers (andruna-lx) come before the crash report.
+    // SAFETY: called from the vectored handler with the system's records.
+    if unsafe { andruna_lx::signal::handle_exception(info) } {
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     let fatal = matches!(
         code,
         0xC000_0005 | 0xC000_001D | 0xC000_0094 | 0xC000_00FD | 0xC000_0096

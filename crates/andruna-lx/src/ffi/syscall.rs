@@ -17,13 +17,14 @@ use core::sync::atomic::AtomicU32;
 use super::fs::{sys_fstat, sys_fstatat, sys_openat, sys_pread, sys_pwrite, sys_read, sys_write};
 use super::mem::sys_mmap;
 use super::time::{sys_clock_getres, sys_clock_gettime, sys_clock_nanosleep, sys_nanosleep};
-use super::{guard, read_arg};
+use super::{guard, read_arg, write_arg};
 use crate::errno::{Errno, SysResult};
 use crate::fd::FDS;
 use crate::linux::fcntl::{AT_FDCWD, AT_SYMLINK_NOFOLLOW};
+use crate::linux::signal::{KernelSigaction, SigInfo, SigSet, StackT};
 use crate::linux::syscall_nr::{NATIVE, Sysno};
 use crate::linux::time::Timespec;
-use crate::{fs, futex, mem, process};
+use crate::{fs, futex, mem, process, signal};
 
 /// Dispatches one system call. Arguments are the raw 64-bit values.
 ///
@@ -73,8 +74,165 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
             Sysno::Mremap => mem::mremap(ptr(0), ptr(1), ptr(2), uint(3)).map(|a| a as i64),
             Sysno::Getcwd => sys_getcwd(ptr(0) as *mut u8, ptr(1)),
             Sysno::Chdir => fs::chdir(super::path_arg(ptr(0) as *const c_char)?).map(|()| 0),
+            Sysno::RtSigaction => sys_rt_sigaction(int(0), ptr(1) as _, ptr(2) as _, ptr(3)),
+            Sysno::RtSigprocmask => sys_rt_sigprocmask(int(0), ptr(1) as _, ptr(2) as _, ptr(3)),
+            Sysno::RtSigreturn => sys_rt_sigreturn(a[0] as u64),
+            Sysno::RtSigpending => {
+                if ptr(1) != 8 {
+                    return Err(Errno::EINVAL);
+                }
+                write_arg(ptr(0) as *mut SigSet, signal::sigpending()).map(|()| 0)
+            }
+            Sysno::RtSigtimedwait => {
+                sys_rt_sigtimedwait(ptr(0) as _, ptr(1) as _, ptr(2) as _, ptr(3))
+            }
+            Sysno::RtSigqueueinfo => {
+                let info = queue_info(int(1), ptr(2) as _)?;
+                signal::kill(int(0), int(1), Some(info)).map(|()| 0)
+            }
+            Sysno::RtTgsigqueueinfo => {
+                let info = queue_info(int(2), ptr(3) as _)?;
+                signal::tgkill(Some(int(0)), int(1), int(2), Some(info)).map(|()| 0)
+            }
+            Sysno::RtSigsuspend => {
+                let m = read_arg(ptr(0) as *const SigSet)?;
+                signal::sigsuspend(m, ptr(1)).map(|()| 0)
+            }
+            Sysno::Pause => signal::sigsuspend(signal::current().blocked(), 8).map(|()| 0),
+            Sysno::Sigaltstack => sys_sigaltstack(ptr(0) as _, ptr(1) as _),
+            Sysno::Kill => signal::kill(int(0), int(1), None).map(|()| 0),
+            Sysno::Tkill => signal::tgkill(None, int(0), int(1), None).map(|()| 0),
+            Sysno::Tgkill => signal::tgkill(Some(int(0)), int(1), int(2), None).map(|()| 0),
         }
     }
+}
+
+/// `rt_sigaction(int, const struct sigaction*, struct sigaction*, size_t)`.
+///
+/// # Safety
+///
+/// `act` and `old` are NULL or valid kernel `struct sigaction` pointers.
+unsafe fn sys_rt_sigaction(
+    sig: i32,
+    act: *const KernelSigaction,
+    old: *mut KernelSigaction,
+    size: usize,
+) -> SysResult<i64> {
+    let new = if act.is_null() {
+        None
+    } else {
+        // SAFETY: contract.
+        Some(unsafe { read_arg(act) }?)
+    };
+    let prev = signal::sigaction(sig, new, size)?;
+    if !old.is_null() {
+        // SAFETY: contract.
+        unsafe { write_arg(old, prev) }?;
+    }
+    Ok(0)
+}
+
+/// # Safety
+///
+/// `set` and `old` are NULL or valid `sigset_t` pointers.
+unsafe fn sys_rt_sigprocmask(
+    how: i32,
+    set: *const SigSet,
+    old: *mut SigSet,
+    size: usize,
+) -> SysResult<i64> {
+    let new = if set.is_null() {
+        None
+    } else {
+        // SAFETY: contract.
+        Some(unsafe { read_arg(set) }?)
+    };
+    let prev = signal::sigprocmask(how, new, size)?;
+    if !old.is_null() {
+        // SAFETY: contract.
+        unsafe { write_arg(old, prev) }?;
+    }
+    Ok(0)
+}
+
+/// `rt_sigreturn`: on x86_64 the Andruna `__restore_rt` passes the frame's
+/// `ucontext_t` as the first argument. arm64 frames return through the lx
+/// restorer, which needs no system call.
+///
+/// # Safety
+///
+/// `uc` is the `ucontext_t` of the calling thread's current signal frame.
+unsafe fn sys_rt_sigreturn(uc: u64) -> SysResult<i64> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: contract.
+        Err(unsafe { signal::sigreturn(uc) })
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let _ = uc;
+        Err(Errno::ENOSYS)
+    }
+}
+
+/// # Safety
+///
+/// `set` is a readable `sigset_t`, `info` NULL or a writable `siginfo_t`,
+/// `timeout` NULL or a readable `struct timespec`.
+unsafe fn sys_rt_sigtimedwait(
+    set: *const SigSet,
+    info: *mut SigInfo,
+    timeout: *const Timespec,
+    size: usize,
+) -> SysResult<i64> {
+    // SAFETY: contract.
+    let s = unsafe { read_arg(set) }?;
+    let t = if timeout.is_null() {
+        None
+    } else {
+        // SAFETY: contract.
+        Some(unsafe { read_arg(timeout) }?)
+    };
+    let got = signal::sigtimedwait(s, t.as_ref(), size)?;
+    if !info.is_null() {
+        // SAFETY: contract.
+        unsafe { write_arg(info, got) }?;
+    }
+    Ok(i64::from(got.si_signo))
+}
+
+/// Reads the `siginfo_t` of `rt_sigqueueinfo` and `rt_tgsigqueueinfo`.
+///
+/// # Safety
+///
+/// `info` is NULL or a readable `siginfo_t`.
+unsafe fn queue_info(sig: i32, info: *const SigInfo) -> SysResult<SigInfo> {
+    // SAFETY: contract.
+    let mut i = unsafe { read_arg(info) }?;
+    signal::check_queue_info(&i)?;
+    i.si_signo = sig;
+    Ok(i)
+}
+
+/// # Safety
+///
+/// `ss` and `old` are NULL or valid `stack_t` pointers.
+unsafe fn sys_sigaltstack(ss: *const StackT, old: *mut StackT) -> SysResult<i64> {
+    // The caller's stack pointer: lx runs on the caller's stack.
+    let marker = 0u8;
+    let sp = core::ptr::addr_of!(marker) as u64;
+    let new = if ss.is_null() {
+        None
+    } else {
+        // SAFETY: contract.
+        Some(unsafe { read_arg(ss) }?)
+    };
+    let prev = signal::sigaltstack(new, sp)?;
+    if !old.is_null() {
+        // SAFETY: contract.
+        unsafe { write_arg(old, prev) }?;
+    }
+    Ok(0)
 }
 
 /// The `getcwd` system call: the path with its NUL, `ERANGE` if it does
@@ -140,7 +298,10 @@ pub unsafe extern "C" fn syscall(
     a6: i64,
 ) -> i64 {
     // SAFETY: forwarded from this function's contract.
-    guard(|| unsafe { dispatch(number, [a1, a2, a3, a4, a5, a6]) })
+    let r = guard(|| unsafe { dispatch(number, [a1, a2, a3, a4, a5, a6]) });
+    // Signals queued for this thread are delivered when the call returns.
+    signal::deliver_at_syscall_exit();
+    r
 }
 
 #[cfg(test)]

@@ -17,8 +17,9 @@
 //!   mappings do not exist yet; cross-process futexes on them need a
 //!   different mechanism (TODO with shared mappings).
 //! - An unmapped `uaddr` faults instead of returning `EFAULT`.
-//! - Waits time out with millisecond granularity (rounded up), and never
-//!   return `EINTR` until signals exist ([`crate::signal`]).
+//! - Waits time out with millisecond granularity (rounded up). A queued
+//!   signal makes a wait return `EINTR` ([`crate::signal`]), also with
+//!   `SA_RESTART` (callers in bionic retry).
 //! - Bitsets other than `FUTEX_BITSET_MATCH_ANY`, requeue and PI operations
 //!   return `ENOSYS`.
 
@@ -121,7 +122,14 @@ pub fn wait(word: &AtomicU32, val: u32, deadline: Option<Deadline>) -> SysResult
     }
     let addr = word.as_ptr() as usize;
     add_waiter(addr);
+    // A thread with signal state can be interrupted: senders wake it on
+    // `addr`. A wake that comes between the check and the sleep is lost,
+    // so such a thread sleeps at most a second at a time.
+    let interruptible = crate::signal::sleeping_on(addr);
     let r = loop {
+        if interruptible.is_some() && crate::signal::interrupted() {
+            break Err(Errno::EINTR);
+        }
         let ms = match deadline {
             None => None,
             Some(d) => match d.remaining_ms() {
@@ -130,7 +138,15 @@ pub fn wait(word: &AtomicU32, val: u32, deadline: Option<Deadline>) -> SysResult
                 Err(e) => break Err(e),
             },
         };
+        let ms = if interruptible.is_some() {
+            Some(ms.unwrap_or(1000).min(1000))
+        } else {
+            ms
+        };
         match os::wait_on_address(word, val, ms) {
+            Wait::Woken if interruptible.is_some() && crate::signal::interrupted() => {
+                break Err(Errno::EINTR);
+            }
             Wait::Woken => break Ok(()),
             // Re-check the deadline: a Windows timeout can end slightly
             // before it on the Linux clock.

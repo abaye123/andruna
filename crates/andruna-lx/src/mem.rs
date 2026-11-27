@@ -231,6 +231,19 @@ pub fn mremap(addr: usize, old_len: usize, new_len: usize, flags: u32) -> SysRes
     Ok(to)
 }
 
+/// Whether lx has a mapping at `addr` (`None` if the table is busy, as it
+/// can be when a fault happens while it is locked).
+pub fn is_mapped(addr: usize) -> Option<bool> {
+    let s = SPACE.try_lock().ok()?;
+    Some(matches!(
+        s.pieces(addr, addr + 1).first(),
+        Some(Piece::Own {
+            kind: Kind::Mapped { .. },
+            ..
+        })
+    ))
+}
+
 /// `madvise` on the process address space.
 pub fn madvise(addr: usize, len: usize, advice: i32) -> SysResult<()> {
     lock(&SPACE).madvise(addr, len, advice)
