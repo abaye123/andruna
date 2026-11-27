@@ -11,6 +11,7 @@ Results and failure analysis: [docs/plan/phase1/libcore-tests.md](../../docs/pla
 | `harness/src/andruna/libcoretest/Main.java` | The in-VM runner: runs each class with JUnit 4 and prints one result line per test |
 | `run.py` | Starts ART once per class, restarts after crashes and hangs, matches results to the expectations, writes the summary |
 | `expectations.txt` | Known failures, each with a category and a reason |
+| `expect.py` | Suggests expectation lines for the unexpected failures of one or more runs (`results.json`), with a guessed category, for review |
 
 ## Running
 
