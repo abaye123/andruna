@@ -9,8 +9,10 @@
 //!
 //! The calls that concern threads, the thread pointer and the process's
 //! lifetime are the loader's ([`crate::thread`], [`crate::tls`]); a few
-//! that are compositions of lx's public interface (`readv`, `writev`)
-//! and `getrandom` are implemented here until lx has them; everything else
+//! that are compositions of lx's public interface (`readv`, `writev`,
+//! `gettimeofday` and `time`, which share the vDSO's code,
+//! [`crate::vdso`]) and `getrandom` are implemented here until lx has
+//! them; everything else
 //! goes to andruna-lx's `syscall` export, which reports `ENOSYS` for calls
 //! it does not implement.
 
@@ -36,6 +38,8 @@ pub mod nr {
     pub const SET_TID_ADDRESS: i64 = 218;
     pub const EXIT_GROUP: i64 = 231;
     pub const GETRANDOM: i64 = 318;
+    pub const GETTIMEOFDAY: i64 = 96;
+    pub const TIME: i64 = 201;
     pub const CLONE3: i64 = 435;
 }
 
@@ -55,6 +59,7 @@ pub mod nr {
     pub const GETEGID: i64 = 177;
     pub const CLONE: i64 = 220;
     pub const GETRANDOM: i64 = 278;
+    pub const GETTIMEOFDAY: i64 = 169;
     pub const CLONE3: i64 = 435;
 }
 
@@ -99,8 +104,10 @@ pub unsafe fn lx_raw(n: i64, a: [i64; 6]) -> i64 {
 /// The pointer arguments satisfy the contract of system call `n`, as for
 /// the Linux kernel.
 pub unsafe fn dispatch(n: i64, a: [i64; 6]) -> i64 {
+    let t0 = crate::profile::start();
     // SAFETY: forwarded from this function's contract.
     let r = unsafe { dispatch_inner(n, a) };
+    crate::profile::syscall(n, t0);
     if trace() {
         crate::debug::report(format_args!(
             "syscall {n}({:#x}, {:#x}, {:#x}, {:#x}) = {r}",
@@ -150,6 +157,13 @@ unsafe fn dispatch_inner(n: i64, a: [i64; 6]) -> i64 {
         nr::GETUID | nr::GETEUID => i64::from(andruna_lx::process::uid()),
         nr::GETGID | nr::GETEGID => i64::from(andruna_lx::process::gid()),
         nr::GETRANDOM => getrandom(a[0] as *mut u8, a[1] as usize, a[2]),
+        // The vDSO's functions, for raw system calls (andruna-lx has
+        // no wall-clock calls besides clock_gettime).
+        // SAFETY: the caller's pointers (contract).
+        nr::GETTIMEOFDAY => i64::from(unsafe { crate::vdso::gettimeofday(a[0] as _, a[1] as _) }),
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: as above.
+        nr::TIME => unsafe { crate::vdso::time(a[0] as _) },
         nr::MADVISE if matches!(a[2], 4 | 8) => {
             // SAFETY: forwarded from this function's contract.
             unsafe { discard_below_sp(a) }

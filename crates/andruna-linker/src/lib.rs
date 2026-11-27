@@ -21,8 +21,10 @@
 //! - [`host`]: the host symbol table; [`syscall`], [`thread`], [`dl`],
 //!   [`icu`]: the host functions; [`interim`], [`procfs`]: system calls
 //!   the loader answers while andruna-lx does not implement them.
+//! - [`vdso`]: the clock functions bionic calls without a system call.
 //! - [`process`]: starting a program; [`debug`], [`unwind`]: crash
-//!   reports, debugger registration and Windows unwind tables.
+//!   reports, debugger registration and Windows unwind tables;
+//!   [`profile`]: `ANDRUNA_PROFILE`.
 
 /// The function-pointer type of a guest function: `gty!(fn(i32) -> i32)`.
 #[cfg(target_arch = "x86_64")]
@@ -65,11 +67,13 @@ pub mod logd;
 pub mod object;
 pub mod process;
 pub mod procfs;
+pub mod profile;
 pub mod reloc;
 pub mod syscall;
 pub mod thread;
 pub mod tls;
 pub mod unwind;
+pub mod vdso;
 
 pub use error::{Error, Result};
 pub use linker::{Config, Linker};

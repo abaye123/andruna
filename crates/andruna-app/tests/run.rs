@@ -211,3 +211,51 @@ fn aot_boot_image_and_app_code() {
     assert_eq!(o.code, 0);
     assert!(o.stdout.contains("Hello, Andruna"));
 }
+
+/// `System.currentTimeMillis()` (gettimeofday) and `Instant.now()`
+/// (`CLOCK_REALTIME`) read the Windows system time, not the epoch.
+#[test]
+fn wall_clock_is_the_system_time() {
+    let Some((root, dex)) = inputs("clock.dex") else {
+        return;
+    };
+    let data = scratch("clock");
+    let d = dex.display().to_string();
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+    };
+    let before = now();
+    let o = app(
+        &root,
+        &data,
+        &[
+            "--mode",
+            "int",
+            "--no-boot-image",
+            "--classpath",
+            &d,
+            "Clock",
+        ],
+    );
+    let after = now();
+    assert_eq!(o.code, 0);
+    let value = |key: &str| -> i64 {
+        o.stdout
+            .lines()
+            .find_map(|l| l.strip_prefix(key))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or_else(|| panic!("no '{key}' line"))
+    };
+    let ms = value("currentTimeMillis:");
+    assert!(
+        ms >= before.as_millis() as i64 && ms <= after.as_millis() as i64,
+        "currentTimeMillis {ms} outside [{}, {}]",
+        before.as_millis(),
+        after.as_millis()
+    );
+    let s = value("Instant.now:");
+    assert!(s >= before.as_secs() as i64 && s <= after.as_secs() as i64);
+    assert!(o.stdout.contains("nanoTime advances: true"));
+}

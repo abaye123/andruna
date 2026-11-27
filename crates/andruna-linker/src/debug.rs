@@ -1,7 +1,9 @@
 //! Exceptions and debugging support for guest ELF code.
 //!
 //! - The first vectored exception handler: the lazy FS-base restore (x64,
-//!   [`crate::tls::lazy_restore`]), then a crash report for faults in guest
+//!   [`crate::tls::lazy_restore`]), the cache maintenance instructions
+//!   Windows does not allow at EL0 (arm64, [`emulate_cache_op`]), then
+//!   andruna-lx's signal delivery, then a crash report for faults in guest
 //!   code (object, offset, nearest `.symtab` symbol, frame-pointer walk),
 //!   since Windows debuggers know nothing about ELF.
 //! - LLDB: when `ANDRUNA_LLDB_FILE` names a file, the loader keeps the
@@ -128,13 +130,25 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     let (pc, fp) = (ctx.Pc, unsafe { ctx.Anonymous.Anonymous.Fp });
     #[cfg(target_arch = "x86_64")]
     if code == 0xC000_0005 && crate::tls::lazy_restore(pc) {
+        crate::profile::exception(crate::profile::Exception::Restore);
         return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    #[cfg(target_arch = "aarch64")]
+    if code == 0xC000_001D {
+        // SAFETY: the system passes a valid, writable context record.
+        let ctx = unsafe { &mut *(*info).ContextRecord };
+        if emulate_cache_op(ctx) {
+            crate::profile::exception(crate::profile::Exception::Emulated);
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
     }
     // Guest signal handlers (andruna-lx) come before the crash report.
     // SAFETY: called from the vectored handler with the system's records.
     if unsafe { andruna_lx::signal::handle_exception(info) } {
+        crate::profile::exception(crate::profile::Exception::Signal);
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+    crate::profile::exception(crate::profile::Exception::Other);
     let fatal = matches!(
         code,
         0xC000_0005 | 0xC000_001D | 0xC000_0094 | 0xC000_00FD | 0xC000_0096
@@ -171,6 +185,45 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         walk(&mut e, fp);
     }
     EXCEPTION_CONTINUE_SEARCH
+}
+
+/// Code built for Linux keeps the instruction cache coherent itself
+/// (compiler-rt's `__clear_cache`, which the JIT calls: `mrs Xt, ctr_el0`,
+/// then `dc cvau` and `ic ivau` per line). Linux allows these at EL0;
+/// Windows traps `mrs ctr_el0` as an illegal instruction (S1 round 4).
+/// They are emulated: `CTR_EL0` reads as 64-byte data and instruction
+/// lines with IDC and DIC clear (so callers do both maintenance steps), and
+/// the maintenance operations, should they trap too, become
+/// `FlushInstructionCache` of their line. Any other instruction is left to
+/// the signal path (`SIGILL`).
+#[cfg(target_arch = "aarch64")]
+fn emulate_cache_op(ctx: &mut windows::Win32::System::Diagnostics::Debug::CONTEXT) -> bool {
+    use windows::Win32::System::Diagnostics::Debug::FlushInstructionCache;
+    use windows::Win32::System::Threading::GetCurrentProcess;
+    // SAFETY: the faulting instruction was fetched for execution, so its
+    // word is mapped and readable.
+    let insn = unsafe { (ctx.Pc as *const u32).read_volatile() };
+    let rt = (insn & 31) as usize;
+    // SAFETY: the X array view of the ARM64 context's register union.
+    let x = unsafe { &mut ctx.Anonymous.X };
+    match insn & !31 {
+        // mrs Xt, ctr_el0. DminLine = IminLine = 4 (16 words), CWG = ERG
+        // = 4, L1Ip = PIPT.
+        0xD53B_0020 => {
+            if rt != 31 {
+                x[rt] = 0x8444_c004;
+            }
+        }
+        // dc cvau, Xt / ic ivau, Xt
+        0xD50B_7B20 | 0xD50B_7520 => {
+            let a = if rt == 31 { 0 } else { x[rt] & !63 };
+            // SAFETY: flushes a range of this process's address space.
+            let _ = unsafe { FlushInstructionCache(GetCurrentProcess(), Some(a as *const _), 64) };
+        }
+        _ => return false,
+    }
+    ctx.Pc += 4;
+    true
 }
 
 /// Guest code keeps frame pointers (Android's default on both

@@ -40,6 +40,7 @@ const AT_SECURE: u64 = 23;
 const AT_RANDOM: u64 = 25;
 const AT_HWCAP2: u64 = 26;
 const AT_EXECFN: u64 = 31;
+const AT_SYSINFO_EHDR: u64 = 33;
 
 /// The initial stack block of a program.
 pub struct Startup {
@@ -92,6 +93,7 @@ pub fn args() -> (i32, *const *const u8, *const *const u8) {
 pub fn exit_process(code: i32) -> ! {
     use std::io::Write as _;
     crate::interim::flush_all();
+    crate::profile::report();
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     std::process::exit(code & 0xff)
@@ -155,7 +157,7 @@ fn build_block(top: u64, args: &[String], env: &[String], hwcap: (u64, u64)) -> 
     unsafe { core::ptr::copy_nonoverlapping(strings.as_ptr(), str_base as *mut u8, strings.len()) };
     let uid = u64::from(andruna_lx::process::uid());
     let gid = u64::from(andruna_lx::process::gid());
-    let aux: Vec<(u64, u64)> = vec![
+    let mut aux: Vec<(u64, u64)> = vec![
         (AT_PHDR, 0),
         (AT_PHENT, 56),
         (AT_PHNUM, 0),
@@ -174,8 +176,13 @@ fn build_block(top: u64, args: &[String], env: &[String], hwcap: (u64, u64)) -> 
         (AT_SECURE, 0),
         (AT_RANDOM, str_base + random_off),
         (AT_EXECFN, str_base + offs.first().copied().unwrap_or(0)),
-        (AT_NULL, 0),
     ];
+    // The vDSO (crate::vdso); ANDRUNA_NO_VDSO leaves it out, so that every
+    // clock call is a system call (for comparisons).
+    if std::env::var_os("ANDRUNA_NO_VDSO").is_none() {
+        aux.push((AT_SYSINFO_EHDR, crate::vdso::image()));
+    }
+    aux.push((AT_NULL, 0));
     let mut words: Vec<u64> = vec![args.len() as u64];
     words.extend(offs[..args.len()].iter().map(|o| str_base + o));
     words.push(0);
@@ -281,7 +288,9 @@ fn start(ctx: MainCtx) -> Result<std::convert::Infallible> {
     l.hwcap2 = hwcap2;
     l.startup = Some(s);
     crate::debug::trace(format_args!("loading {}", program.exe));
+    crate::profile::mark("loading");
     let loaded = l.load(&program.exe, None, crate::linker::rtld::NOW)?;
+    crate::profile::mark("loaded");
     crate::debug::trace(format_args!("loaded {} objects", l.objects().count()));
     let main = l.get(loaded.root).expect("main");
     let entry = main.addr(main.headers.ehdr.e_entry);
@@ -306,6 +315,7 @@ fn start(ctx: MainCtx) -> Result<std::convert::Infallible> {
         argv as *const *const u8,
         envp as *const *const u8,
     );
+    crate::profile::mark("initializers done, entry point");
     if bionic {
         // SAFETY: the executable's entry point with the stack at the
         // initial block, as the kernel starts a process; it never returns.
@@ -321,6 +331,7 @@ fn start(ctx: MainCtx) -> Result<std::convert::Infallible> {
 /// Starts `program` on a new guest main thread and waits forever: the
 /// program ends the process (`exit_group`).
 pub fn run(program: Program) -> Result<std::convert::Infallible> {
+    crate::profile::mark("loader start");
     crate::tls::supported()?;
     crate::debug::install_handler();
     let stack = GuestStack::new(MAIN_STACK)?;

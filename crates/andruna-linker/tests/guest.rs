@@ -65,11 +65,16 @@ fn object(arch: &str, name: &str) -> Option<PathBuf> {
 }
 
 fn run(exe: &Path) -> (i32, String, String) {
+    run_with(exe, &[])
+}
+
+fn run_with(exe: &Path, env: &[(&str, &str)]) -> (i32, String, String) {
     let g = guest_dir(arch());
     let out = Command::new(env!("CARGO_BIN_EXE_andruna-elf"))
         .arg("run")
         .arg(exe)
         .env("ANDRUNA_LIB_PATH", lib_dirs(&g))
+        .envs(env.iter().copied())
         .output()
         .expect("spawn andruna-elf");
     (
@@ -106,6 +111,31 @@ fn cxx_exceptions_on_bionic() {
         code == 0 && out.contains("cxx_test passed"),
         "exit {code}\nstdout:\n{out}\nstderr:\n{err}"
     );
+}
+
+/// bionic's clock functions through the loader's vDSO and, with
+/// `ANDRUNA_NO_VDSO`, through the system call path give the system call's
+/// values and errors.
+#[test]
+fn clocks_with_and_without_the_vdso() {
+    let Some(exe) = object(arch(), "clock_test") else {
+        return;
+    };
+    for (env, vdso) in [
+        (&[][..], "vdso: yes"),
+        (&[("ANDRUNA_NO_VDSO", "1")][..], "vdso: no"),
+    ] {
+        let (code, out, err) = run_with(&exe, env);
+        eprintln!("{out}");
+        assert!(
+            code == 0 && out.contains("clock_test passed") && out.contains(vdso),
+            "exit {code}
+stdout:
+{out}
+stderr:
+{err}"
+        );
+    }
 }
 
 #[test]
