@@ -222,8 +222,10 @@ mod x64 {
 
     pub fn to_uc(c: &CONTEXT, uc: &mut UContext) {
         let g = &mut uc.gregs;
-        let r = [c.R8, c.R9, c.R10, c.R11, c.R12, c.R13, c.R14, c.R15, c.Rdi, c.Rsi, c.Rbp, c.Rbx,
-            c.Rdx, c.Rax, c.Rcx, c.Rsp, c.Rip];
+        let r = [
+            c.R8, c.R9, c.R10, c.R11, c.R12, c.R13, c.R14, c.R15, c.Rdi, c.Rsi, c.Rbp, c.Rbx,
+            c.Rdx, c.Rax, c.Rcx, c.Rsp, c.Rip,
+        ];
         for (i, v) in r.iter().enumerate() {
             g[REG_R8 + i] = *v as i64;
         }
@@ -243,9 +245,11 @@ mod x64 {
 
     pub fn from_uc(uc: &UContext, c: &mut CONTEXT) {
         let g = &uc.gregs;
-        let r: [&mut u64; 17] = [&mut c.R8, &mut c.R9, &mut c.R10, &mut c.R11, &mut c.R12,
-            &mut c.R13, &mut c.R14, &mut c.R15, &mut c.Rdi, &mut c.Rsi, &mut c.Rbp, &mut c.Rbx,
-            &mut c.Rdx, &mut c.Rax, &mut c.Rcx, &mut c.Rsp, &mut c.Rip];
+        let r: [&mut u64; 17] = [
+            &mut c.R8, &mut c.R9, &mut c.R10, &mut c.R11, &mut c.R12, &mut c.R13, &mut c.R14,
+            &mut c.R15, &mut c.Rdi, &mut c.Rsi, &mut c.Rbp, &mut c.Rbx, &mut c.Rdx, &mut c.Rax,
+            &mut c.Rcx, &mut c.Rsp, &mut c.Rip,
+        ];
         for (i, v) in r.into_iter().enumerate() {
             *v = g[REG_R8 + i] as u64;
         }
@@ -261,7 +265,9 @@ mod x64 {
         };
     }
     #[allow(dead_code)]
-    pub const UNUSED: [usize; 9] = [REG_RDI, REG_RSI, REG_RBP, REG_RBX, REG_RDX, REG_RAX, REG_RCX, REG_RSP, REG_RIP];
+    pub const UNUSED: [usize; 9] = [
+        REG_RDI, REG_RSI, REG_RBP, REG_RBX, REG_RDX, REG_RAX, REG_RCX, REG_RSP, REG_RIP,
+    ];
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -280,7 +286,11 @@ pub fn deliver(
     use x64::*;
     let (sig, si_code, addr, write) = match code {
         0xC000_0005 | 0xC000_00FD => {
-            let (a, w) = if nparams >= 2 { (info[1] as u64, info[0] == 1) } else { (ctx.Rsp, true) };
+            let (a, w) = if nparams >= 2 {
+                (info[1] as u64, info[0] == 1)
+            } else {
+                (ctx.Rsp, true)
+            };
             (SIGSEGV, 0, a, w)
         }
         0xC000_001D | 0xC000_0096 => (SIGILL, 1, ctx.Rip, false),
@@ -301,7 +311,14 @@ pub fn deliver(
             crate::debug::describe(ctx.Rip).unwrap_or_default()
         );
     }
-    let mut si = SigInfo { signo: sig, errno: 0, code: si_code, pad: 0, addr, rest: [0; 13] };
+    let mut si = SigInfo {
+        signo: sig,
+        errno: 0,
+        code: si_code,
+        pad: 0,
+        addr,
+        rest: [0; 13],
+    };
     if sig == SIGSEGV {
         si.code = if mapped(addr) { 2 } else { 1 }; // SEGV_ACCERR / SEGV_MAPERR
     }
@@ -327,6 +344,12 @@ fn mapped(addr: u64) -> bool {
     use windows::Win32::System::Memory::{MEM_COMMIT, MEMORY_BASIC_INFORMATION, VirtualQuery};
     let mut m = MEMORY_BASIC_INFORMATION::default();
     // SAFETY: queries the address space only.
-    let n = unsafe { VirtualQuery(Some(addr as *const c_void), &mut m, core::mem::size_of_val(&m)) };
+    let n = unsafe {
+        VirtualQuery(
+            Some(addr as *const c_void),
+            &mut m,
+            core::mem::size_of_val(&m),
+        )
+    };
     n != 0 && m.State == MEM_COMMIT
 }

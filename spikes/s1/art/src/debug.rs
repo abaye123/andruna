@@ -129,32 +129,35 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         for (i, v) in rec.ExceptionInformation.iter().enumerate() {
             p[i] = *v;
         }
-        if crate::tls::current_tp() != 0 && crate::host::signal::deliver(code, &p, rec.NumberParameters, ctx) {
+        if crate::tls::current_tp() != 0
+            && crate::host::signal::deliver(code, &p, rec.NumberParameters, ctx)
+        {
             return EXCEPTION_CONTINUE_EXECUTION;
         }
     }
     // Only report faults in guest code, and only real faults (debuggers
     // and the C runtime use other codes).
     let fatal = matches!(code, 0xC000_0005 | 0xC000_001D | 0xC000_0094 | 0xC000_00FD);
-    if fatal && std::env::var_os("S8_NO_CRASH_REPORT").is_none() {
-        if let Some(d) = describe(pc) {
-            let mut e = std::io::stderr().lock();
-            let _ = writeln!(e, "[s8] guest fault {code:#x} at {pc:#x} {d}");
-            if code == 0xC000_0005 {
-                let _ = writeln!(
-                    e,
-                    "[s8]   {} address {:#x}",
-                    if rec.ExceptionInformation[0] == 1 {
-                        "write to"
-                    } else {
-                        "read from"
-                    },
-                    rec.ExceptionInformation[1]
-                );
-            }
-            let _ = writeln!(e, "[s8] guest frames (frame-pointer walk):");
-            walk(&mut e, pc, fp, sp);
+    if fatal
+        && std::env::var_os("S8_NO_CRASH_REPORT").is_none()
+        && let Some(d) = describe(pc)
+    {
+        let mut e = std::io::stderr().lock();
+        let _ = writeln!(e, "[s8] guest fault {code:#x} at {pc:#x} {d}");
+        if code == 0xC000_0005 {
+            let _ = writeln!(
+                e,
+                "[s8]   {} address {:#x}",
+                if rec.ExceptionInformation[0] == 1 {
+                    "write to"
+                } else {
+                    "read from"
+                },
+                rec.ExceptionInformation[1]
+            );
         }
+        let _ = writeln!(e, "[s8] guest frames (frame-pointer walk):");
+        walk(&mut e, pc, fp, sp);
     }
     EXCEPTION_CONTINUE_SEARCH
 }
@@ -221,14 +224,19 @@ pub fn print_guest_backtrace() {
 /// frame-pointer walk) and exits with 124. For hangs.
 #[cfg(target_arch = "x86_64")]
 pub fn start_watchdog() {
-    use windows::Win32::System::Diagnostics::Debug::{CONTEXT, CONTEXT_FULL_AMD64, GetThreadContext};
+    use windows::Win32::System::Diagnostics::Debug::{
+        CONTEXT, CONTEXT_FULL_AMD64, GetThreadContext,
+    };
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     };
     use windows::Win32::System::Threading::{
         GetCurrentProcessId, GetCurrentThreadId, OpenThread, SuspendThread, THREAD_ALL_ACCESS,
     };
-    let Some(secs) = std::env::var("S1_WATCHDOG").ok().and_then(|s| s.parse::<u64>().ok()) else {
+    let Some(secs) = std::env::var("S1_WATCHDOG")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    else {
         return;
     };
     std::thread::spawn(move || {
@@ -239,33 +247,47 @@ pub fn start_watchdog() {
         let _ = writeln!(e, "[s1] watchdog after {secs} s: thread stacks");
         // SAFETY: snapshot APIs with valid arguments; threads of this process.
         unsafe {
-            let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) else { return };
-            let mut te = THREADENTRY32 { dwSize: core::mem::size_of::<THREADENTRY32>() as u32, ..Default::default() };
+            let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) else {
+                return;
+            };
+            let mut te = THREADENTRY32 {
+                dwSize: core::mem::size_of::<THREADENTRY32>() as u32,
+                ..Default::default()
+            };
             let mut ok = Thread32First(snap, &mut te).is_ok();
             while ok {
-                if te.th32OwnerProcessID == pid && te.th32ThreadID != me {
-                    if let Ok(h) = OpenThread(THREAD_ALL_ACCESS, false, te.th32ThreadID) {
-                        SuspendThread(h);
-                        #[repr(C, align(16))]
-                        struct A(CONTEXT);
-                        let mut a = A(CONTEXT { ContextFlags: CONTEXT_FULL_AMD64, ..Default::default() });
-                        if GetThreadContext(h, &mut a.0).is_ok() {
-                            let c = &a.0;
-                            let _ = writeln!(e, "[s1] thread {} rip {:#x} {}", te.th32ThreadID, c.Rip,
-                                describe(c.Rip).unwrap_or_else(|| "(host or system)".into()));
-                            walk(&mut e, c.Rip, c.Rbp, c.Rsp);
-                            // Stack scan: guest code addresses on the stack
-                            // (when the thread is stopped in host code).
-                            let mut n = 0;
-                            let mut p = c.Rsp & !7;
-                            while n < 24 && p < c.Rsp + (256 << 10) {
-                                let Some((v, _)) = read_frame(p) else { break };
-                                if let Some(d) = describe(v) {
-                                    let _ = writeln!(e, "[s1]   stack {:#x}: {v:#x} {d}", p);
-                                    n += 1;
-                                }
-                                p += 8;
+                if te.th32OwnerProcessID == pid
+                    && te.th32ThreadID != me
+                    && let Ok(h) = OpenThread(THREAD_ALL_ACCESS, false, te.th32ThreadID)
+                {
+                    SuspendThread(h);
+                    #[repr(C, align(16))]
+                    struct A(CONTEXT);
+                    let mut a = A(CONTEXT {
+                        ContextFlags: CONTEXT_FULL_AMD64,
+                        ..Default::default()
+                    });
+                    if GetThreadContext(h, &mut a.0).is_ok() {
+                        let c = &a.0;
+                        let _ = writeln!(
+                            e,
+                            "[s1] thread {} rip {:#x} {}",
+                            te.th32ThreadID,
+                            c.Rip,
+                            describe(c.Rip).unwrap_or_else(|| "(host or system)".into())
+                        );
+                        walk(&mut e, c.Rip, c.Rbp, c.Rsp);
+                        // Stack scan: guest code addresses on the stack
+                        // (when the thread is stopped in host code).
+                        let mut n = 0;
+                        let mut p = c.Rsp & !7;
+                        while n < 24 && p < c.Rsp + (256 << 10) {
+                            let Some((v, _)) = read_frame(p) else { break };
+                            if let Some(d) = describe(v) {
+                                let _ = writeln!(e, "[s1]   stack {:#x}: {v:#x} {d}", p);
+                                n += 1;
                             }
+                            p += 8;
                         }
                     }
                 }

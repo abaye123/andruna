@@ -172,7 +172,12 @@ impl Linker {
         let main = self.objects.len();
         let mut queue: Vec<(PathBuf, String)> = paths
             .iter()
-            .map(|p| (p.clone(), p.file_name().unwrap().to_string_lossy().into_owned()))
+            .map(|p| {
+                (
+                    p.clone(),
+                    p.file_name().unwrap().to_string_lossy().into_owned(),
+                )
+            })
             .collect();
         let mut qi = 0;
         while qi < queue.len() {
@@ -183,7 +188,8 @@ impl Linker {
                 if host::is_host_library(n) {
                     continue;
                 }
-                if !queue.iter().any(|(_, q)| q == n) && !self.objects.iter().any(|o| &o.name == n) {
+                if !queue.iter().any(|(_, q)| q == n) && !self.objects.iter().any(|o| &o.name == n)
+                {
                     queue.push((self.find(n)?, n.clone()));
                 }
             }
@@ -221,7 +227,13 @@ impl Linker {
         self.stats.init = t.elapsed();
     }
 
-    fn run_object_initializers(&mut self, i: usize, argc: i32, argv: *const *const u8, envp: *const *const u8) {
+    fn run_object_initializers(
+        &mut self,
+        i: usize,
+        argc: i32,
+        argv: *const *const u8,
+        envp: *const *const u8,
+    ) {
         let o = &self.objects[i];
         let mut fns = vec![];
         if let (Some(a), Some(n)) = (o.dyn1(DT_PREINIT_ARRAY), o.dyn1(DT_PREINIT_ARRAYSZ)) {

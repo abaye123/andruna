@@ -34,9 +34,7 @@ fn stack_limits() -> (usize, usize) {
     let mut low = 0usize;
     let mut high = 0usize;
     // SAFETY: two out-pointers.
-    unsafe {
-        windows::Win32::System::Threading::GetCurrentThreadStackLimits(&mut low, &mut high)
-    };
+    unsafe { windows::Win32::System::Threading::GetCurrentThreadStackLimits(&mut low, &mut high) };
     (low, high)
 }
 
@@ -279,10 +277,16 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("uname", h_uname as usize),
         ("getpwuid_r", h_getpwuid_r as usize),
         ("getpwnam_r", h_getpwuid_r as usize),
-        ("android_get_LD_LIBRARY_PATH", h_get_ld_library_path as usize),
+        (
+            "android_get_LD_LIBRARY_PATH",
+            h_get_ld_library_path as usize,
+        ),
         ("pthread_getattr_np", h_pthread_getattr_np as usize),
         ("pthread_attr_getstack", h_pthread_attr_getstack as usize),
-        ("pthread_attr_getguardsize", h_pthread_attr_getguardsize as usize),
+        (
+            "pthread_attr_getguardsize",
+            h_pthread_attr_getguardsize as usize,
+        ),
         ("pthread_attr_getschedparam", h_zero_out_int as usize),
         ("sched_getparam", h_zero_out_int as usize),
         ("sched_getscheduler", h_getpriority as usize),
@@ -301,7 +305,10 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("getppid", h_getppid as usize),
         ("umask", h_umask as usize),
         ("android_get_device_api_level", h_api_level as usize),
-        ("android_set_application_target_sdk_version", h_void1 as usize),
+        (
+            "android_set_application_target_sdk_version",
+            h_void1 as usize,
+        ),
         ("mallinfo", h_mallinfo as usize),
         ("arc4random", h_arc4random as usize),
         ("pthread_getname_np", h_pthread_getname_np as usize),

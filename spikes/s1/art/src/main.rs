@@ -1,19 +1,22 @@
-//! Spike S8: AOSP code built as Android ELF (`<arch>-linux-android`),
-//! loaded into a Windows process by a minimal ELF loader and linked to
-//! andruna-lx through System V entry points.
+//! Spike S1 round 3: ART built as Android ELF (`<arch>-linux-android`),
+//! loaded into a Windows process by the S8 prototype loader (copied from
+//! spikes/s8) and linked to andruna-lx through System V entry points.
 //!
 //! ```text
-//! andruna-spike-s8 run   <exe> [args...]   load a guest PIE and run main()
-//! andruna-spike-s8 bench                   boundary benchmark (libs8bench.so)
-//! andruna-spike-s8 load  <so>              load only; print load statistics
-//! andruna-spike-s8 crash                   fault inside guest code (debugger checks)
-//! andruna-spike-s8 check                   host table vs. host_symbols.txt
+//! andruna-spike-s1-art run <exe> [args...]  load a guest PIE (and S1_PRELOAD) and run main()
+//! andruna-spike-s1-art tlscost              cost of the Thread access through %fs:0x38
+//! andruna-spike-s1-art load  <so>           load only; print load statistics
+//! andruna-spike-s1-art check                host table vs. host_symbols.txt
 //! ```
 //!
 //! Objects are searched in `S8_LIB_PATH` (`;`-separated), by default
-//! `out/s8/<arch>/{aosp,sysroot/usr/lib,libcxx-install/lib}` of the
+//! `out/s1art/<arch>/{aosp,sysroot/usr/lib,libcxx-install/lib}` of the
 //! repository. The guest file tree `/` is `S8_ROOT` (default
-//! `%TEMP%\andruna-s8-root`).
+//! `%TEMP%\andruna-s1-root`). `run_art.py` sets both.
+
+// Guest functions are entered by transmuting addresses the loader resolved
+// to the local function-pointer aliases.
+#![allow(clippy::missing_transmute_annotations)]
 
 mod debug;
 mod elf;
@@ -171,14 +174,14 @@ fn cmd_run(args: &[String]) -> Result<i32, String> {
             linker.load_all(&paths)?;
             report::loaded(&linker, t.elapsed());
             // Debug aid: S1_PEEK=<object>:<hex vaddr> prints 6 words there.
-            if let Ok(p) = std::env::var("S1_PEEK") {
-                if let Some((o, a)) = p.split_once(':') {
-                    let a = u64::from_str_radix(a.trim_start_matches("0x"), 16).unwrap_or(0);
-                    if let Some(ob) = linker.objects.iter().find(|x| x.name == o) {
-                        // SAFETY: debug read inside a mapped object.
-                        let w = unsafe { core::slice::from_raw_parts((ob.bias + a) as *const u64, 6) };
-                        eprintln!("[s1] peek {o}+{a:#x} (bias {:#x}): {w:x?}", ob.bias);
-                    }
+            if let Ok(p) = std::env::var("S1_PEEK")
+                && let Some((o, a)) = p.split_once(':')
+            {
+                let a = u64::from_str_radix(a.trim_start_matches("0x"), 16).unwrap_or(0);
+                if let Some(ob) = linker.objects.iter().find(|x| x.name == o) {
+                    // SAFETY: debug read inside a mapped object.
+                    let w = unsafe { core::slice::from_raw_parts((ob.bias + a) as *const u64, 6) };
+                    eprintln!("[s1] peek {o}+{a:#x} (bias {:#x}): {w:x?}", ob.bias);
                 }
             }
             host::dl::set_linker(&mut linker);
@@ -221,7 +224,7 @@ fn cmd_load(args: &[String]) -> Result<i32, String> {
             load(&mut linker, &so)?;
             let t = host::threads::new_record();
             let _area = host::threads::enter_guest_thread(t);
-            let a = make_args(&[so.clone()]);
+            let a = make_args(std::slice::from_ref(&so));
             linker.run_initializers(1, a.argv.as_ptr(), a.envp.as_ptr());
             report::initialized(&linker);
             Ok(0)
@@ -449,10 +452,22 @@ fn cmd_tlscost() -> Result<i32, String> {
             best[2] = best[2].min(t0.elapsed().as_secs_f64() * 1e9 / n as f64);
             std::hint::black_box(acc);
         }
-        println!("segment load fs:[off] (stands for Android's gs:[off]): {:.3} ns", best[0]);
-        println!("fs:[0x38] then [reg+off] (ANDRUNA):                    {:.3} ns", best[1]);
-        println!("fs:[0x38] then store [reg+off]:                         {:.3} ns", best[2]);
-        println!("FS-base lazy restores on this thread: {}", tls::restores_here());
+        println!(
+            "segment load fs:[off] (stands for Android's gs:[off]): {:.3} ns",
+            best[0]
+        );
+        println!(
+            "fs:[0x38] then [reg+off] (ANDRUNA):                    {:.3} ns",
+            best[1]
+        );
+        println!(
+            "fs:[0x38] then store [reg+off]:                         {:.3} ns",
+            best[2]
+        );
+        println!(
+            "FS-base lazy restores on this thread: {}",
+            tls::restores_here()
+        );
         // SAFETY: restores the slot.
         unsafe { *((tp + 0x38) as *mut u64) = saved };
     });

@@ -119,11 +119,10 @@ gfn! {
                     }
                     // The guest libc's functions that the host implements
                     // (libsigchain looks up the real sigaction in libc.so).
-                    if l.objects[h - 1].name == "libc.so" {
-                        if let Some(a) = l.lookup_host(&n) {
+                    if l.objects[h - 1].name == "libc.so"
+                        && let Some(a) = l.lookup_host(&n) {
                             return Some(a);
                         }
-                    }
                 }
                 l.lookup_global(&n).or_else(|| l.lookup_host(&n))
             })
@@ -159,8 +158,8 @@ gfn! {
             ERROR.with(|e| match e.borrow_mut().take() {
                 // Kept alive until the next dlerror on this thread.
                 Some(c) => {
-                    let p = leak_name(c.to_str().unwrap_or(""));
-                    p
+
+                    leak_name(c.to_str().unwrap_or(""))
                 }
                 None => core::ptr::null(),
             })
@@ -296,7 +295,10 @@ pub fn symbols() -> Vec<(&'static str, usize)> {
         ("android_init_anonymous_namespace", h_false as usize),
         // libnativeloader's namespace queries (its Android code is not
         // built, see aosp/modules/art_elf.cmake): no namespace, not bridged.
-        ("FindNativeLoaderNamespaceByClassLoader", h_null_namespace as usize),
+        (
+            "FindNativeLoaderNamespaceByClassLoader",
+            h_null_namespace as usize,
+        ),
         ("IsNamespaceNativeBridged", h_false as usize),
     ]
 }

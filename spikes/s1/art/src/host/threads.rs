@@ -501,12 +501,11 @@ unsafe fn cond_wait(c: *mut u32, m: *mut u32, ts: Option<&Timespec>) -> i32 {
         },
         None => None,
     };
-    if r == 0 {
-        if let Err(e) = andruna_lx::futex::wait(seq, s, d) {
-            if e.0 == ETIMEDOUT {
-                r = ETIMEDOUT;
-            }
-        }
+    if r == 0
+        && let Err(e) = andruna_lx::futex::wait(seq, s, d)
+        && e.0 == ETIMEDOUT
+    {
+        r = ETIMEDOUT;
     }
     // SAFETY: as above.
     unsafe { mutex_lock(m, None, false) };

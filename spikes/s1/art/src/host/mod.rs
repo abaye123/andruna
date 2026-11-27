@@ -32,8 +32,8 @@ pub mod dl;
 pub mod extra;
 pub mod fs;
 pub mod lx;
-pub mod signal;
 pub mod misc;
+pub mod signal;
 pub mod threads;
 
 /// The guest-visible soname of the host library.

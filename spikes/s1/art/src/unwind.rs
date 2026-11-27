@@ -178,6 +178,10 @@ mod x64 {
         })
     }
 
+    /// Translated operations (prologue offset, operation) and the prologue
+    /// size.
+    type Translated = (Vec<(u8, Op)>, u8);
+
     #[derive(Clone, Copy, Debug)]
     enum Op {
         Push(u8),
@@ -199,11 +203,7 @@ mod x64 {
     /// frame is described the way Windows can unwind it from rbp: a
     /// frame offset below the lowest save, the saves relative to it, and
     /// an allocation that brings rsp back to rbp.
-    fn translate(
-        cie: &Cie,
-        fde_insns: &[u8],
-        func_len: u64,
-    ) -> Result<(Vec<(u8, Op)>, u8), &'static str> {
+    fn translate(cie: &Cie, fde_insns: &[u8], func_len: u64) -> Result<Translated, &'static str> {
         let mut prog = cie.insns.clone();
         let initial_len = prog.len();
         prog.extend_from_slice(fde_insns);
