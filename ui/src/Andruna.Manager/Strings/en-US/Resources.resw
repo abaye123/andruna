@@ -246,4 +246,28 @@
   <data name="AboutServiceStatusFormat" xml:space="preserve">
     <value>Up for {0}, app processes running: {1}, process ID {2}</value>
   </data>
+  <data name="NoticesTitle" xml:space="preserve">
+    <value>Third-party notices</value>
+  </data>
+  <data name="NoticesOpenExternally" xml:space="preserve">
+    <value>Open in text editor</value>
+  </data>
+  <data name="NoticesLoading" xml:space="preserve">
+    <value>Loading the notices</value>
+  </data>
+  <data name="NoticesTextLabel" xml:space="preserve">
+    <value>Third-party notices text</value>
+  </data>
+  <data name="NoticesMissingTitle" xml:space="preserve">
+    <value>The notices file is missing</value>
+  </data>
+  <data name="NoticesMissingMessage" xml:space="preserve">
+    <value>The file {0} was not found in the Andruna folder. Reinstalling Andruna restores it.</value>
+  </data>
+  <data name="NoticesReadFailedTitle" xml:space="preserve">
+    <value>The notices file could not be read</value>
+  </data>
+  <data name="NoticesReadFailedMessage" xml:space="preserve">
+    <value>Windows reported: {0}</value>
+  </data>
 </root>

@@ -13,7 +13,7 @@ namespace Andruna.Manager;
 
 /// <summary>Where the window starts, from the command line.</summary>
 /// <remarks>
-/// <c>--page library</c> (default), <c>--page settings</c>, or
+/// <c>--page library</c> (default), <c>--page settings</c>, <c>--page notices</c>, or
 /// <c>--app &lt;package&gt;</c> for the page of one installed app.
 /// </remarks>
 public sealed record StartPage(string Page, string? Package)

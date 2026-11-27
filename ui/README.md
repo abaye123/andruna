@@ -22,8 +22,9 @@ ui/src/Andruna.Manager/bin/x64/Debug/net10.0-windows10.0.26100.0/win-x64/Andruna
 
 `installer/build.ps1` publishes the Release build for the installer.
 
-Command line: `--page settings` opens Settings, `--app <package>` opens the
-page of one installed app; the default is the Library.
+Command line: `--page settings` opens Settings, `--page notices` the
+third-party notices, `--app <package>` the page of one installed app; the
+default is the Library.
 
 ## Pages
 
@@ -38,6 +39,13 @@ page of one installed app; the default is the Library.
   (Windows, light, dark), About with version, architecture, service state and
   third-party notices. A language change asks for a restart, after which the
   whole window, including the frame, is laid out right to left for Hebrew.
+- **Third-party notices** (M-6): opened from About, back to Settings with the
+  back button, the "Settings" breadcrumb or Alt+Left. Shows
+  `THIRD_PARTY_NOTICES.txt` from the app folder, read asynchronously, in a
+  read-only monospace text box (selectable, Ctrl+A / Ctrl+C) that stays left
+  to right in Hebrew because the notices are English. A missing or unreadable
+  file is shown as an error, not as an empty text. "Open in text editor"
+  opens the file with its Windows association.
 
 ## Strings
 
