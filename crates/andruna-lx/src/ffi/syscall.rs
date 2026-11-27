@@ -34,6 +34,8 @@ use crate::{fs, futex, mem, process, signal};
 pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
     let sysno = NATIVE.lookup(nr).ok_or(Errno::ENOSYS)?;
     let int = |i: usize| a[i] as i32;
+    // SAFETY: path arguments are NUL-terminated strings (contract).
+    let path = |p: usize| unsafe { super::path_arg(p as *const c_char) };
     let uint = |i: usize| a[i] as u32;
     let ptr = |i: usize| a[i] as usize;
     // SAFETY: for every call below, the pointer arguments are forwarded
@@ -103,8 +105,69 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
             Sysno::Kill => signal::kill(int(0), int(1), None).map(|()| 0),
             Sysno::Tkill => signal::tgkill(None, int(0), int(1), None).map(|()| 0),
             Sysno::Tgkill => signal::tgkill(Some(int(0)), int(1), int(2), None).map(|()| 0),
+            Sysno::Getdents64 => sys_getdents64(int(0), ptr(1) as *mut u8, uint(2) as usize),
+            Sysno::Unlinkat => fs::unlinkat(int(0), path(ptr(1))?, uint(2)).map(|()| 0),
+            Sysno::Unlink => fs::unlinkat(AT_FDCWD, path(ptr(0))?, 0).map(|()| 0),
+            Sysno::Rmdir => fs::unlinkat(AT_FDCWD, path(ptr(0))?, fs::AT_REMOVEDIR).map(|()| 0),
+            Sysno::Mkdirat => fs::mkdirat(int(0), path(ptr(1))?, uint(2)).map(|()| 0),
+            Sysno::Mkdir => fs::mkdirat(AT_FDCWD, path(ptr(0))?, uint(1)).map(|()| 0),
+            Sysno::Renameat => {
+                fs::renameat2(int(0), path(ptr(1))?, int(2), path(ptr(3))?, 0).map(|()| 0)
+            }
+            Sysno::Renameat2 => {
+                fs::renameat2(int(0), path(ptr(1))?, int(2), path(ptr(3))?, uint(4)).map(|()| 0)
+            }
+            Sysno::Rename => {
+                fs::renameat2(AT_FDCWD, path(ptr(0))?, AT_FDCWD, path(ptr(1))?, 0).map(|()| 0)
+            }
+            Sysno::Symlinkat => fs::symlinkat(path(ptr(0))?, int(1), path(ptr(2))?).map(|()| 0),
+            Sysno::Symlink => fs::symlinkat(path(ptr(0))?, AT_FDCWD, path(ptr(1))?).map(|()| 0),
+            Sysno::Readlinkat => sys_readlinkat(int(0), path(ptr(1))?, ptr(2) as *mut u8, a[3]),
+            Sysno::Readlink => sys_readlinkat(AT_FDCWD, path(ptr(0))?, ptr(1) as *mut u8, a[2]),
+            Sysno::Ftruncate => fs::ftruncate(int(0), a[1]).map(|()| 0),
+            Sysno::Truncate => fs::truncate(path(ptr(0))?, a[1]).map(|()| 0),
+            Sysno::Fsync | Sysno::Fdatasync => fs::fsync(int(0)).map(|()| 0),
+            Sysno::Faccessat => fs::faccessat(int(0), path(ptr(1))?, int(2), 0).map(|()| 0),
+            Sysno::Faccessat2 => fs::faccessat(int(0), path(ptr(1))?, int(2), uint(3)).map(|()| 0),
+            Sysno::Access => fs::faccessat(AT_FDCWD, path(ptr(0))?, int(1), 0).map(|()| 0),
         }
     }
+}
+
+/// `getdents64(int, void*, unsigned int)`.
+///
+/// # Safety
+///
+/// `buf` is NULL or writable for `count` bytes.
+unsafe fn sys_getdents64(fd: i32, buf: *mut u8, count: usize) -> SysResult<i64> {
+    let data = fs::getdents64(fd, count)?;
+    if !data.is_empty() {
+        if buf.is_null() {
+            return Err(Errno::EFAULT);
+        }
+        // SAFETY: the caller's buffer, `count` bytes (contract); the data
+        // is at most `count` bytes.
+        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), buf, data.len()) };
+    }
+    Ok(data.len() as i64)
+}
+
+/// `readlinkat(int, const char*, char*, size_t)`.
+///
+/// # Safety
+///
+/// `buf` is NULL or writable for `size` bytes.
+unsafe fn sys_readlinkat(dirfd: i32, path: &[u8], buf: *mut u8, size: i64) -> SysResult<i64> {
+    if size <= 0 {
+        return Err(Errno::EINVAL);
+    }
+    let t = fs::readlinkat(dirfd, path, size as usize)?;
+    if buf.is_null() {
+        return Err(Errno::EFAULT);
+    }
+    // SAFETY: the caller's buffer (contract); `t` is at most `size` bytes.
+    unsafe { core::ptr::copy_nonoverlapping(t.as_ptr(), buf, t.len()) };
+    Ok(t.len() as i64)
 }
 
 /// `rt_sigaction(int, const struct sigaction*, struct sigaction*, size_t)`.

@@ -55,6 +55,28 @@ pub trait FileOps: Send + Sync + fmt::Debug {
     fn dir_path(&self) -> Option<&[u8]> {
         None
     }
+
+    /// `ftruncate` (the description is writable).
+    fn truncate(&self, _len: u64) -> SysResult<()> {
+        Err(Errno::EINVAL)
+    }
+
+    /// `fsync` / `fdatasync`.
+    fn sync(&self) -> SysResult<()> {
+        Err(Errno::EINVAL)
+    }
+
+    /// `getdents64`: appends whole `linux_dirent64` records to `out`, at
+    /// most `max` bytes in all.
+    fn getdents(&self, _out: &mut Vec<u8>, _max: usize) -> SysResult<()> {
+        Err(Errno::ENOTDIR)
+    }
+
+    /// Whether `mmap` can map the object (with `pread` for the contents);
+    /// others give `ENODEV`.
+    fn mappable(&self) -> bool {
+        false
+    }
 }
 
 /// An open file description.
@@ -153,6 +175,30 @@ impl OpenFile {
 
     pub fn stat(&self) -> SysResult<StatData> {
         self.ops.stat()
+    }
+
+    /// `ftruncate`: Linux reports `EINVAL` for a description not open for
+    /// writing.
+    pub fn truncate(&self, len: i64) -> SysResult<()> {
+        self.not_path()?;
+        self.writable().map_err(|_| Errno::EINVAL)?;
+        let len = u64::try_from(len).map_err(|_| Errno::EINVAL)?;
+        self.ops.truncate(len)
+    }
+
+    pub fn sync(&self) -> SysResult<()> {
+        self.not_path()?;
+        self.ops.sync()
+    }
+
+    pub fn getdents(&self, out: &mut Vec<u8>, max: usize) -> SysResult<()> {
+        self.not_path()?;
+        self.ops.getdents(out, max)
+    }
+
+    /// The access mode (`O_RDONLY`, `O_WRONLY`, `O_RDWR` or `O_PATH`).
+    pub fn access(&self) -> u32 {
+        self.access
     }
 }
 

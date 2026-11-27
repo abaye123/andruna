@@ -34,9 +34,17 @@
 //! - `madvise(MADV_DONTNEED)` decommits and recommits the pages. Another
 //!   thread touching them during that window takes an access violation; the
 //!   signal layer must retry such faults (see [`crate::signal`]).
-//! - File-backed and shared mappings return `ENOSYS` for now. They are
-//!   built on `MapViewOfFile3` with placeholders and need 64 KiB aligned
-//!   file offsets (`docs/spec/03-components.md`, andruna-lx, Memory).
+//! - File mappings are private memory filled from the file when the
+//!   mapping is made (`pread`). For `MAP_PRIVATE` this is Linux behavior,
+//!   except that later changes to the file are never seen (Linux leaves
+//!   that unspecified) and pages wholly past the end of the file read as
+//!   zero instead of raising `SIGBUS`. A read-only `MAP_SHARED` mapping is
+//!   the same snapshot: writes to the file after the mapping was made are
+//!   not seen, and `mprotect` to `PROT_WRITE` fails with `EACCES`.
+//!   Writable `MAP_SHARED` file mappings fail with `ENODEV` (the error of a
+//!   file system that cannot map files), and shared anonymous mappings
+//!   with `ENOSYS`. Sharing views between processes (`MapViewOfFile3` with
+//!   placeholders, `docs/spec/03-components.md`) is the next step.
 //! - `MAP_32BIT` returns `ENOMEM` for now (TODO: `MEM_ADDRESS_REQUIREMENTS`).
 
 use std::collections::BTreeMap;
@@ -118,6 +126,9 @@ enum Kind {
         alloc: usize,
         prot: u32,
         committed: bool,
+        /// A read-only shared file mapping: `PROT_WRITE` is refused
+        /// (`EACCES`), since writes would not reach the file.
+        no_write: bool,
     },
 }
 
@@ -161,7 +172,72 @@ pub fn mmap(
     fd: i32,
     offset: i64,
 ) -> SysResult<usize> {
+    if flags & MAP_ANONYMOUS == 0 {
+        return map_file(addr, len, prot, flags, fd, offset);
+    }
     lock(&SPACE).mmap(addr, len, prot, flags, fd, offset)
+}
+
+/// A file mapping: private memory filled from the file (see the module
+/// documentation).
+fn map_file(
+    addr: usize,
+    len: usize,
+    prot: u32,
+    flags: u32,
+    fd: i32,
+    offset: i64,
+) -> SysResult<usize> {
+    let shared = match flags & MAP_TYPE {
+        MAP_PRIVATE => false,
+        MAP_SHARED | MAP_SHARED_VALIDATE => true,
+        _ => return Err(Errno::EINVAL),
+    };
+    if offset < 0 || !(offset as u64).is_multiple_of(PAGE_SIZE as u64) {
+        return Err(Errno::EINVAL);
+    }
+    let file = crate::fd::FDS.get(fd)?;
+    use crate::linux::fcntl::{O_RDONLY, O_RDWR};
+    if !matches!(file.access(), O_RDONLY | O_RDWR) {
+        return Err(Errno::EACCES);
+    }
+    if !file.ops().mappable() {
+        return Err(Errno::ENODEV);
+    }
+    if shared && prot & PROT_WRITE != 0 {
+        if file.access() != O_RDWR {
+            return Err(Errno::EACCES);
+        }
+        // Writable shared file mappings are not supported yet.
+        return Err(Errno::ENODEV);
+    }
+    let anon = (flags & !MAP_TYPE & !MAP_SHARED_VALIDATE) | MAP_PRIVATE | MAP_ANONYMOUS;
+    let start = lock(&SPACE).mmap(addr, len, PROT_READ | PROT_WRITE, anon, -1, 0)?;
+    let size = page_round_up(len).ok_or(Errno::EINVAL)?;
+    let mut done = 0usize;
+    while done < size {
+        // SAFETY: the new mapping is writable and nothing else refers to
+        // it yet.
+        let buf = unsafe { crate::util::UserBuf::new((start + done) as *mut u8, size - done) };
+        match file.pread(buf, offset + done as i64) {
+            Ok(0) => break,
+            Ok(n) => done += n,
+            Err(e) => {
+                let _ = munmap(start, size);
+                return Err(e);
+            }
+        }
+    }
+    let mut s = lock(&SPACE);
+    if prot != PROT_READ | PROT_WRITE {
+        s.mprotect(start, size, prot)?;
+    }
+    if shared {
+        s.split_at(start)?;
+        s.split_at(start + size)?;
+        s.set_no_write(start, start + size);
+    }
+    Ok(start)
 }
 
 /// `munmap` on the process address space.
@@ -279,13 +355,14 @@ impl AddressSpace {
         };
         match flags & MAP_TYPE {
             MAP_PRIVATE => {}
+            // Shared anonymous memory (between processes after fork, or
+            // through memfd) is not supported yet.
             MAP_SHARED | MAP_SHARED_VALIDATE => return Err(Errno::ENOSYS),
             _ => return Err(Errno::EINVAL),
         }
         if flags & MAP_ANONYMOUS == 0 {
-            // TODO(spec 03, andruna-lx Memory): file mappings on
-            // MapViewOfFile3 with placeholders.
-            return Err(Errno::ENOSYS);
+            // File mappings go through `map_file`.
+            return Err(Errno::EINVAL);
         }
         if flags & MAP_HUGETLB != 0 || cfg!(target_arch = "x86_64") && flags & MAP_32BIT != 0 {
             return Err(Errno::ENOMEM);
@@ -355,6 +432,19 @@ impl AddressSpace {
         }
         let (start, end) = check_range(addr, len)?;
         let pieces = self.require_mapped(start, end)?;
+        if prot & PROT_WRITE != 0
+            && pieces.iter().any(|p| {
+                matches!(
+                    p,
+                    Piece::Own {
+                        kind: Kind::Mapped { no_write: true, .. },
+                        ..
+                    }
+                )
+            })
+        {
+            return Err(Errno::EACCES);
+        }
         let page_prot = page_protection(prot);
         for p in pieces {
             match p {
@@ -420,6 +510,16 @@ impl AddressSpace {
         }
         self.merge_around(start, end);
         Ok(())
+    }
+
+    /// Marks the mapped spans of `[start, end)` as read-only shared file
+    /// mappings.
+    fn set_no_write(&mut self, start: usize, end: usize) {
+        for (_, span) in self.spans.range_mut(start..end) {
+            if let Kind::Mapped { no_write, .. } = &mut span.kind {
+                *no_write = true;
+            }
+        }
     }
 
     /// Whether `[addr, addr+len)` is entirely mapped by lx, and with what
@@ -515,6 +615,7 @@ impl AddressSpace {
                         alloc: s,
                         prot,
                         committed: commit.is_some(),
+                        no_write: false,
                     },
                 },
             );
@@ -869,7 +970,8 @@ mod tests {
             s.mmap(0, 4096, RW, MAP_SHARED | MAP_ANONYMOUS, -1, 0),
             Err(Errno::ENOSYS)
         );
-        assert_eq!(s.mmap(0, 4096, RW, MAP_PRIVATE, 3, 0), Err(Errno::ENOSYS));
+        // File mappings go through `mmap`, not the table.
+        assert_eq!(s.mmap(0, 4096, RW, MAP_PRIVATE, 3, 0), Err(Errno::EINVAL));
         assert_eq!(s.munmap(0x10001, 4096), Err(Errno::EINVAL));
         assert_eq!(s.munmap(0x10000, 0), Err(Errno::EINVAL));
         assert_eq!(s.mprotect(0x10001, 4096, RW), Err(Errno::EINVAL));

@@ -15,8 +15,11 @@
 
 pub mod file;
 pub mod mount;
+mod names;
 pub mod path;
 pub mod stream;
+
+pub use names::*;
 
 use std::sync::{Arc, RwLock};
 
@@ -289,6 +292,22 @@ pub fn close(fd: i32) -> SysResult<()> {
     FDS.close(fd)
 }
 
+pub fn ftruncate(fd: i32, len: i64) -> SysResult<()> {
+    FDS.get(fd)?.truncate(len)
+}
+
+pub fn fsync(fd: i32) -> SysResult<()> {
+    FDS.get(fd)?.sync()
+}
+
+/// `getdents64` into a buffer of `max` bytes; returns the records.
+pub fn getdents64(fd: i32, max: usize) -> SysResult<Vec<u8>> {
+    let f = FDS.get(fd)?;
+    let mut out = Vec::new();
+    f.getdents(&mut out, max)?;
+    Ok(out)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -496,6 +515,294 @@ pub(crate) mod tests {
             .join("f");
         std::fs::remove_file(host).unwrap();
         assert_eq!(pread(fd, UserBuf::from_mut(&mut [0u8; 4]), 0), Ok(4));
+        close(fd).unwrap();
+    }
+
+    fn names(buf: &[u8]) -> Vec<(String, u8)> {
+        let mut out = Vec::new();
+        let mut off = 0;
+        while off < buf.len() {
+            let reclen = u16::from_le_bytes([buf[off + 16], buf[off + 17]]) as usize;
+            let kind = buf[off + 18];
+            let name = &buf[off + 19..off + reclen];
+            let end = name.iter().position(|&b| b == 0).unwrap();
+            out.push((String::from_utf8_lossy(&name[..end]).into_owned(), kind));
+            off += reclen;
+        }
+        out
+    }
+
+    #[test]
+    fn names_unlink_mkdir_rename_getdents() {
+        let d = test_dir("names");
+        let f = format!("{d}/a.txt");
+        let fd = open(&f, O_CREAT | O_RDWR).unwrap();
+        write_all(fd, b"hello world");
+        // ftruncate shrinks and grows without moving the offset.
+        assert_eq!(ftruncate(fd, 5), Ok(()));
+        assert_eq!(fstat(fd).unwrap().size, 5);
+        assert_eq!(ftruncate(fd, -1), Err(Errno::EINVAL));
+        assert_eq!(fsync(fd), Ok(()));
+        let ro = open(&f, O_RDONLY).unwrap();
+        assert_eq!(ftruncate(ro, 1), Err(Errno::EINVAL));
+        assert_eq!(fsync(ro), Ok(()));
+        close(ro).unwrap();
+        assert_eq!(truncate(f.as_bytes(), 3), Ok(()));
+        assert_eq!(fstat(fd).unwrap().size, 3);
+
+        assert_eq!(
+            mkdirat(AT_FDCWD, format!("{d}/sub").as_bytes(), 0o755),
+            Ok(())
+        );
+        assert_eq!(
+            mkdirat(AT_FDCWD, format!("{d}/sub").as_bytes(), 0o755),
+            Err(Errno::EEXIST)
+        );
+        assert_eq!(
+            mkdirat(AT_FDCWD, format!("{d}/no/sub").as_bytes(), 0o755),
+            Err(Errno::ENOENT)
+        );
+        let g = format!("{d}/sub/b.txt");
+        assert_eq!(
+            renameat2(AT_FDCWD, f.as_bytes(), AT_FDCWD, g.as_bytes(), 0),
+            Ok(())
+        );
+        assert_eq!(
+            fstatat(AT_FDCWD, f.as_bytes(), 0).err(),
+            Some(Errno::ENOENT)
+        );
+        // The open descriptor follows the file.
+        assert_eq!(fstat(fd).unwrap().size, 3);
+        // Replace an existing file; NOREPLACE refuses.
+        let h = format!("{d}/c.txt");
+        close(open(&h, O_CREAT | O_WRONLY).unwrap()).unwrap();
+        assert_eq!(
+            renameat2(
+                AT_FDCWD,
+                h.as_bytes(),
+                AT_FDCWD,
+                g.as_bytes(),
+                RENAME_NOREPLACE
+            ),
+            Err(Errno::EEXIST)
+        );
+        assert_eq!(
+            renameat2(AT_FDCWD, h.as_bytes(), AT_FDCWD, g.as_bytes(), 0),
+            Ok(())
+        );
+        assert_eq!(fstatat(AT_FDCWD, g.as_bytes(), 0).unwrap().size, 0);
+        assert_eq!(
+            renameat2(AT_FDCWD, g.as_bytes(), AT_FDCWD, b"/x", RENAME_EXCHANGE),
+            Err(Errno::EINVAL)
+        );
+
+        // getdents64 lists ., .., the file and nothing else.
+        let dfd = open(&format!("{d}/sub"), O_RDONLY | O_DIRECTORY).unwrap();
+        let mut all = Vec::new();
+        loop {
+            let b = getdents64(dfd, 64).unwrap();
+            if b.is_empty() {
+                break;
+            }
+            all.extend(names(&b));
+        }
+        assert_eq!(
+            all,
+            vec![
+                (".".into(), file::DT_DIR),
+                ("..".into(), file::DT_DIR),
+                ("b.txt".into(), file::DT_REG)
+            ]
+        );
+        // At the end: nothing more, whatever the size.
+        assert_eq!(getdents64(dfd, 8), Ok(Vec::new()));
+        assert_eq!(lseek(dfd, 0, SEEK_SET), Ok(0));
+        assert_eq!(names(&getdents64(dfd, 4096).unwrap()).len(), 3);
+        assert_eq!(getdents64(fd, 4096), Err(Errno::ENOTDIR));
+        close(dfd).unwrap();
+
+        // unlink and rmdir.
+        assert_eq!(
+            unlinkat(AT_FDCWD, format!("{d}/sub").as_bytes(), 0),
+            Err(Errno::EISDIR)
+        );
+        assert_eq!(
+            unlinkat(AT_FDCWD, format!("{d}/sub").as_bytes(), AT_REMOVEDIR),
+            Err(Errno::ENOTEMPTY)
+        );
+        assert_eq!(
+            unlinkat(AT_FDCWD, g.as_bytes(), AT_REMOVEDIR),
+            Err(Errno::ENOTDIR)
+        );
+        assert_eq!(unlinkat(AT_FDCWD, g.as_bytes(), 0), Ok(()));
+        assert_eq!(unlinkat(AT_FDCWD, g.as_bytes(), 0), Err(Errno::ENOENT));
+        assert_eq!(
+            unlinkat(AT_FDCWD, format!("{d}/sub").as_bytes(), AT_REMOVEDIR),
+            Ok(())
+        );
+        // The renamed and unlinked file stays usable through the descriptor.
+        assert_eq!(fstat(fd).unwrap().size, 3);
+        close(fd).unwrap();
+
+        assert_eq!(
+            faccessat(AT_FDCWD, d.as_bytes(), R_OK | W_OK | X_OK, 0),
+            Ok(())
+        );
+        let e = format!("{d}/e");
+        close(open(&e, O_CREAT | O_WRONLY).unwrap()).unwrap();
+        assert_eq!(faccessat(AT_FDCWD, e.as_bytes(), R_OK | W_OK, 0), Ok(()));
+        assert_eq!(
+            faccessat(AT_FDCWD, e.as_bytes(), X_OK, 0),
+            Err(Errno::EACCES)
+        );
+        assert_eq!(faccessat(AT_FDCWD, b"/none", F_OK, 0), Err(Errno::ENOENT));
+        assert_eq!(faccessat(AT_FDCWD, e.as_bytes(), 8, 0), Err(Errno::EINVAL));
+    }
+
+    #[test]
+    fn symbolic_links() {
+        let d = test_dir("links");
+        let target = format!("{d}/t.txt");
+        close(open(&target, O_CREAT | O_WRONLY).unwrap()).unwrap();
+        let link = format!("{d}/l");
+        match symlinkat(b"t.txt", AT_FDCWD, link.as_bytes()) {
+            Err(Errno::EPERM) => {
+                // Windows refuses links without developer mode or the
+                // privilege: lx reports EPERM, as Linux does on file systems
+                // without links. Nothing else to check here.
+                eprintln!("symbolic links are not available to this user");
+                return;
+            }
+            r => assert_eq!(r, Ok(())),
+        }
+        assert_eq!(
+            readlinkat(AT_FDCWD, link.as_bytes(), 100),
+            Ok(b"t.txt".to_vec())
+        );
+        assert_eq!(readlinkat(AT_FDCWD, link.as_bytes(), 2), Ok(b"t.".to_vec()));
+        assert_eq!(
+            readlinkat(AT_FDCWD, target.as_bytes(), 100),
+            Err(Errno::EINVAL)
+        );
+        assert_eq!(
+            symlinkat(b"t.txt", AT_FDCWD, link.as_bytes()),
+            Err(Errno::EEXIST)
+        );
+        let st = fstatat(AT_FDCWD, link.as_bytes(), AT_SYMLINK_NOFOLLOW).unwrap();
+        assert_eq!(st.mode & S_IFMT, crate::linux::stat::S_IFLNK);
+        // Opening follows the link (Windows resolves it).
+        let fd = open(&link, O_WRONLY).unwrap();
+        write_all(fd, b"via link");
+        close(fd).unwrap();
+        assert_eq!(fstatat(AT_FDCWD, target.as_bytes(), 0).unwrap().size, 8);
+        // Absolute targets round-trip through the mount table.
+        let abs = format!("{d}/abs");
+        symlinkat(target.as_bytes(), AT_FDCWD, abs.as_bytes()).unwrap();
+        assert_eq!(
+            readlinkat(AT_FDCWD, abs.as_bytes(), 200),
+            Ok(target.as_bytes().to_vec())
+        );
+        // Relative targets with directories.
+        let rel = format!("{d}/rel");
+        symlinkat(b"../links/t.txt", AT_FDCWD, rel.as_bytes()).unwrap();
+        assert_eq!(
+            readlinkat(AT_FDCWD, rel.as_bytes(), 200),
+            Ok(b"../links/t.txt".to_vec())
+        );
+        // unlink removes the link, not the target.
+        unlinkat(AT_FDCWD, link.as_bytes(), 0).unwrap();
+        assert!(fstatat(AT_FDCWD, target.as_bytes(), 0).is_ok());
+        // A dangling link can be created and read.
+        let dangling = format!("{d}/dangling");
+        symlinkat(b"missing", AT_FDCWD, dangling.as_bytes()).unwrap();
+        assert_eq!(
+            readlinkat(AT_FDCWD, dangling.as_bytes(), 100),
+            Ok(b"missing".to_vec())
+        );
+    }
+
+    #[test]
+    fn file_mappings() {
+        use crate::linux::mman::*;
+        let d = test_dir("mmap");
+        let f = format!("{d}/m");
+        let fd = open(&f, O_CREAT | O_RDWR).unwrap();
+        let mut data = vec![0u8; 3 * PAGE_SIZE + 100];
+        for (i, b) in data.iter_mut().enumerate() {
+            *b = (i % 251) as u8;
+        }
+        write_all(fd, &data);
+        // Private, from a page offset, beyond the end of the file.
+        let len = 4 * PAGE_SIZE;
+        let a = crate::mem::mmap(
+            0,
+            len,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE,
+            fd,
+            PAGE_SIZE as i64,
+        )
+        .unwrap();
+        // SAFETY: a readable and writable mapping of `len` bytes.
+        let m = unsafe { core::slice::from_raw_parts_mut(a as *mut u8, len) };
+        assert_eq!(&m[..2 * PAGE_SIZE + 100], &data[PAGE_SIZE..]);
+        assert!(m[2 * PAGE_SIZE + 100..].iter().all(|&b| b == 0));
+        // Private writes do not reach the file.
+        m[0] = 0xee;
+        assert_eq!(
+            pread(fd, UserBuf::from_mut(&mut [0u8; 1]), PAGE_SIZE as i64),
+            Ok(1)
+        );
+        let mut one = [0u8; 1];
+        pread(fd, UserBuf::from_mut(&mut one), PAGE_SIZE as i64).unwrap();
+        assert_eq!(one[0], data[PAGE_SIZE]);
+        crate::mem::munmap(a, len).unwrap();
+
+        // Read-only shared: readable, and never writable.
+        let a = crate::mem::mmap(0, PAGE_SIZE, PROT_READ, MAP_SHARED, fd, 0).unwrap();
+        // SAFETY: a readable mapping of one page.
+        assert_eq!(unsafe { *(a as *const u8).add(7) }, data[7]);
+        assert_eq!(
+            crate::mem::mprotect(a, PAGE_SIZE, PROT_READ | PROT_WRITE),
+            Err(Errno::EACCES)
+        );
+        crate::mem::munmap(a, PAGE_SIZE).unwrap();
+
+        // Errors.
+        let rw = PROT_READ | PROT_WRITE;
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, rw, MAP_SHARED, fd, 0),
+            Err(Errno::ENODEV)
+        );
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, rw, MAP_PRIVATE, fd, 10),
+            Err(Errno::EINVAL)
+        );
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, rw, MAP_PRIVATE, -1, 0),
+            Err(Errno::EBADF)
+        );
+        let wo = open(&f, O_WRONLY).unwrap();
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, PROT_READ, MAP_PRIVATE, wo, 0),
+            Err(Errno::EACCES)
+        );
+        close(wo).unwrap();
+        let ro = open(&f, O_RDONLY).unwrap();
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, rw, MAP_SHARED, ro, 0),
+            Err(Errno::EACCES)
+        );
+        // A private writable mapping of a read-only descriptor is allowed.
+        let a = crate::mem::mmap(0, PAGE_SIZE, rw, MAP_PRIVATE, ro, 0).unwrap();
+        crate::mem::munmap(a, PAGE_SIZE).unwrap();
+        close(ro).unwrap();
+        let dfd = open(&d, O_RDONLY | O_DIRECTORY).unwrap();
+        assert_eq!(
+            crate::mem::mmap(0, PAGE_SIZE, PROT_READ, MAP_PRIVATE, dfd, 0),
+            Err(Errno::ENODEV)
+        );
+        close(dfd).unwrap();
         close(fd).unwrap();
     }
 }
