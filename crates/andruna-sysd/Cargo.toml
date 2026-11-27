@@ -16,6 +16,7 @@ name = "andruna-sysd"
 path = "src/main.rs"
 
 [dependencies]
+andruna-binder = { path = "../andruna-binder" }
 andruna-ipc = { path = "../andruna-ipc" }
 
 [dependencies.windows]

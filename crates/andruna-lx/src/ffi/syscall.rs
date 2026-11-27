@@ -58,6 +58,10 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
             Sysno::Dup2 => FDS.dup2(int(0), int(1)).map(i64::from),
             Sysno::Dup3 => FDS.dup3(int(0), int(1), uint(2)).map(i64::from),
             Sysno::Fcntl => FDS.fcntl(int(0), int(1), a[2] as u64).map(i64::from),
+            Sysno::Ioctl => {
+                let f = FDS.get(int(0))?;
+                f.ops().ioctl(&f, uint(1), ptr(2))
+            }
             Sysno::Mmap => sys_mmap(ptr(0), ptr(1), uint(2), uint(3), int(4), a[5]),
             Sysno::Munmap => mem::munmap(ptr(0), ptr(1)).map(|()| 0),
             Sysno::Mprotect => mem::mprotect(ptr(0), ptr(1), uint(2)).map(|()| 0),

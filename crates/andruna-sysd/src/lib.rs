@@ -20,6 +20,7 @@
 
 pub mod activity;
 pub mod appcontainer;
+pub mod binder;
 pub mod diagnostics;
 pub mod events;
 pub mod host;
@@ -247,6 +248,7 @@ fn serve(cfg: &ServerConfig, layout: Layout) -> std::io::Result<i32> {
     // andruna-app exists.
     let host_exe = std::env::current_exe()?;
     let supervisor = Arc::new(Supervisor::new(host_exe, layout.clone(), activity.clone())?);
+    let layout_root = layout.root.clone();
     let ctx = Arc::new(Context {
         layout,
         activity: activity.clone(),
@@ -254,6 +256,21 @@ fn serve(cfg: &ServerConfig, layout: Layout) -> std::io::Result<i32> {
         started: Instant::now(),
     });
     let server = Server::spawn(listener, ctx)?;
+
+    // Binder: the broker, and servicemanager when configured.
+    let binder = binder::Binder::start(&binder::pipe_name(&cfg.instance))?;
+    info!("binder_ready", pipe = binder.pipe_name());
+    let _servicemanager = match binder.start_servicemanager_from_env(&layout_root) {
+        Some(Ok(c)) => {
+            info!("servicemanager_started", pid = c.id());
+            Some(c)
+        }
+        Some(Err(e)) => {
+            warn!("servicemanager_failed", error = e);
+            None
+        }
+        None => None,
+    };
 
     let idle = activity.clone();
     std::thread::Builder::new()

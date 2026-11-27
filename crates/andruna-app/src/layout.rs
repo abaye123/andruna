@@ -176,6 +176,8 @@ impl Layout {
             andruna_lx::fs::mount::mount(&guest, &host)
                 .map_err(|e| format!("mount {guest}: errno {}", e.0))?;
         }
+        // /dev/binder, served by the broker named in ANDRUNA_BINDER_PIPE.
+        andruna_binder_device::register();
         andruna_lx::fs::stream::install_std_streams()
             .map_err(|e| format!("standard streams: errno {}", e.0))
     }

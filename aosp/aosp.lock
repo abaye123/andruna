@@ -142,6 +142,12 @@ commit = "a11fa5c814cc3239217ce4d093bfc5c808f73785"
 purpose = "SDK level helpers used by libartbase (android-modules-utils/sdk_level.h)"
 
 [[project]]
+name = "platform/frameworks/native"
+path = "frameworks/native"
+commit = "ae266dcb706d083868578cfedce381ef44488a07"
+purpose = "libbinder and servicemanager"
+
+[[project]]
 name = "platform/libcore"
 path = "libcore"
 commit = "4ebfb391ee0109d16abe6e2bc965724b940928c5"

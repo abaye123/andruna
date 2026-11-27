@@ -95,6 +95,9 @@ Binder, and Rust (`binder` crate) without a kernel driver.
 **Target.** A small round trip under 20 microseconds
 ([performance](05-performance.md)).
 
+**Status.** Broker, transport and device: [ADR 0025](../decisions/0025-binder-broker.md)
+(proposed), [phase 2 status](../plan/phase2/binder.md).
+
 ## andruna-sysd: system server
 
 **Responsibility.** The services an app looks up through `ServiceManager`.
