@@ -2,5 +2,9 @@
 //! device, on Windows.
 
 pub mod android;
+pub mod channel;
 pub mod config;
 pub mod geom;
+pub mod input;
+pub mod sys;
+pub mod wire;
