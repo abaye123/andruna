@@ -90,7 +90,11 @@ jobs:
 
   # AOSP layers 1 and 2 (liblog, libbase, libziparchive, libartbase,
   # libdexfile, ...) built with CMake and Ninja. About 25 s per
-  # architecture on an 8-thread laptop, plus the fetch.
+  # architecture on an 8-thread laptop and 2 minutes on a hosted runner,
+  # plus the fetch (cached). The runtime
+  # (libart, ICU, libcore natives, the guest bionic) is not built here: it
+  # needs most of aosp.lock and takes far longer; it is built on the
+  # maintainer's machine with `cargo xtask aosp-build --runtime`.
   aosp:
     name: aosp (${{ matrix.arch }})
     strategy:
@@ -136,14 +140,18 @@ jobs:
           cmake --version
           ninja --version
 
-      - name: Cache AOSP sources
-        uses: actions/cache@v4
+      # The cache holds the pristine checkouts: it is saved right after the
+      # fetch, before aosp-build applies patches/, so a changed patch never
+      # meets a tree that has an older version of it applied.
+      - name: Restore AOSP sources
+        id: aosp-cache
+        uses: actions/cache/restore@v4
         with:
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp/aosp.lock') }}
 
-      # Only the projects the build uses (libcore cannot be checked out on
-      # Windows at this tag; see aosp/README.md).
+      # Only the projects the layers below use. aosp-build skips the
+      # patches of projects that are not fetched (libcore, for example).
       - name: Fetch
         run: >
           cargo xtask fetch
@@ -154,8 +162,22 @@ jobs:
           --project system/core --project system/libbase
           --project system/libziparchive --project system/logging
 
+      - name: Save AOSP sources
+        if: steps.aosp-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp/aosp.lock') }}
+
+      # The explicit CI target set: every library of layers 1 and 2 in
+      # aosp/CMakeLists.txt. Keep it in step with the fetch list above.
       - name: Build
-        run: cargo xtask aosp-build --arch ${{ matrix.arch }}
+        run: >
+          cargo xtask aosp-build --arch ${{ matrix.arch }}
+          --target fmtlib --target liblog --target libbase
+          --target libcutils --target libutils --target libz
+          --target liblz4 --target libziparchive --target libartpalette
+          --target libtinyxml2 --target libartbase --target libdexfile
 
   # The management app (ui/) and the unsigned installer. Signing needs the
   # maintainer's certificate and is done on the release machine.

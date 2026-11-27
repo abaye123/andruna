@@ -2,7 +2,8 @@
 //! Ninja, using llvm-mingw, for one architecture.
 //!
 //! The AOSP sources must have been fetched (`cargo xtask fetch`). Patches in
-//! `patches/` are applied first (already applied ones are skipped). The
+//! `patches/` are applied first (already applied ones are skipped, and so
+//! are the patches of projects that are not fetched). The
 //! build directory is `out/aosp/<arch>`.
 
 use std::path::{Path, PathBuf};
@@ -52,7 +53,13 @@ pub fn build(opts: &Options) -> Result<()> {
     let cmake = find_tool("cmake", "ANDRUNA_CMAKE", &cmake_candidates())?;
     let ninja = find_tool("ninja", "ANDRUNA_NINJA", &ninja_candidates())?;
 
-    aosp::patch(&aosp::Selection::defaults(), &root.join("patches"), false)?;
+    // Projects that are not fetched are skipped: the build cannot use them.
+    aosp::patch(
+        &aosp::Selection::defaults(),
+        &root.join("patches"),
+        false,
+        true,
+    )?;
 
     let build_dir = root.join("out").join("aosp").join(opts.arch.name());
     let started = Instant::now();

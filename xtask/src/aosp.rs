@@ -617,13 +617,26 @@ fn verify_checkout(dir: &Path, p: &Project, names: &[String]) -> Result<()> {
 /// each, in its `.git` directory so it never shows up as a change.
 const STAMP: &str = "andruna-patches";
 
-pub fn patch(sel: &Selection, patches_dir: &Path, reset: bool) -> Result<()> {
+/// Applies the patches of the selected projects. A selected project that is
+/// not fetched and has patches is an error, unless `skip_unfetched` is set:
+/// `aosp-build` sets it, because a project that is not fetched cannot be
+/// built either, so leaving its patches out changes nothing the build uses
+/// (CI fetches only the projects of the layers it builds).
+pub fn patch(sel: &Selection, patches_dir: &Path, reset: bool, skip_unfetched: bool) -> Result<()> {
     let lock = Lock::load(&sel.lock_path)?;
     for p in sel.projects(&lock)? {
         let patches = patch_files(&patches_dir.join(&p.path))?;
         let dest = sel.aosp_dir.join(&p.path);
         if head_commit(&dest)?.is_none() {
             if patches.is_empty() {
+                continue;
+            }
+            if skip_unfetched {
+                println!(
+                    "{}: not fetched, {} patch(es) not applied",
+                    p.path,
+                    patches.len()
+                );
                 continue;
             }
             return Err(Error::msg(format!(

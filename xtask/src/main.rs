@@ -18,9 +18,9 @@ Usage: cargo xtask <command> [options]
 Commands:
   aosp-build [--arch x64|arm64] [--runtime] [--keep-going] [--target <name>]...
         Configure and build the AOSP modules in aosp/ with CMake and Ninja
-        (llvm-mingw) into out/aosp/<arch>, after applying patches/. Needs
-        `fetch` first. --runtime also compiles libart (not expected to
-        build yet). --target builds only the named Ninja targets.
+        (llvm-mingw) into out/aosp/<arch>, after applying patches/ to the
+        fetched projects. Needs `fetch` first. --runtime also compiles
+        libart. --target builds only the named Ninja targets.
   build [--arch x64|arm64] [--release]
         Build the Rust workspace for <arch>-pc-windows-gnullvm with llvm-mingw.
         The default arch is the host's.
@@ -128,7 +128,7 @@ fn run(args: &[String]) -> Result<()> {
                 .unwrap_or_else(|| util::repo_root().join("patches"));
             let reset = opts.flag("--reset");
             opts.finish()?;
-            aosp::patch(&sel, &patches_dir, reset)
+            aosp::patch(&sel, &patches_dir, reset, false)
         }
         "toolchain" => {
             let dir = opts.value("--dir")?.map(PathBuf::from);
