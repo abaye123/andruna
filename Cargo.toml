@@ -21,3 +21,14 @@ undocumented_unsafe_blocks = "deny"
 
 [profile.release]
 debug = "line-tables-only"
+
+# The signal path runs on the faulting guest stack until it switches to the
+# alternate stack, with only ART's stack overflow gap (8 KiB on x86_64,
+# part of it used by Windows' exception dispatch) below it. Unoptimized
+# frames of andruna-lx's exception handler do not fit there, so the two
+# crates on that path are optimized in debug builds too.
+[profile.dev.package.andruna-lx]
+opt-level = 1
+
+[profile.dev.package.andruna-linker]
+opt-level = 1

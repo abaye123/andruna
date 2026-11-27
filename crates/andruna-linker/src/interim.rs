@@ -1,29 +1,30 @@
 //! System calls the loader answers while andruna-lx does not implement
-//! them yet (lx answers `ENOSYS`). [`crate::syscall`] calls lx first and
-//! comes here only on `ENOSYS`, so each entry stops being used as soon as
-//! lx implements the call; then the entry should be deleted.
+//! them (lx answers `ENOSYS`). [`crate::syscall`] calls lx first and comes
+//! here only on `ENOSYS`, so each entry stops being used as soon as lx
+//! implements the call; then the entry should be deleted.
 //!
-//! Everything here is what ART, dex2oat, libcore's natives and bionic need
-//! on the paths phase 1 runs (docs/plan/phase1/art-on-linker.md). Where
-//! the behavior is a shortcut it says so:
+//! Signals, file mappings, futex requeue, `/proc`, directory calls,
+//! `prctl` and scheduling are andruna-lx's; what remains here is what ART,
+//! dex2oat, libcore's natives and bionic still need on the paths of
+//! docs/plan/phase1/art-on-linker.md:
 //!
-//! - File mappings are private anonymous copies of the file (lx has no
-//!   file mappings yet). Writable `MAP_SHARED` mappings are written back
-//!   with `pwrite` on `msync`, `munmap` and process exit; other mappings of
-//!   the same file do not see the changes before that.
-//! - `FUTEX_REQUEUE` and `FUTEX_CMP_REQUEUE` wake the waiters instead of
-//!   moving them (a correct, more expensive wake-up: waiters recheck).
-//! - `ftruncate` can grow a file (it writes the last byte), not shrink it.
-//! - Scheduling calls (`sched_setaffinity`, `setpriority`,
-//!   `sched_setscheduler` with a normal policy) are accepted without
-//!   effect; `fsync`/`fdatasync` succeed without flushing.
-//! - Directory calls (`mkdirat`, `unlinkat`, `renameat`, `faccessat`,
-//!   `readlinkat`, `fchmod*`) go to the Windows file system through lx's
-//!   mount table.
+//! - `uname`, rlimits (`getrlimit`, `setrlimit`, `prlimit64`), `getrusage`,
+//!   `sysinfo`, `getppid`, `getpriority`/`setpriority` (accepted without
+//!   effect), `getcpu`, `membarrier`, `mincore`, `umask`, `fsync`,
+//!   `msync` (shared file mappings already reach the file through their
+//!   section; nothing is forced to disk), `chmod`/`fchmod`/`fchmodat`
+//!   (accepted on files that exist: lx reports fixed modes).
+//! - Writable `MAP_SHARED` file mappings (lx answers `ENODEV`; dex2oat
+//!   writes vdex and oat files through them): lx's private copy of the
+//!   file, written back with `pwrite` on `msync`, `munmap` and process
+//!   exit. Other mappings of the file do not see the changes before that.
+//! - `socket(AF_UNIX, SOCK_DGRAM)`, `connect` and `sendmsg` for liblog's
+//!   logd socket only ([`crate::logd`]).
+//! - `/sys/devices/system/cpu/{online,possible,present}`
+//!   ([`crate::procfs`]), opened when lx fails to.
 
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::path::PathBuf;
 use std::sync::Mutex;
 
 use andruna_lx::linux::errno::*;
@@ -33,30 +34,20 @@ use crate::syscall::lx_raw;
 #[cfg(target_arch = "x86_64")]
 mod nr {
     pub const OPEN: i64 = 2;
-    pub const SOCKET: i64 = 41;
-    pub const CONNECT: i64 = 42;
-    pub const SENDMSG: i64 = 46;
-    pub const OPENAT: i64 = 257;
     pub const MMAP: i64 = 9;
     pub const MUNMAP: i64 = 11;
-    pub const ACCESS: i64 = 21;
-    pub const MSYNC: i64 = 26;
-    pub const MINCORE: i64 = 27;
-    pub const PREAD64: i64 = 17;
     pub const PWRITE64: i64 = 18;
     pub const DUP: i64 = 32;
     pub const CLOSE: i64 = 3;
-    pub const UNAME: i64 = 63;
-    pub const FSYNC: i64 = 74;
-    pub const FDATASYNC: i64 = 75;
-    pub const FTRUNCATE: i64 = 77;
-    pub const RENAME: i64 = 82;
-    pub const MKDIR: i64 = 83;
-    pub const RMDIR: i64 = 84;
-    pub const UNLINK: i64 = 87;
-    pub const READLINK: i64 = 89;
     pub const CHMOD: i64 = 90;
     pub const FCHMOD: i64 = 91;
+    pub const MSYNC: i64 = 26;
+    pub const MINCORE: i64 = 27;
+    pub const SOCKET: i64 = 41;
+    pub const CONNECT: i64 = 42;
+    pub const SENDMSG: i64 = 46;
+    pub const UNAME: i64 = 63;
+    pub const FSYNC: i64 = 74;
     pub const UMASK: i64 = 95;
     pub const GETRLIMIT: i64 = 97;
     pub const GETRUSAGE: i64 = 98;
@@ -64,57 +55,32 @@ mod nr {
     pub const GETPPID: i64 = 110;
     pub const GETPRIORITY: i64 = 140;
     pub const SETPRIORITY: i64 = 141;
-    pub const SCHED_SETPARAM: i64 = 142;
-    pub const SCHED_GETPARAM: i64 = 143;
-    pub const SCHED_SETSCHEDULER: i64 = 144;
-    pub const SCHED_GETSCHEDULER: i64 = 145;
-    pub const SCHED_GET_PRIORITY_MAX: i64 = 146;
-    pub const SCHED_GET_PRIORITY_MIN: i64 = 147;
-    pub const PRCTL: i64 = 157;
     pub const SETRLIMIT: i64 = 160;
-    pub const FUTEX: i64 = 202;
-    pub const SCHED_SETAFFINITY: i64 = 203;
-    pub const SCHED_GETAFFINITY: i64 = 204;
-    pub const MKDIRAT: i64 = 258;
-    pub const UNLINKAT: i64 = 263;
-    pub const RENAMEAT: i64 = 264;
-    pub const READLINKAT: i64 = 267;
+    pub const OPENAT: i64 = 257;
     pub const FCHMODAT: i64 = 268;
-    pub const FACCESSAT: i64 = 269;
     pub const PRLIMIT64: i64 = 302;
     pub const GETCPU: i64 = 309;
-    pub const RENAMEAT2: i64 = 316;
     pub const MEMBARRIER: i64 = 324;
-    pub const FACCESSAT2: i64 = 439;
 }
 
 #[cfg(target_arch = "aarch64")]
 mod nr {
-    pub const OPEN: i64 = -8;
+    /// Not on arm64 (only the `*at` forms exist).
+    pub const OPEN: i64 = -1;
+    pub const CHMOD: i64 = -2;
+    pub const CLOSE: i64 = 57;
+    pub const MMAP: i64 = 222;
+    pub const MUNMAP: i64 = 215;
+    pub const PWRITE64: i64 = 68;
+    pub const DUP: i64 = 23;
+    pub const FCHMOD: i64 = 52;
+    pub const MSYNC: i64 = 227;
+    pub const MINCORE: i64 = 232;
     pub const SOCKET: i64 = 198;
     pub const CONNECT: i64 = 203;
     pub const SENDMSG: i64 = 211;
-    pub const OPENAT: i64 = 56;
-    pub const MMAP: i64 = 222;
-    pub const MUNMAP: i64 = 215;
-    pub const ACCESS: i64 = -1;
-    pub const MSYNC: i64 = 227;
-    pub const MINCORE: i64 = 232;
-    pub const PREAD64: i64 = 67;
-    pub const PWRITE64: i64 = 68;
-    pub const DUP: i64 = 23;
-    pub const CLOSE: i64 = 57;
     pub const UNAME: i64 = 160;
     pub const FSYNC: i64 = 82;
-    pub const FDATASYNC: i64 = 83;
-    pub const FTRUNCATE: i64 = 46;
-    pub const RENAME: i64 = -2;
-    pub const MKDIR: i64 = -3;
-    pub const RMDIR: i64 = -4;
-    pub const UNLINK: i64 = -5;
-    pub const READLINK: i64 = -6;
-    pub const CHMOD: i64 = -7;
-    pub const FCHMOD: i64 = 52;
     pub const UMASK: i64 = 166;
     pub const GETRLIMIT: i64 = 163;
     pub const GETRUSAGE: i64 = 165;
@@ -122,59 +88,47 @@ mod nr {
     pub const GETPPID: i64 = 173;
     pub const GETPRIORITY: i64 = 141;
     pub const SETPRIORITY: i64 = 140;
-    pub const SCHED_SETPARAM: i64 = 118;
-    pub const SCHED_GETPARAM: i64 = 121;
-    pub const SCHED_SETSCHEDULER: i64 = 119;
-    pub const SCHED_GETSCHEDULER: i64 = 120;
-    pub const SCHED_GET_PRIORITY_MAX: i64 = 125;
-    pub const SCHED_GET_PRIORITY_MIN: i64 = 126;
-    pub const PRCTL: i64 = 167;
     pub const SETRLIMIT: i64 = 164;
-    pub const FUTEX: i64 = 98;
-    pub const SCHED_SETAFFINITY: i64 = 122;
-    pub const SCHED_GETAFFINITY: i64 = 123;
-    pub const MKDIRAT: i64 = 34;
-    pub const UNLINKAT: i64 = 35;
-    pub const RENAMEAT: i64 = 38;
-    pub const READLINKAT: i64 = 78;
+    pub const OPENAT: i64 = 56;
     pub const FCHMODAT: i64 = 53;
-    pub const FACCESSAT: i64 = 48;
     pub const PRLIMIT64: i64 = 261;
     pub const GETCPU: i64 = 168;
-    pub const RENAMEAT2: i64 = 276;
     pub const MEMBARRIER: i64 = 283;
-    pub const FACCESSAT2: i64 = 439;
 }
 
 const AT_FDCWD: i32 = -100;
-const AT_REMOVEDIR: i32 = 0x200;
+const PAGE: u64 = 4096;
 
 fn err(e: i32) -> i64 {
     -i64::from(e)
 }
 
-/// Calls the loader handles before lx sees them. `None`: go on to lx.
+/// Calls the loader looks at before lx sees them. `None`: go on to lx.
 ///
 /// # Safety
 ///
 /// The pointer arguments satisfy the kernel's contract for call `n`.
 pub unsafe fn before(n: i64, a: [i64; 6]) -> Option<i64> {
-    if n == nr::MUNMAP {
-        write_back(a[0] as u64, a[1] as u64, true);
-    }
     if n == nr::CLOSE {
         crate::logd::closed(a[0] as i32);
+    }
+    if n == nr::MUNMAP {
+        write_back(a[0] as u64, a[1] as u64, true);
     }
     None
 }
 
-/// Retries a call lx failed (any error): opening the `/proc` files the
+/// Retries a call lx failed (any error): opening the `/sys` files the
 /// loader provides ([`crate::procfs`]).
 ///
 /// # Safety
 ///
 /// As for [`before`].
-pub unsafe fn after_error(n: i64, a: [i64; 6]) -> Option<i64> {
+pub unsafe fn after_error(n: i64, a: [i64; 6], r: i64) -> Option<i64> {
+    if n == nr::MMAP && r == -i64::from(ENODEV) {
+        // SAFETY: forwarded from this function's contract.
+        return unsafe { mmap_shared_writable(a) };
+    }
     // Absolute paths only, so the directory descriptor does not matter.
     let (path, flags) = match n {
         nr::OPEN => (a[0] as u64, a[1] as u32),
@@ -186,9 +140,6 @@ pub unsafe fn after_error(n: i64, a: [i64; 6]) -> Option<i64> {
     }
     // SAFETY: a NUL-terminated path (contract).
     let p = unsafe { CStr::from_ptr(path as *const core::ffi::c_char) }.to_bytes();
-    if !(p.starts_with(b"/proc/") || p.starts_with(b"/sys/devices/system/cpu/")) {
-        return None;
-    }
     let data = crate::procfs::contents(p)?;
     if flags & 3 != 0 {
         return Some(err(EACCES));
@@ -210,30 +161,19 @@ const O_CLOEXEC: u32 = 0x80000;
 ///
 /// As for [`before`].
 pub unsafe fn after_enosys(n: i64, a: [i64; 6]) -> Option<i64> {
-    // SAFETY: forwarded from this function's contract.
-    if let Some(r) = unsafe { crate::signal::syscall(n, a) } {
-        return Some(r);
-    }
     let int = |i: usize| a[i] as i32;
     let ptr = |i: usize| a[i] as u64;
     // SAFETY: forwarded from this function's contract.
     unsafe {
         Some(match n {
-            nr::MMAP => {
-                return mmap_file(ptr(0), ptr(1), int(2) as u32, int(3) as u32, int(4), a[5]);
-            }
             nr::MSYNC => {
                 write_back(ptr(0), ptr(1), false);
                 0
             }
-            nr::FUTEX => {
-                return futex_requeue(ptr(0), int(1), a[2] as u32, a[3] as u32, a[5] as u32);
-            }
-            nr::FTRUNCATE => ftruncate(int(0), a[1]),
             nr::SOCKET => return socket(int(0), int(1)),
             nr::CONNECT => return connect(int(0), ptr(1), ptr(2) as usize),
             nr::SENDMSG => return sendmsg(int(0), ptr(1)),
-            nr::FSYNC | nr::FDATASYNC => check_fd(int(0)),
+            nr::FSYNC => check_fd(int(0)),
             nr::UNAME => uname(ptr(0) as *mut u8),
             nr::GETRLIMIT => prlimit(0, int(0), 0, ptr(1)),
             nr::SETRLIMIT => prlimit(0, int(0), ptr(1), 0),
@@ -241,42 +181,15 @@ pub unsafe fn after_enosys(n: i64, a: [i64; 6]) -> Option<i64> {
             nr::GETRUSAGE => getrusage(int(0), ptr(1) as *mut u8),
             nr::SYSINFO => sysinfo(ptr(0) as *mut u8),
             nr::GETPPID => 1,
-            nr::PRCTL => prctl(int(0), ptr(1), ptr(2)),
             nr::GETPRIORITY => 20,
             nr::SETPRIORITY => 0,
-            nr::SCHED_GETSCHEDULER => 0,
-            nr::SCHED_SETSCHEDULER => sched_setscheduler(int(1)),
-            nr::SCHED_GETPARAM => write_zero(ptr(1), 4),
-            nr::SCHED_SETPARAM => 0,
-            nr::SCHED_GET_PRIORITY_MAX => match int(0) {
-                1 | 2 => 99,
-                _ => 0,
-            },
-            nr::SCHED_GET_PRIORITY_MIN => match int(0) {
-                1 | 2 => 1,
-                _ => 0,
-            },
-            nr::SCHED_SETAFFINITY => 0,
-            nr::SCHED_GETAFFINITY => sched_getaffinity(ptr(1) as usize, ptr(2) as *mut u8),
             nr::GETCPU => getcpu(ptr(0) as *mut u32, ptr(1) as *mut u32),
             nr::MEMBARRIER => membarrier(int(0)),
             nr::MINCORE => mincore(ptr(0), ptr(1), ptr(2) as *mut u8),
             nr::UMASK => 0o022,
-            nr::ACCESS => faccessat(AT_FDCWD, ptr(0)),
-            nr::FACCESSAT | nr::FACCESSAT2 => faccessat(int(0), ptr(1)),
-            nr::MKDIR => mkdirat(AT_FDCWD, ptr(0)),
-            nr::MKDIRAT => mkdirat(int(0), ptr(1)),
-            nr::RMDIR => unlinkat(AT_FDCWD, ptr(0), AT_REMOVEDIR),
-            nr::UNLINK => unlinkat(AT_FDCWD, ptr(0), 0),
-            nr::UNLINKAT => unlinkat(int(0), ptr(1), int(2)),
-            nr::RENAME => renameat(AT_FDCWD, ptr(0), AT_FDCWD, ptr(1)),
-            nr::RENAMEAT => renameat(int(0), ptr(1), int(2), ptr(3)),
-            nr::RENAMEAT2 if a[4] == 0 => renameat(int(0), ptr(1), int(2), ptr(3)),
-            nr::READLINK => readlinkat(AT_FDCWD, ptr(0), ptr(1) as *mut u8, ptr(2) as usize),
-            nr::READLINKAT => readlinkat(int(0), ptr(1), ptr(2) as *mut u8, ptr(3) as usize),
-            nr::CHMOD => faccessat(AT_FDCWD, ptr(0)),
+            nr::CHMOD => exists(AT_FDCWD, ptr(0)),
             nr::FCHMOD => check_fd(int(0)),
-            nr::FCHMODAT => faccessat(int(0), ptr(1)),
+            nr::FCHMODAT => exists(int(0), ptr(1)),
             _ => return None,
         })
     }
@@ -300,32 +213,34 @@ fn check_fd(fd: i32) -> i64 {
     }
 }
 
+/// 0 when `path` (relative to `dirfd`) exists, else lx's error.
+///
 /// # Safety
 ///
-/// `p` is null or writable for `n` bytes.
-unsafe fn write_zero(p: u64, n: usize) -> i64 {
-    if p == 0 {
-        return err(EINVAL);
+/// `path` is a NUL-terminated string.
+unsafe fn exists(dirfd: i32, path: u64) -> i64 {
+    if path == 0 {
+        return err(EFAULT);
     }
     // SAFETY: the function's contract.
-    unsafe { core::ptr::write_bytes(p as *mut u8, 0, n) };
-    0
+    let p = unsafe { CStr::from_ptr(path as *const core::ffi::c_char) }.to_bytes();
+    match andruna_lx::fs::fstatat(dirfd, p, 0) {
+        Ok(_) => 0,
+        Err(e) => err(e.0),
+    }
 }
 
 // ---------------------------------------------------------------------------
-// File mappings
+// Writable shared file mappings
 // ---------------------------------------------------------------------------
 
-const PROT_READ: u32 = 1;
 const PROT_WRITE: u32 = 2;
 const MAP_SHARED: u32 = 1;
 const MAP_PRIVATE: u32 = 2;
 const MAP_SHARED_VALIDATE: u32 = 3;
 const MAP_TYPE: u32 = 0xf;
 const MAP_ANONYMOUS: u32 = 0x20;
-const MAP_POPULATE: u32 = 0x8000;
 const MAP_SYNC: u32 = 0x80000;
-const PAGE: u64 = 4096;
 
 /// A writable shared file mapping, written back to the file.
 struct Shared {
@@ -346,89 +261,52 @@ fn file_size(fd: i32) -> Result<i64, i32> {
         .map_err(|e| e.0)
 }
 
-/// `mmap` of a file as an anonymous copy.
+/// After lx refused a writable `MAP_SHARED` file mapping (`ENODEV`): lx's
+/// private copy of the file, registered for write-back. `None` for every
+/// other `mmap` failure.
 ///
 /// # Safety
 ///
 /// As for `mmap`: a fixed mapping replaces what is at the address.
-unsafe fn mmap_file(addr: u64, len: u64, prot: u32, flags: u32, fd: i32, off: i64) -> Option<i64> {
-    if flags & MAP_ANONYMOUS != 0 {
-        // Anonymous shared memory: lx's answer stands.
+unsafe fn mmap_shared_writable(mut a: [i64; 6]) -> Option<i64> {
+    let (len, prot, flags, fd) = (a[1] as u64, a[2] as u32, a[3] as u32, a[4] as i32);
+    let ty = flags & MAP_TYPE;
+    if flags & MAP_ANONYMOUS != 0
+        || prot & PROT_WRITE == 0
+        || !matches!(ty, MAP_SHARED | MAP_SHARED_VALIDATE)
+        || fd < 0
+    {
         return None;
     }
-    let ty = flags & MAP_TYPE;
-    if !matches!(ty, MAP_SHARED | MAP_PRIVATE | MAP_SHARED_VALIDATE) {
-        return Some(err(EINVAL));
+    a[3] = i64::from((flags & !(MAP_TYPE | MAP_SYNC)) | MAP_PRIVATE);
+    // SAFETY: the caller's arguments with a private mapping type.
+    let r = unsafe { lx_raw(nr::MMAP, a) };
+    if r < 0 {
+        return Some(r);
     }
-    if off < 0 || !(off as u64).is_multiple_of(PAGE) || len == 0 {
-        return Some(err(EINVAL));
+    // SAFETY: dup of the descriptor the mapping was made from.
+    let d = unsafe { lx_raw(nr::DUP, [i64::from(fd), 0, 0, 0, 0, 0]) };
+    if d >= 0 {
+        SHARED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Shared {
+                addr: r as u64,
+                len,
+                fd: d as i32,
+                off: a[5],
+            });
     }
-    let size = match file_size(fd) {
-        Ok(s) => s,
-        Err(e) => return Some(err(e)),
-    };
-    let anon = (flags & !(MAP_TYPE | MAP_SYNC | MAP_POPULATE)) | MAP_PRIVATE | MAP_ANONYMOUS;
-    let a = match andruna_lx::mem::mmap(
-        addr as usize,
-        len as usize,
-        PROT_READ | PROT_WRITE,
-        anon,
-        -1,
-        0,
-    ) {
-        Ok(a) => a as u64,
-        Err(e) => return Some(err(e.0)),
-    };
-    let avail = (size - off).clamp(0, len as i64) as u64;
-    let mut done = 0u64;
-    while done < avail {
-        // SAFETY: the new mapping is writable for `len >= avail` bytes.
-        let r = unsafe {
-            lx_raw(
-                nr::PREAD64,
-                [
-                    i64::from(fd),
-                    (a + done) as i64,
-                    (avail - done) as i64,
-                    off + done as i64,
-                    0,
-                    0,
-                ],
-            )
-        };
-        if r <= 0 {
-            break;
-        }
-        done += r as u64;
-    }
-    if prot != PROT_READ | PROT_WRITE
-        && let Err(e) = andruna_lx::mem::mprotect(a as usize, len as usize, prot)
-    {
-        let _ = andruna_lx::mem::munmap(a as usize, len as usize);
-        return Some(err(e.0));
-    }
-    if ty != MAP_PRIVATE && prot & PROT_WRITE != 0 {
-        // SAFETY: dup of a valid descriptor.
-        let d = unsafe { lx_raw(nr::DUP, [i64::from(fd), 0, 0, 0, 0, 0]) };
-        if d >= 0 {
-            SHARED
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(Shared {
-                    addr: a,
-                    len,
-                    fd: d as i32,
-                    off,
-                });
-        }
-    }
-    Some(a as i64)
+    Some(r)
 }
 
 /// Writes the shared mappings that overlap `[addr, addr + len)` back to
 /// their files; with `unmap`, forgets the ones the range covers.
 fn write_back(addr: u64, len: u64, unmap: bool) {
     let mut v = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+    if v.is_empty() {
+        return;
+    }
     let end = addr.saturating_add(len.max(1));
     v.retain(|s| {
         if s.addr >= end || s.addr + s.len <= addr {
@@ -468,34 +346,6 @@ pub fn flush_all() {
     for s in v.iter() {
         flush(s);
     }
-}
-
-fn ftruncate(fd: i32, len: i64) -> i64 {
-    if len < 0 {
-        return err(EINVAL);
-    }
-    let size = match file_size(fd) {
-        Ok(s) => s,
-        Err(e) => return err(e),
-    };
-    if len == size {
-        return 0;
-    }
-    if len < size {
-        crate::debug::report(format_args!(
-            "ftruncate: shrinking a file is not supported yet (fd {fd}, {size} -> {len})"
-        ));
-        return err(EINVAL);
-    }
-    let zero = 0u8;
-    // SAFETY: writes one byte from a local.
-    let r = unsafe {
-        lx_raw(
-            nr::PWRITE64,
-            [i64::from(fd), &zero as *const u8 as i64, 1, len - 1, 0, 0],
-        )
-    };
-    if r < 0 { r } else { 0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -547,43 +397,6 @@ unsafe fn sendmsg(fd: i32, msg: u64) -> Option<i64> {
     let d = unsafe { crate::logd::gather(iov as *const [u64; 2], n as usize) };
     crate::logd::record(&d);
     Some(d.len() as i64)
-}
-
-// ---------------------------------------------------------------------------
-// Futex requeue
-// ---------------------------------------------------------------------------
-
-const FUTEX_REQUEUE: i32 = 3;
-const FUTEX_CMP_REQUEUE: i32 = 4;
-const FUTEX_CMD_MASK: i32 = !(128 | 256);
-
-/// `FUTEX_REQUEUE` / `FUTEX_CMP_REQUEUE` as a wake-up of up to
-/// `val + val2` waiters on `uaddr` (waiters always recheck their
-/// condition, so waking instead of moving is correct).
-///
-/// # Safety
-///
-/// `uaddr` is a futex word of the caller.
-unsafe fn futex_requeue(uaddr: u64, op: i32, val: u32, val2: u32, val3: u32) -> Option<i64> {
-    let cmd = op & FUTEX_CMD_MASK;
-    if cmd != FUTEX_REQUEUE && cmd != FUTEX_CMP_REQUEUE {
-        return None;
-    }
-    if uaddr == 0 || !uaddr.is_multiple_of(4) {
-        return Some(err(if uaddr == 0 { EFAULT } else { EINVAL }));
-    }
-    if cmd == FUTEX_CMP_REQUEUE {
-        // SAFETY: an aligned futex word of the caller (contract).
-        let cur = unsafe {
-            (*(uaddr as *const std::sync::atomic::AtomicU32))
-                .load(std::sync::atomic::Ordering::SeqCst)
-        };
-        if cur != val3 {
-            return Some(err(EAGAIN));
-        }
-    }
-    let n = (val as i64 + val2 as i64).min(i32::MAX as i64) as i32;
-    Some(i64::from(andruna_lx::futex::wake(uaddr as usize, n)))
 }
 
 // ---------------------------------------------------------------------------
@@ -748,97 +561,6 @@ fn sysinfo(buf: *mut u8) -> i64 {
     0
 }
 
-const PR_SET_PDEATHSIG: i32 = 1;
-const PR_GET_DUMPABLE: i32 = 3;
-const PR_SET_DUMPABLE: i32 = 4;
-const PR_SET_NAME: i32 = 15;
-const PR_GET_NAME: i32 = 16;
-const PR_SET_TIMERSLACK: i32 = 29;
-const PR_SET_NO_NEW_PRIVS: i32 = 38;
-const PR_SET_VMA: i32 = 0x5356_4d41;
-
-thread_local! {
-    static NAME: std::cell::Cell<[u8; 16]> = const { std::cell::Cell::new([0; 16]) };
-}
-
-fn prctl(op: i32, a1: u64, _a2: u64) -> i64 {
-    match op {
-        PR_SET_NAME => {
-            if a1 == 0 {
-                return err(EFAULT);
-            }
-            let mut n = [0u8; 16];
-            // SAFETY: a NUL-terminated name; at most 15 bytes are kept.
-            let s = unsafe { CStr::from_ptr(a1 as *const core::ffi::c_char) }.to_bytes();
-            let k = s.len().min(15);
-            n[..k].copy_from_slice(&s[..k]);
-            NAME.with(|c| c.set(n));
-            set_thread_description(&s[..k]);
-            0
-        }
-        PR_GET_NAME => {
-            if a1 == 0 {
-                return err(EFAULT);
-            }
-            let n = NAME.with(|c| c.get());
-            // SAFETY: the caller's 16-byte buffer.
-            unsafe { core::ptr::copy_nonoverlapping(n.as_ptr(), a1 as *mut u8, 16) };
-            0
-        }
-        PR_GET_DUMPABLE => 1,
-        PR_SET_DUMPABLE | PR_SET_PDEATHSIG | PR_SET_TIMERSLACK | PR_SET_NO_NEW_PRIVS => 0,
-        // As a kernel without CONFIG_ANON_VMA_NAME.
-        PR_SET_VMA => err(EINVAL),
-        _ => err(EINVAL),
-    }
-}
-
-/// The Windows thread description, so debuggers and crash dumps show
-/// guest thread names.
-fn set_thread_description(name: &[u8]) {
-    use windows::Win32::System::Threading::{GetCurrentThread, SetThreadDescription};
-    let w: Vec<u16> = String::from_utf8_lossy(name)
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
-    // SAFETY: a NUL-terminated wide string that outlives the call.
-    let _ = unsafe { SetThreadDescription(GetCurrentThread(), windows::core::PCWSTR(w.as_ptr())) };
-}
-
-fn sched_setscheduler(policy: i32) -> i64 {
-    // SCHED_OTHER, SCHED_BATCH, SCHED_IDLE (and SCHED_RESET_ON_FORK).
-    match policy & !0x4000_0000 {
-        0 | 3 | 5 => 0,
-        _ => err(EPERM),
-    }
-}
-
-fn cpus() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(1024)
-}
-
-fn sched_getaffinity(size: usize, mask: *mut u8) -> i64 {
-    let n = cpus();
-    let bytes = n.div_ceil(64) * 8;
-    if size < bytes || !size.is_multiple_of(8) {
-        return err(EINVAL);
-    }
-    if mask.is_null() {
-        return err(EFAULT);
-    }
-    // SAFETY: the caller's mask of `size >= bytes` bytes.
-    unsafe {
-        core::ptr::write_bytes(mask, 0, bytes);
-        for i in 0..n {
-            *mask.add(i / 8) |= 1 << (i % 8);
-        }
-    }
-    bytes as i64
-}
-
 fn getcpu(cpu: *mut u32, node: *mut u32) -> i64 {
     use windows::Win32::System::Threading::GetCurrentProcessorNumber;
     // SAFETY: no arguments.
@@ -912,139 +634,6 @@ fn mincore(addr: u64, len: u64, vec: *mut u8) -> i64 {
     0
 }
 
-// ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------
-
-/// The Windows path of a guest path relative to `dirfd`.
-///
-/// # Safety
-///
-/// `path` is a NUL-terminated string.
-unsafe fn host_path(dirfd: i32, path: u64) -> Result<(Vec<u8>, PathBuf), i32> {
-    use andruna_lx::fs::mount::MOUNTS;
-    use andruna_lx::fs::path::normalize;
-    if path == 0 {
-        return Err(EFAULT);
-    }
-    // SAFETY: the function's contract.
-    let p = unsafe { CStr::from_ptr(path as *const core::ffi::c_char) }.to_bytes();
-    if p.is_empty() {
-        return Err(ENOENT);
-    }
-    let base = if p[0] == b'/' {
-        b"/".to_vec()
-    } else if dirfd == AT_FDCWD {
-        andruna_lx::fs::getcwd()
-    } else {
-        let f = andruna_lx::fd::FDS.get(dirfd).map_err(|e| e.0)?;
-        f.ops().dir_path().ok_or(ENOTDIR)?.to_vec()
-    };
-    let lp = normalize(&base, p).map_err(|e| e.0)?;
-    let w = MOUNTS
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .resolve(&lp)
-        .map_err(|e| e.0)?;
-    let s = String::from_utf16_lossy(&w[..w.len().saturating_sub(1)]);
-    Ok((lp.to_bytes(), PathBuf::from(s)))
-}
-
-fn io_errno(e: &std::io::Error) -> i32 {
-    use std::io::ErrorKind::*;
-    match e.kind() {
-        NotFound => ENOENT,
-        PermissionDenied => EACCES,
-        AlreadyExists => EEXIST,
-        DirectoryNotEmpty => ENOTEMPTY,
-        NotADirectory => ENOTDIR,
-        IsADirectory => EISDIR,
-        InvalidInput | InvalidFilename => EINVAL,
-        _ => EIO,
-    }
-}
-
-unsafe fn faccessat(dirfd: i32, path: u64) -> i64 {
-    // SAFETY: forwarded.
-    match unsafe { host_path(dirfd, path) } {
-        Ok((_, p)) if p.exists() => 0,
-        Ok(_) => err(ENOENT),
-        Err(e) => err(e),
-    }
-}
-
-unsafe fn mkdirat(dirfd: i32, path: u64) -> i64 {
-    // SAFETY: forwarded.
-    match unsafe { host_path(dirfd, path) } {
-        Ok((_, p)) => match std::fs::create_dir(&p) {
-            Ok(()) => 0,
-            Err(e) => err(io_errno(&e)),
-        },
-        Err(e) => err(e),
-    }
-}
-
-unsafe fn unlinkat(dirfd: i32, path: u64, flags: i32) -> i64 {
-    // SAFETY: forwarded.
-    let p = match unsafe { host_path(dirfd, path) } {
-        Ok((_, p)) => p,
-        Err(e) => return err(e),
-    };
-    let r = if flags & AT_REMOVEDIR != 0 {
-        std::fs::remove_dir(&p)
-    } else if p.is_dir() {
-        return err(EISDIR);
-    } else {
-        std::fs::remove_file(&p)
-    };
-    match r {
-        Ok(()) => 0,
-        Err(e) => err(io_errno(&e)),
-    }
-}
-
-unsafe fn renameat(olddir: i32, old: u64, newdir: i32, new: u64) -> i64 {
-    // SAFETY: forwarded.
-    let (a, b) = match unsafe { (host_path(olddir, old), host_path(newdir, new)) } {
-        (Ok((_, a)), Ok((_, b))) => (a, b),
-        (Err(e), _) | (_, Err(e)) => return err(e),
-    };
-    match std::fs::rename(&a, &b) {
-        Ok(()) => 0,
-        Err(e) => err(io_errno(&e)),
-    }
-}
-
-/// The guest path of the running executable, for `/proc/self/exe`.
-pub static EXE: Mutex<String> = Mutex::new(String::new());
-
-unsafe fn readlinkat(dirfd: i32, path: u64, buf: *mut u8, size: usize) -> i64 {
-    if buf.is_null() || size == 0 {
-        return err(EINVAL);
-    }
-    if path == 0 {
-        return err(EFAULT);
-    }
-    // SAFETY: a NUL-terminated string (contract).
-    let s = unsafe { CStr::from_ptr(path as *const core::ffi::c_char) }.to_bytes();
-    let target = if s == b"/proc/self/exe" {
-        EXE.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    } else {
-        // SAFETY: forwarded.
-        return match unsafe { host_path(dirfd, path) } {
-            // Symbolic links are not created by Andruna's tree yet: a file
-            // that exists is not a link.
-            Ok((_, p)) if p.exists() => err(EINVAL),
-            Ok(_) => err(ENOENT),
-            Err(e) => err(e),
-        };
-    };
-    let n = target.len().min(size);
-    // SAFETY: the caller's buffer of `size` bytes.
-    unsafe { core::ptr::copy_nonoverlapping(target.as_ptr(), buf, n) };
-    n as i64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1081,43 +670,12 @@ mod tests {
     }
 
     #[test]
-    fn affinity_and_membarrier() {
-        let mut m = [0u8; 128];
-        let n = sched_getaffinity(128, m.as_mut_ptr());
-        assert!(n >= 8);
-        assert_eq!(m[0] & 1, 1);
+    fn membarrier_commands() {
         assert!(
             membarrier(MEMBARRIER_CMD_QUERY) & i64::from(MEMBARRIER_CMD_PRIVATE_EXPEDITED) != 0
         );
         assert_eq!(membarrier(MEMBARRIER_CMD_PRIVATE_EXPEDITED), 0);
         assert_eq!(membarrier(1), err(EINVAL));
-    }
-
-    #[test]
-    fn prctl_names() {
-        let name = c"worker-thread-name-long";
-        assert_eq!(prctl(PR_SET_NAME, name.as_ptr() as u64, 0), 0);
-        let mut b = [0u8; 16];
-        assert_eq!(prctl(PR_GET_NAME, b.as_mut_ptr() as u64, 0), 0);
-        assert_eq!(&b[..15], b"worker-thread-n");
-        assert_eq!(b[15], 0);
-        assert_eq!(prctl(PR_SET_VMA, 0, 0), err(EINVAL));
-    }
-
-    #[test]
-    fn requeue_wakes_and_compares() {
-        let w = std::sync::atomic::AtomicU32::new(5);
-        let a = w.as_ptr() as u64;
-        // SAFETY: a live futex word.
-        unsafe {
-            assert_eq!(
-                futex_requeue(a, FUTEX_CMP_REQUEUE, 1, 10, 4),
-                Some(err(EAGAIN))
-            );
-            assert_eq!(futex_requeue(a, FUTEX_CMP_REQUEUE | 128, 1, 10, 5), Some(0));
-            assert_eq!(futex_requeue(a, FUTEX_REQUEUE, 1, 0, 0), Some(0));
-            assert_eq!(futex_requeue(a, 1, 1, 0, 0), None);
-        }
     }
 
     #[test]

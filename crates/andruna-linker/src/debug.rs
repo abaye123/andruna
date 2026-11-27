@@ -135,16 +135,6 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     if unsafe { andruna_lx::signal::handle_exception(info) } {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
-    if crate::signal::deliver_fault(
-        code,
-        &rec.ExceptionInformation,
-        rec.NumberParameters,
-        // SAFETY: the context record is the thread's, owned by this
-        // dispatch; execution continues with what the handler leaves.
-        unsafe { &mut *(*info).ContextRecord },
-    ) {
-        return EXCEPTION_CONTINUE_EXECUTION;
-    }
     let fatal = matches!(
         code,
         0xC000_0005 | 0xC000_001D | 0xC000_0094 | 0xC000_00FD | 0xC000_0096

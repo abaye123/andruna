@@ -28,7 +28,6 @@ pub mod nr {
     pub const FORK: i64 = 57;
     pub const VFORK: i64 = 58;
     pub const EXIT: i64 = 60;
-    pub const GETPID: i64 = 39;
     pub const GETUID: i64 = 102;
     pub const GETGID: i64 = 104;
     pub const GETEUID: i64 = 107;
@@ -50,7 +49,6 @@ pub mod nr {
     pub const EXIT: i64 = 93;
     pub const EXIT_GROUP: i64 = 94;
     pub const SET_TID_ADDRESS: i64 = 96;
-    pub const GETPID: i64 = 172;
     pub const GETUID: i64 = 174;
     pub const GETEUID: i64 = 175;
     pub const GETGID: i64 = 176;
@@ -149,7 +147,6 @@ unsafe fn dispatch_inner(n: i64, a: [i64; 6]) -> i64 {
         nr::CLONE | nr::CLONE3 => -i64::from(ENOSYS),
         #[cfg(target_arch = "x86_64")]
         nr::FORK | nr::VFORK => -i64::from(ENOSYS),
-        nr::GETPID => i64::from(crate::process::guest_pid()),
         nr::GETUID | nr::GETEUID => i64::from(andruna_lx::process::uid()),
         nr::GETGID | nr::GETEGID => i64::from(andruna_lx::process::gid()),
         nr::GETRANDOM => getrandom(a[0] as *mut u8, a[1] as usize, a[2]),
@@ -187,7 +184,7 @@ unsafe fn forward(n: i64, a: [i64; 6]) -> i64 {
     let r = unsafe { lx_raw(n, a) };
     if r < 0
         // SAFETY: as above.
-        && let Some(v) = unsafe { crate::interim::after_error(n, a) }
+        && let Some(v) = unsafe { crate::interim::after_error(n, a, r) }
     {
         return v;
     }

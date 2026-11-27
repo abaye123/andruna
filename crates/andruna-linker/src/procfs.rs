@@ -1,29 +1,29 @@
-//! `/proc/self` files the loader writes while andruna-lx has no `/proc`
-//! (an `open` that lx fails is retried here; see [`crate::interim`]).
+//! `/proc` and `/sys` files that andruna-lx does not provide yet (an
+//! `open` that lx fails is retried here; see [`crate::interim`]):
 //!
-//! - `stat`: the fields bionic and libbase read (pid, name, state, thread
-//!   count, `startstack`, the address of the initial stack block, which is
-//!   how bionic finds the main thread's stack).
-//! - `maps`: the address space from `VirtualQuery`, one line per region
-//!   with Linux permissions; the guest main thread's stack is `[stack]`.
-//! - `cmdline`: the guest `argv`.
+//! - `/proc/self/stat` (and `/proc/<pid>/stat`): pid, name, state and
+//!   `startstack`, the address of the initial stack block, which is how
+//!   bionic finds the main thread's stack (`pthread_getattr_np`, which ART
+//!   calls at start-up); the other fields are 0.
 //! - `/sys/devices/system/cpu/{online,possible,present}`: the processor
-//!   list (what `sysconf(_SC_NPROCESSORS_*)` reads).
+//!   list that bionic's `get_nprocs` reads (`sysconf(_SC_NPROCESSORS_*)`,
+//!   `std::thread::hardware_concurrency`; without it dex2oat runs on one
+//!   thread).
 //!
 //! Each open takes a snapshot, as reading a Linux `/proc` file does.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Address of the initial stack block (`startstack`), set at start-up.
+pub static START_STACK: AtomicU64 = AtomicU64::new(0);
+/// The program's name (`comm`, at most 15 bytes), set at start-up.
+pub static COMM: Mutex<String> = Mutex::new(String::new());
+
 use andruna_lx::UserBuf;
 use andruna_lx::errno::{Errno, SysResult};
 use andruna_lx::fd::{FileOps, OpenFile};
 use andruna_lx::linux::stat::{S_IFREG, StatData};
-
-/// Address of the initial stack block (`startstack`), set at start-up.
-pub static START_STACK: AtomicU64 = AtomicU64::new(0);
-/// The guest `argv`, NUL-separated, set at start-up.
-pub static CMDLINE: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 /// A read-only file held in memory.
 #[derive(Debug)]
@@ -90,50 +90,38 @@ impl FileOps for MemFile {
     }
 }
 
-/// The contents of `path` when it names a `/proc` file the loader
-/// provides for this process.
+/// The contents of `path` when it names a file the loader provides.
 pub fn contents(path: &[u8]) -> Option<Vec<u8>> {
     if let Some(f) = path.strip_prefix(b"/sys/devices/system/cpu/") {
-        // The processor lists bionic's get_nprocs and get_nprocs_conf read
-        // (sysconf(_SC_NPROCESSORS_*), std::thread::hardware_concurrency).
         return matches!(f, b"online" | b"possible" | b"present").then(cpu_list);
     }
-    let pid = crate::process::guest_pid().to_string();
+    let pid = andruna_lx::process::getpid().to_string();
     let rest = path.strip_prefix(b"/proc/self/").or_else(|| {
         path.strip_prefix(b"/proc/")
             .and_then(|r| r.strip_prefix(pid.as_bytes()))
             .and_then(|r| r.strip_prefix(b"/"))
     })?;
-    match rest {
-        b"stat" => Some(stat()),
-        b"maps" => Some(maps()),
-        b"cmdline" => Some(CMDLINE.lock().unwrap_or_else(|e| e.into_inner()).clone()),
-        _ => None,
-    }
+    (rest == b"stat").then(stat)
 }
 
-fn cpu_list() -> Vec<u8> {
-    let n = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-    if n == 1 {
-        b"0\n".to_vec()
-    } else {
-        format!("0-{}\n", n - 1).into_bytes()
-    }
-}
-
-fn comm() -> String {
-    let c = CMDLINE.lock().unwrap_or_else(|e| e.into_inner());
-    let first = c.split(|&b| b == 0).next().unwrap_or(b"");
-    let name = first.rsplit(|&b| b == b'/').next().unwrap_or(b"");
-    String::from_utf8_lossy(&name[..name.len().min(15)]).into_owned()
+/// Records what `stat` reports about the program.
+pub fn set_program(start_stack: u64, argv0: &str) {
+    START_STACK.store(start_stack, Ordering::Relaxed);
+    let name = argv0.rsplit('/').next().unwrap_or("");
+    let end = name
+        .char_indices()
+        .map(|(i, c)| i + c.len_utf8())
+        .take_while(|&e| e <= 15)
+        .last()
+        .unwrap_or(0);
+    *COMM.lock().unwrap_or_else(|e| e.into_inner()) = name[..end].to_string();
 }
 
 fn stat() -> Vec<u8> {
-    let pid = crate::process::guest_pid();
+    let pid = andruna_lx::process::getpid();
+    let comm = COMM.lock().unwrap_or_else(|e| e.into_inner()).clone();
     // Fields 1 to 52 of proc(5); everything not known is 0.
-    let mut f: Vec<String> = vec![pid.to_string(), format!("({})", comm()), "R".into()];
+    let mut f: Vec<String> = vec![pid.to_string(), format!("({comm})"), "R".into()];
     f.resize(52, "0".into());
     f[3] = "1".into(); // ppid
     f[4] = pid.to_string(); // pgrp
@@ -147,63 +135,15 @@ fn stat() -> Vec<u8> {
     s.into_bytes()
 }
 
-fn perms(protect: u32) -> &'static str {
-    match protect & 0xff {
-        0x02 => "r--p",
-        0x04 | 0x08 => "rw-p",
-        0x10 => "--xp",
-        0x20 => "r-xp",
-        0x40 | 0x80 => "rwxp",
-        _ => "---p",
-    }
-}
-
-fn maps() -> Vec<u8> {
-    use windows::Win32::System::Memory::{
-        MEM_COMMIT, MEM_FREE, MEMORY_BASIC_INFORMATION, PAGE_GUARD, VirtualQuery,
-    };
-    let start_stack = START_STACK.load(Ordering::Relaxed);
-    let mut out = String::new();
-    let mut addr: u64 = 0x10000;
-    let end: u64 = if cfg!(target_arch = "x86_64") {
-        0x7fff_ffff_0000
+fn cpu_list() -> Vec<u8> {
+    let n = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    if n == 1 {
+        b"0\n".to_vec()
     } else {
-        0xffff_ffff_0000
-    };
-    while addr < end {
-        let mut m = MEMORY_BASIC_INFORMATION::default();
-        // SAFETY: queries the address space only.
-        let n = unsafe {
-            VirtualQuery(
-                Some(addr as *const core::ffi::c_void),
-                &mut m,
-                core::mem::size_of_val(&m),
-            )
-        };
-        if n == 0 {
-            break;
-        }
-        let lo = m.BaseAddress as u64;
-        let hi = lo + m.RegionSize as u64;
-        if m.State != MEM_FREE {
-            let p = if m.State == MEM_COMMIT && m.Protect.0 & PAGE_GUARD.0 == 0 {
-                perms(m.Protect.0)
-            } else {
-                "---p"
-            };
-            let name = if (lo..hi).contains(&start_stack) {
-                "[stack]"
-            } else {
-                ""
-            };
-            out.push_str(&format!("{lo:x}-{hi:x} {p} 00000000 00:00 0 {name}\n"));
-        }
-        if hi <= addr {
-            break;
-        }
-        addr = hi;
+        format!("0-{}\n", n - 1).into_bytes()
     }
-    out.into_bytes()
 }
 
 #[cfg(test)]
@@ -211,34 +151,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn maps_lists_this_stack() {
-        let local = 0u64;
-        let a = &local as *const u64 as u64;
-        let m = String::from_utf8(maps()).unwrap();
-        assert!(m.lines().any(|l| {
-            let (r, _) = l.split_once(' ').unwrap();
-            let (lo, hi) = r.split_once('-').unwrap();
-            let (lo, hi) = (
-                u64::from_str_radix(lo, 16).unwrap(),
-                u64::from_str_radix(hi, 16).unwrap(),
-            );
-            lo <= a && a < hi && l.contains("rw-p")
-        }));
+    fn processor_lists() {
+        let cpus = contents(b"/sys/devices/system/cpu/online").unwrap();
+        assert!(cpus.starts_with(b"0") && cpus.ends_with(b"\n"));
+        assert!(contents(b"/sys/devices/system/cpu/cpu0").is_none());
+        assert!(contents(b"/proc/self/maps").is_none());
     }
 
     #[test]
     fn stat_has_startstack_as_field_28() {
-        START_STACK.store(0x1234, Ordering::Relaxed);
-        let s = String::from_utf8(stat()).unwrap();
+        set_program(0x1234, "/apex/com.android.art/bin/dalvikvm");
+        let s = String::from_utf8(contents(b"/proc/self/stat").unwrap()).unwrap();
+        assert!(s.contains("(dalvikvm)"));
         let after = s.rsplit_once(')').unwrap().1;
         let fields: Vec<&str> = after.split_whitespace().collect();
         // Field 3 is the first after the name; startstack is field 28.
         assert_eq!(fields[28 - 3], "4660");
-        assert!(contents(b"/proc/self/stat").is_some());
-        assert!(contents(b"/proc/self/environ").is_none());
-        let cpus = contents(b"/sys/devices/system/cpu/online").unwrap();
-        assert!(cpus.starts_with(b"0") && cpus.ends_with(b"\n"));
-        assert!(contents(b"/proc/1/stat").is_none() || crate::process::guest_pid() == 1);
     }
 
     #[test]

@@ -75,19 +75,6 @@ struct Args {
 
 static ARGS: OnceLock<Args> = OnceLock::new();
 
-/// Thread id of the guest main thread (0 before a program starts).
-static MAIN_TID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-
-/// The process id guest code sees: as on Linux, the thread id of its main
-/// thread (bionic, for example, recognizes the main thread by
-/// `tid == getpid()`). Before a program starts, lx's process id.
-pub fn guest_pid() -> i32 {
-    match MAIN_TID.load(std::sync::atomic::Ordering::Relaxed) {
-        0 => andruna_lx::process::getpid(),
-        t => t,
-    }
-}
-
 /// `(argc, argv, envp)` of the program, for initializers of `dlopen`ed
 /// objects (bionic passes the same values).
 pub fn args() -> (i32, *const *const u8, *const *const u8) {
@@ -273,20 +260,6 @@ fn start(ctx: MainCtx) -> Result<std::convert::Infallible> {
     andruna_lx::process::set_main_thread();
     // For /proc/self/exe and /proc/self/cmdline (andruna-lx).
     andruna_lx::process::set_program(std::path::Path::new(&program.exe), &program.args);
-    MAIN_TID.store(
-        andruna_lx::process::gettid(),
-        std::sync::atomic::Ordering::Relaxed,
-    );
-    *crate::interim::EXE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = program.args.first().cloned().unwrap_or_default();
-    *crate::procfs::CMDLINE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = program
-        .args
-        .iter()
-        .flat_map(|a| a.bytes().chain(Some(0)))
-        .collect();
     let (hwcap, hwcap2) = hwcaps();
     // The block sits at the top of the guest stack; this frame runs below
     // it and is discarded when the entry point starts.
@@ -298,7 +271,11 @@ fn start(ctx: MainCtx) -> Result<std::convert::Infallible> {
     });
     let (argc, argv, envp) = (s.argc, s.argv, s.envp);
     let block = s.block;
-    crate::procfs::START_STACK.store(block, std::sync::atomic::Ordering::Relaxed);
+    // `startstack` of /proc/self/stat (bionic finds the main stack by it).
+    crate::procfs::set_program(
+        block,
+        program.args.first().map(String::as_str).unwrap_or_default(),
+    );
     let mut l = Linker::new(program.config);
     l.hwcap = hwcap;
     l.hwcap2 = hwcap2;

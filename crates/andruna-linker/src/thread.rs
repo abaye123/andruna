@@ -235,7 +235,6 @@ gfn! {
 }
 
 fn clear_tid() {
-    crate::signal::thread_exited(andruna_lx::process::gettid());
     let ctid = CLEAR_TID.with(|c| c.replace(0));
     if ctid != 0 && ctid.is_multiple_of(4) {
         // SAFETY: the word registered by clone or set_tid_address, an
@@ -352,7 +351,6 @@ fn clone_thread(
     };
     // SAFETY: querying the new thread's id.
     let tid = unsafe { GetThreadId(h) } as i32;
-    crate::signal::inherit(tid);
     if flags & CLONE_PARENT_SETTID != 0 && !ptid.is_null() {
         // SAFETY: the caller's tid word (bionic's pthread_internal_t).
         unsafe { ptid.write_volatile(tid) };
