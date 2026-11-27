@@ -157,6 +157,66 @@ jobs:
       - name: Build
         run: cargo xtask aosp-build --arch ${{ matrix.arch }}
 
+  # The management app (ui/) and the unsigned installer. Signing needs the
+  # maintainer's certificate and is done on the release machine.
+  ui:
+    name: ui and installer
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Test
+        run: dotnet test ui/tests/Andruna.Manager.Tests -nologo
+
+      - name: Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-installer-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-installer-
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: cargo xtask toolchain
+
+      - name: Cache NSIS
+        uses: actions/cache@v4
+        with:
+          path: .cache/nsis-3.11
+          key: nsis-3.11
+
+      # Builds the Rust executables for x64 and arm64, publishes the manager
+      # for both and builds one unsigned installer.
+      - name: Installer
+        run: ./installer/build.ps1 -Unsigned
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-unsigned
+          path: target/installer/Andruna-*-setup-*.exe
+          if-no-files-found: error
+
   deny:
     name: cargo deny
     runs-on: ubuntu-latest

@@ -47,10 +47,16 @@ Each architecture's staging folder gets, next to the manager:
 | `andruna-launch.exe` | the same folder |
 
 `<triple>` is `x86_64-pc-windows-gnullvm` or `aarch64-pc-windows-gnullvm`.
-`-RustBinDir <dir>` overrides the folder (`<dir>\x64\`, `<dir>\arm64\`).
-A missing file leaves the slot empty and the build says so; the manager then
-reports that the service is not installed. If the Rust executables need
-runtime DLLs, add them to `$RustBinaries` in `build.ps1`.
+`build.ps1` builds them first (`cargo xtask build --arch <arch> --release`,
+then `cargo xtask sign --arch <arch> --release` unless `-Unsigned`), so it
+needs Rust and llvm-mingw (`cargo xtask toolchain`). `-SkipRustBuild` uses
+the files already in `target\`; `-RustBinDir <dir>` takes them from
+`<dir>\x64\` and `<dir>\arm64\`. A missing file fails the build.
+
+The build checks with llvm-objdump that the Rust executables import no DLL
+that llvm-mingw ships (libc++, libunwind, libwinpthread and the like): the
+installer does not carry them, so the executables use only Windows system
+DLLs and the UCRT.
 
 ## Signing
 
