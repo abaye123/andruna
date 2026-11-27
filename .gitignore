@@ -6,7 +6,8 @@
 *.ilk
 *.user
 .vs/
-bin/
-obj/
+/ui/**/bin/
+/installer/**/bin/
+/ui/**/obj/
 /.claude/worktrees/
 /.claude/settings.local.json
