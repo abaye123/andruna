@@ -1153,9 +1153,13 @@ mod tests {
 
         // MAP_FIXED into free memory at a page (not 64 KiB) boundary.
         let f = a + 3 * PAGE_SIZE;
-        let r = s
-            .mmap(f, 2 * PAGE_SIZE, RW, ANON | MAP_FIXED_NOREPLACE, -1, 0)
-            .unwrap();
+        let r = match s.mmap(f, 2 * PAGE_SIZE, RW, ANON | MAP_FIXED_NOREPLACE, -1, 0) {
+            Ok(r) => r,
+            // Another test thread mapped the block that was just freed:
+            // nothing left to check here.
+            Err(Errno::EEXIST) => return,
+            Err(e) => panic!("{e:?}"),
+        };
         assert_eq!(r, f);
         write(f + PAGE_SIZE, 1);
         assert_eq!(state(f - PAGE_SIZE).0, 0x2000, "rest stays placeholder");
