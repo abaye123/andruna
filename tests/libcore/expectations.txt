@@ -1,0 +1,7 @@
+# Known failures of the libcore test subset (tests/libcore/README.md).
+#
+# <test> | <category> | <reason> [| <modes>]
+#
+# <test> is <class>#<method>, or a glob. <modes> is a comma-separated list of
+# int, jit, jit0; empty means all modes. Categories are defined in run.py
+# (CATEGORIES). Analysis: docs/plan/phase1/libcore-tests.md.

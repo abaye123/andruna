@@ -114,8 +114,8 @@ class AppRunner:
         return self.root
 
     def command(self, args):
-        cmd = [str(self.exe), "--mode", self.mode, "--data", str(self.root),
-               "--classpath", str(self.jar)] + VM_PROPS + [MAIN] + args
+        cmd = [str(self.exe), "--mode", self.mode, "--data", str(self.root)] + VM_PROPS + \
+              ["--classpath", str(self.jar), MAIN] + args
         return cmd, dict(os.environ)
 
 
