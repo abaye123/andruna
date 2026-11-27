@@ -37,10 +37,10 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_FRAME_STATISTICS, DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
-    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
-    DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2,
-    IDXGIFactoryMedia, IDXGISwapChain1, IDXGISwapChain2,
+    DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
+    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGIFactoryMedia,
+    IDXGISwapChain1, IDXGISwapChain2,
 };
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
@@ -91,9 +91,10 @@ pub struct FrameStats {
     /// CPU time inside `eglSwapBuffers` (present and the wait for a free
     /// buffer, ms).
     pub swap_times: VecDeque<f64>,
-    /// Present call to the vertical blank it was shown at (ms), from DXGI
-    /// frame statistics.
-    pub latencies: VecDeque<f64>,
+    /// Time blocked after the present until the swap chain accepts another
+    /// frame (ms). With one frame in flight (`ANDRUNA_GLES_LATENCY=1`) this
+    /// is the time from the present until the compositor took the frame.
+    pub waits: VecDeque<f64>,
     last_return: i64,
 }
 
@@ -138,7 +139,7 @@ pub(crate) fn qpc_ms(d: i64) -> f64 {
 
 /// Frames in flight before `eglSwapBuffers` waits (`ANDRUNA_GLES_LATENCY`,
 /// 1 to 3, default 2).
-fn max_latency() -> u32 {
+pub fn max_latency() -> u32 {
     std::env::var("ANDRUNA_GLES_LATENCY")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -168,8 +169,6 @@ pub struct WindowSurface {
     pub interval: u32,
     /// Extra pbuffer attributes from the guest (`EGL_GL_COLORSPACE`).
     attribs: Vec<i32>,
-    /// Submit time of recent presents by present count.
-    submitted: VecDeque<(u32, i64)>,
 }
 
 // SAFETY: the COM objects are used under the surface's mutex; ANGLE's
@@ -279,7 +278,6 @@ impl WindowSurface {
                     .load(std::sync::atomic::Ordering::Relaxed)
                     .clamp(0, 4) as u32,
                 attribs: attribs.clone(),
-                submitted: VecDeque::new(),
             };
             match s.make_pbuffer() {
                 Ok(p) => {
@@ -328,15 +326,8 @@ impl WindowSurface {
             crate::log(format_args!("Present: {hr:?}"));
             return Err(EglError::BadSurface);
         }
-        // SAFETY: as above.
-        if let Ok(n) = unsafe { self.swap.GetLastPresentCount() } {
-            if self.submitted.len() == 16 {
-                self.submitted.pop_front();
-            }
-            self.submitted.push_back((n, t0));
-        }
         self.target.presented(self.width, self.height);
-        let latency = self.present_latency();
+        let tp = qpc();
         let (w, h) = clamp_size(self.target.size());
         if (w, h) != (self.width, self.height) {
             self.resize(w, h)?;
@@ -347,24 +338,13 @@ impl WindowSurface {
         let mut s = self.stats.lock().unwrap_or_else(|e| e.into_inner());
         s.frames += 1;
         push(&mut s.swap_times, qpc_ms(t1 - t0));
+        push(&mut s.waits, qpc_ms(t1 - tp));
         if s.last_return != 0 {
             let d = qpc_ms(t1 - s.last_return);
             push(&mut s.intervals, d);
         }
         s.last_return = t1;
-        if let Some(l) = latency {
-            push(&mut s.latencies, l);
-        }
         Ok(())
-    }
-
-    /// The latest DXGI frame statistics matched with a recorded present.
-    fn present_latency(&self) -> Option<f64> {
-        let mut st = DXGI_FRAME_STATISTICS::default();
-        // SAFETY: COM call writing into a local.
-        unsafe { self.swap.GetFrameStatistics(&mut st) }.ok()?;
-        let (_, t) = self.submitted.iter().find(|(n, _)| *n == st.PresentCount)?;
-        (st.SyncQPCTime > *t).then(|| qpc_ms(st.SyncQPCTime - t))
     }
 
     /// Resizes the buffers to `w`x`h`: the pbuffer is replaced (keeping the

@@ -300,6 +300,9 @@ fn ui_thread(
     match setup() {
         Ok(hwnd) => {
             w.hwnd.store(hwnd.0 as usize, Ordering::Release);
+            if crate::tracing() {
+                crate::log(format_args!("harness window {:#x}", hwnd.0 as usize));
+            }
             let _ = tx.send(Ok(()));
         }
         Err(e) => {
@@ -340,9 +343,10 @@ pub struct GuestFrameStats {
     pub mean_interval_ms: f64,
     pub p99_interval_ms: f64,
     pub mean_swap_ms: f64,
-    pub mean_latency_ms: f64,
-    pub p99_latency_ms: f64,
-    pub latency_samples: u64,
+    pub mean_wait_ms: f64,
+    pub p99_wait_ms: f64,
+    /// Frames in flight before `eglSwapBuffers` waits.
+    pub max_frame_latency: u64,
 }
 
 const _: () = assert!(size_of::<GuestFrameStats>() == 56);
@@ -417,15 +421,15 @@ pub fn frame_stats(win: usize) -> Option<GuestFrameStats> {
     let s = w.stats.lock().unwrap_or_else(|e| e.into_inner());
     let (mi, pi) = summary(&s.intervals);
     let (ms, _) = summary(&s.swap_times);
-    let (ml, pl) = summary(&s.latencies);
+    let (mw, pw) = summary(&s.waits);
     Some(GuestFrameStats {
         frames: s.frames,
         mean_interval_ms: mi,
         p99_interval_ms: pi,
         mean_swap_ms: ms,
-        mean_latency_ms: ml,
-        p99_latency_ms: pl,
-        latency_samples: s.latencies.len() as u64,
+        mean_wait_ms: mw,
+        p99_wait_ms: pw,
+        max_frame_latency: u64::from(crate::window::max_latency()),
     })
 }
 

@@ -288,3 +288,54 @@ gfn! {
         -ENOSYS
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::Foundation::HANDLE;
+
+    struct Fixed;
+    impl WindowTarget for Fixed {
+        fn size(&self) -> (u32, u32) {
+            (320, 200)
+        }
+        fn surface_handle(&self) -> HANDLE {
+            HANDLE::default()
+        }
+        fn presented(&self, _: u32, _: u32) {}
+    }
+
+    #[test]
+    fn query_perform_and_references() {
+        let p = create(Arc::new(Fixed)) as usize;
+        let w = lookup(p).expect("live");
+        assert_eq!(w.anw.common.magic, ANDROID_NATIVE_WINDOW_MAGIC);
+        assert_eq!(w.anw.common.version, 192);
+        let mut v = 0;
+        // SAFETY: host functions called directly with valid arguments.
+        unsafe {
+            assert_eq!(query(p as *const c_void, NATIVE_WINDOW_WIDTH, &mut v), 0);
+            assert_eq!(v, 320);
+            assert_eq!(query(p as *const c_void, NATIVE_WINDOW_HEIGHT, &mut v), 0);
+            assert_eq!(v, 200);
+            assert_eq!(query(p as *const c_void, 9999, &mut v), -EINVAL);
+            assert_eq!(
+                perform(p as *mut c_void, NATIVE_WINDOW_API_CONNECT, 1, 0, 0),
+                0
+            );
+            assert_eq!(perform(p as *mut c_void, 11, 0, 0, 0), -EINVAL);
+            assert_eq!(no_buffer_queue(), -ENOSYS);
+            // Not a window.
+            let other = 0i32;
+            assert_eq!(
+                query(&other as *const i32 as *const c_void, 0, &mut v),
+                -EINVAL
+            );
+            inc_ref(p as *mut c_void);
+        }
+        release(p);
+        assert!(lookup(p).is_some(), "one reference left");
+        release(p);
+        assert!(lookup(p).is_none(), "freed with the last reference");
+    }
+}

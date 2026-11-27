@@ -175,3 +175,28 @@ pub fn register() {
     static R: Once = Once::new();
     R.call_once(|| andruna_linker::host::register(&symbols()));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_and_host_functions() {
+        let i = index();
+        assert_eq!(i.len(), thunk::COUNT);
+        for n in [
+            "eglGetDisplay",
+            "glDrawArrays",
+            "glAlphaFunc",
+            "glDispatchCompute",
+        ] {
+            assert!(i.contains_key(n), "{n}");
+        }
+        // Host functions resolve without ANGLE; unknown names do not.
+        assert!(resolve("andruna_window_create").is_some());
+        assert!(resolve("glNoSuchFunctionANDRUNA").is_none());
+        let n = std::ffi::CString::new("glNoSuchFunctionANDRUNA").unwrap();
+        // SAFETY: the binding function with a NUL-terminated name.
+        assert_eq!(unsafe { resolve_entry(n.as_ptr()) }, unavailable as usize);
+    }
+}
