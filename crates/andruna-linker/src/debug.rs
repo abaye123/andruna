@@ -116,20 +116,19 @@ pub fn install_handler() {
         // SAFETY: a valid handler that is never removed.
         let h = unsafe { AddVectoredExceptionHandler(1, Some(handler)) };
         assert!(!h.is_null(), "AddVectoredExceptionHandler failed");
+        andruna_lx::signal::set_fatal_hook(|_sig, info| {
+            // SAFETY: lx passes null or the live records of the fault.
+            unsafe { crash_report(info) }
+        });
     });
 }
 
 unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     // SAFETY: the system passes valid records.
-    let (rec, ctx) = unsafe { (&*(*info).ExceptionRecord, &*(*info).ContextRecord) };
-    let code = rec.ExceptionCode.0 as u32;
+    let code = unsafe { (*(*info).ExceptionRecord).ExceptionCode.0 as u32 };
     #[cfg(target_arch = "x86_64")]
-    let (pc, fp) = (ctx.Rip, ctx.Rbp);
-    #[cfg(target_arch = "aarch64")]
-    // SAFETY: the ARM64 CONTEXT's named registers.
-    let (pc, fp) = (ctx.Pc, unsafe { ctx.Anonymous.Anonymous.Fp });
-    #[cfg(target_arch = "x86_64")]
-    if code == 0xC000_0005 && crate::tls::lazy_restore(pc) {
+    // SAFETY: as above.
+    if code == 0xC000_0005 && crate::tls::lazy_restore(unsafe { (*(*info).ContextRecord).Rip }) {
         crate::profile::exception(crate::profile::Exception::Restore);
         return EXCEPTION_CONTINUE_EXECUTION;
     }
@@ -149,6 +148,32 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     crate::profile::exception(crate::profile::Exception::Other);
+    // SAFETY: the system's records, as above.
+    unsafe { crash_report(info) };
+    EXCEPTION_CONTINUE_SEARCH
+}
+
+/// Prints the guest crash report of a fatal exception (a fault in guest
+/// code, with its backtrace) or, with `ANDRUNA_TRACE`, of a fault in host
+/// code. andruna-lx calls it too, before a signal's default action ends
+/// the process ([`andruna_lx::signal::set_fatal_hook`]).
+///
+/// # Safety
+///
+/// `info` is null or the exception records Windows passed to a vectored
+/// handler, still live.
+unsafe fn crash_report(info: *mut EXCEPTION_POINTERS) {
+    if info.is_null() {
+        return;
+    }
+    // SAFETY: valid records (contract).
+    let (rec, ctx) = unsafe { (&*(*info).ExceptionRecord, &*(*info).ContextRecord) };
+    let code = rec.ExceptionCode.0 as u32;
+    #[cfg(target_arch = "x86_64")]
+    let (pc, fp) = (ctx.Rip, ctx.Rbp);
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: the ARM64 CONTEXT's named registers.
+    let (pc, fp) = (ctx.Pc, unsafe { ctx.Anonymous.Anonymous.Fp });
     let fatal = matches!(
         code,
         0xC000_0005 | 0xC000_001D | 0xC000_0094 | 0xC000_00FD | 0xC000_0096
@@ -184,7 +209,6 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         );
         walk(&mut e, fp);
     }
-    EXCEPTION_CONTINUE_SEARCH
 }
 
 /// Code built for Linux keeps the instruction cache coherent itself

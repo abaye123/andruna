@@ -30,8 +30,8 @@ use windows::Win32::System::Diagnostics::Debug::{
     RtlRestoreContext,
 };
 use windows::Win32::System::Memory::{
-    MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
-    PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
+    MEM_COMMIT, MEM_IMAGE, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
+    PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
 };
 
 use super::{action, current, reset_action};
@@ -271,19 +271,28 @@ unsafe fn handle(ep: *mut EXCEPTION_POINTERS) -> bool {
         _ => return false,
     };
     let act = action(fault.sig);
-    if act.handler == SIG_DFL || act.handler == SIG_IGN {
-        // Linux forces the default action for an ignored fault too.
-        return false;
-    }
     let t = current();
     let mask = t.blocked();
-    if mask & sigbit(fault.sig) != 0 {
-        return false;
+    if act.handler == SIG_DFL || act.handler == SIG_IGN || mask & sigbit(fault.sig) != 0 {
+        // Linux forces the default action for an ignored or blocked fault
+        // too: the process ends. Faults in Windows images (host code) are
+        // Windows' to handle (structured exception handlers may expect
+        // them), so they go on to the next handler.
+        if host_code(pc) {
+            return false;
+        }
+        super::terminate_after(fault.sig, ep);
     }
     let info = SigInfo::fault(fault.sig, fault.code, fault.addr);
     let mem = fault.mem.map(|(w, p)| (fault.addr, w, p));
     // SAFETY: `ctx` is the exception context (contract).
     unsafe { setup(ctx, &info, act, mask, mem) }
+}
+
+/// Whether `pc` lies in a Windows image (the host executable or a DLL):
+/// host code. Guest code runs from lx's private memory or file views.
+fn host_code(pc: u64) -> bool {
+    crate::sys::mem::query(pc as usize).is_some_and(|r| r.kind == MEM_IMAGE)
 }
 
 /// An access violation on a page that is accessible now was a transient

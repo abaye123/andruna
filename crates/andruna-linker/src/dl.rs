@@ -495,7 +495,8 @@ gfn! {
         crate::debug::report(format_args!(
             "CFI check failed: call to {ptr:p} from {pc:p} (CFI shadow is not supported)"
         ));
-        crate::process::exit_process(134)
+        // abort(), as bionic's CFI failure path ends.
+        andruna_lx::signal::terminate(andruna_lx::linux::signal::SIGABRT)
     }
 }
 

@@ -33,10 +33,18 @@
 //! - Asynchronous delivery is at system call boundaries only (above).
 //! - A fault inside lx itself (for example on a bad buffer that lx reads)
 //!   is delivered as `SIGSEGV`; Linux would return `EFAULT` from the call.
-//! - Default actions: "terminate" and "core" end the process with exit code
-//!   `128 + signal` (Windows has no "killed by signal" status); "stop"
-//!   signals are discarded, since a Windows process cannot be stopped this
-//!   way; "ignore" signals are discarded.
+//! - Default actions are Linux's: "terminate" and "core" end the process
+//!   at once with an exit code that encodes the signal
+//!   ([`signal_exit_code`]; Windows has no "killed by signal" status, and
+//!   no core file is written), "stop" suspends every thread of the process
+//!   (`NtSuspendProcess`) until something outside resumes it, and
+//!   "ignore" discards the signal. A synchronous fault (`SIGSEGV`,
+//!   `SIGBUS`, `SIGILL`, `SIGFPE`, `SIGTRAP`) in guest code whose action
+//!   is the default, ignored or blocked ends the process the same way, as
+//!   Linux forces the default action then. A fault in host code (a
+//!   Windows image) is left to Windows' own exception handling.
+//! - `SIGCONT` sent inside the process cannot continue it (every thread is
+//!   stopped); only another process can resume a stopped one.
 //! - Only this process exists for `kill`; any other pid is `ESRCH`.
 //! - A signal that becomes deliverable through `rt_sigreturn`'s mask
 //!   restore is delivered at the thread's next system call, not at once.
@@ -51,6 +59,8 @@ use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub use frame::{DELIVERED, LX_SIGNAL, handle_exception, install_handler, sigreturn};
+
+use windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS;
 
 use crate::errno::{Errno, SysResult};
 use crate::linux::signal::*;
@@ -351,6 +361,20 @@ fn queue(target: Option<&Arc<ThreadSignals>>, info: SigInfo) {
         // Process signals are queued only when the sender blocks them.
         None => true,
     };
+    // A stop signal discards pending SIGCONT, and SIGCONT discards pending
+    // stop signals, whatever their actions (signal(7)).
+    if sig == SIGCONT {
+        for s in [SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU] {
+            discard_pending(s);
+        }
+    } else if default_stops(sig) {
+        discard_pending(SIGCONT);
+    }
+    if sig == SIGSTOP {
+        // Cannot be caught, blocked or ignored.
+        stop();
+        return;
+    }
     if ignored(sig) && !blocked {
         return;
     }
@@ -381,14 +405,106 @@ fn queue(target: Option<&Arc<ThreadSignals>>, info: SigInfo) {
     }
 }
 
-/// Ends the process for a signal whose default action terminates it.
-pub(crate) fn terminate(sig: i32) -> ! {
+/// The high half of the exit code of a process ended by a signal: an
+/// NTSTATUS error code with the customer bit set (`0xE...`), which neither
+/// `exit_group` (0 to 255) nor a Windows exception code can produce.
+pub const SIGNAL_EXIT_BASE: u32 = 0xE0A0_0000;
+/// The bit of [`signal_exit_code`] set when the default action is "core",
+/// as in a Linux wait status (`WCOREDUMP`).
+pub const SIGNAL_EXIT_CORE: u32 = 0x80;
+
+/// The Windows exit code of a process ended by `sig`: [`SIGNAL_EXIT_BASE`]
+/// plus the Linux wait status of a signal death (the signal number in bits
+/// 0 to 6, [`SIGNAL_EXIT_CORE`] when the default action dumps core).
+pub fn signal_exit_code(sig: i32) -> u32 {
+    let core = if default_dumps_core(sig) {
+        SIGNAL_EXIT_CORE
+    } else {
+        0
+    };
+    SIGNAL_EXIT_BASE | core | (sig as u32 & 0x7f)
+}
+
+/// What a process exit code means: the inverse of [`signal_exit_code`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExitStatus {
+    /// `exit_group(code)`.
+    Exited(u8),
+    /// Ended by a signal's default action.
+    Signaled { sig: i32, core: bool },
+    /// Anything else: a Windows status (an unhandled exception in host
+    /// code, a forced termination).
+    Other(u32),
+}
+
+/// Decodes a process exit code (for supervisors such as sysd).
+pub fn decode_exit_code(code: u32) -> ExitStatus {
+    if code <= 0xff {
+        ExitStatus::Exited(code as u8)
+    } else if code & 0xffff_ff00 == SIGNAL_EXIT_BASE && code & 0x7f != 0 {
+        ExitStatus::Signaled {
+            sig: (code & 0x7f) as i32,
+            core: code & SIGNAL_EXIT_CORE != 0,
+        }
+    } else {
+        ExitStatus::Other(code)
+    }
+}
+
+/// Signals whose default action is "core".
+fn default_dumps_core(sig: i32) -> bool {
+    matches!(
+        sig,
+        SIGQUIT
+            | SIGILL
+            | SIGTRAP
+            | SIGABRT
+            | SIGBUS
+            | SIGFPE
+            | SIGSEGV
+            | SIGXCPU
+            | SIGXFSZ
+            | SIGSYS
+    )
+}
+
+/// A hook the host runs before a signal ends the process: the signal and,
+/// for a fault, the exception (null for a queued signal).
+pub type FatalHook = fn(i32, *mut EXCEPTION_POINTERS);
+
+static ON_FATAL: std::sync::OnceLock<FatalHook> = std::sync::OnceLock::new();
+
+/// Registers `f`, run before a signal's default action ends the process
+/// (andruna-linker prints its crash report there). The first registration
+/// stays.
+pub fn set_fatal_hook(f: FatalHook) {
+    let _ = ON_FATAL.set(f);
+}
+
+/// Ends the process for a signal whose default action terminates it
+/// ("terminate" or "core").
+pub fn terminate(sig: i32) -> ! {
+    terminate_after(sig, core::ptr::null_mut())
+}
+
+/// [`terminate`] for a fault: `ep` is the exception that raised it.
+pub(crate) fn terminate_after(sig: i32, ep: *mut EXCEPTION_POINTERS) -> ! {
     use std::io::Write;
+    if let Some(f) = ON_FATAL.get() {
+        f(sig, ep);
+    }
     let _ = writeln!(
         std::io::stderr(),
         "[andruna-lx] process terminated by signal {sig}"
     );
-    crate::sys::thread::terminate_process(128 + sig as u32)
+    let _ = std::io::stderr().flush();
+    crate::sys::thread::terminate_process(signal_exit_code(sig))
+}
+
+/// The default action "stop": suspends the whole process. Returns when
+/// another process resumes it.
+fn stop() {
+    crate::sys::thread::suspend_process();
 }
 
 /// Takes the next signal the thread can receive: thread-directed first,
@@ -481,7 +597,11 @@ fn deliver_with(t: &Arc<ThreadSignals>, saved_mask: Option<SigSet>) -> bool {
         match a.handler {
             SIG_IGN => {}
             SIG_DFL => {
-                if default_ignores(sig) || default_stops(sig) {
+                if default_ignores(sig) {
+                    continue;
+                }
+                if default_stops(sig) {
+                    stop();
                     continue;
                 }
                 terminate(sig);
