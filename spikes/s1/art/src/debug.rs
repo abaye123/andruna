@@ -172,9 +172,14 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     // Only report faults in guest code, and only real faults (debuggers
     // and the C runtime use other codes).
     let fatal = matches!(code, 0xC000_0005 | 0xC000_001D | 0xC000_0094 | 0xC000_00FD);
+    // A fault on a guest thread is reported even when the PC is in host
+    // code or in JIT code (no loaded object): the unclaimed fault is about
+    // to end the process.
+    let guest_thread = crate::tls::current_tp() != 0;
     if fatal
         && std::env::var_os("S8_NO_CRASH_REPORT").is_none()
-        && let Some(d) = describe(pc)
+        && let Some(d) =
+            describe(pc).or_else(|| guest_thread.then(|| "(host or JIT code)".to_string()))
     {
         let mut e = std::io::stderr().lock();
         let _ = writeln!(e, "[s8] guest fault {code:#x} at {pc:#x} {d}");
@@ -189,6 +194,17 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
                 },
                 rec.ExceptionInformation[1]
             );
+        }
+        // SAFETY: the base of this executable (for host PCs).
+        let exe = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None) }
+            .map(|h| h.0 as u64)
+            .unwrap_or(0);
+        let _ = writeln!(e, "[s8]   runner image at {exe:#x}, sp {sp:#x}");
+        #[cfg(target_arch = "aarch64")]
+        {
+            // SAFETY: the ARM64 CONTEXT's named registers.
+            let lr = unsafe { ctx.Anonymous.Anonymous.Lr };
+            let _ = writeln!(e, "[s8]   lr {lr:#x} {}", describe(lr).unwrap_or_default());
         }
         let _ = writeln!(e, "[s8] guest frames (frame-pointer walk):");
         walk(&mut e, pc, fp, sp);

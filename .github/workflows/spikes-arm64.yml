@@ -542,6 +542,16 @@ jobs:
           Invoke-Art bench-jit @('--mode', 'jit', 'Bench')
           Invoke-Art faults-jit @('--mode', 'jit', 'Faults')
           Invoke-Art hello-jit0 @('--mode', 'jit0', 'Hello')
+          Invoke-Art bench-jit0 @('--mode', 'jit0', 'Bench')
+          $env:S1_SIGLOG = '1'
+          Invoke-Art bench-int-siglog @('--mode', 'int', 'Bench')
+          Remove-Item Env:S1_SIGLOG
+          # AOT: dex2oat on arm64, then the boot image and odex files.
+          Invoke-Art dex2oat-boot @('--timeout', '1200', 'dex2oat-boot')
+          Invoke-Art dex2oat-hello @('dex2oat:Hello')
+          Invoke-Art dex2oat-bench @('dex2oat:Bench')
+          Invoke-Art hello-aot @('--mode', 'aot', 'Hello')
+          Invoke-Art bench-aot @('--mode', 'aot', 'Bench')
 
       - name: Summary
         if: always()
