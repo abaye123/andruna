@@ -1,0 +1,13 @@
+<Project>
+  <!-- Shared settings for every project under ui/. -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Version>0.1.0</Version>
+    <Company>Andruna</Company>
+    <Product>Andruna</Product>
+    <Copyright>Andruna contributors</Copyright>
+  </PropertyGroup>
+</Project>

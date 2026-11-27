@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="Andruna.Manager.Pages.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:l="using:Andruna.Manager.Localization">
+
+    <ScrollViewer>
+        <StackPanel Padding="36,20,36,36" MaxWidth="1000" HorizontalAlignment="Stretch">
+            <TextBlock Text="{l:Str Key=SettingsTitle}" Style="{StaticResource TitleTextBlockStyle}" />
+
+            <InfoBar Margin="0,16,0,0" IsOpen="{x:Bind Vm.HasSaveError, Mode=OneWay}" Severity="Error" IsClosable="False"
+                     Message="{x:Bind Vm.SaveError, Mode=OneWay}" />
+
+            <TextBlock Text="{l:Str Key=SettingsLanguageHeader}" Style="{StaticResource SectionHeaderStyle}" />
+            <StackPanel Spacing="4">
+                <Border Style="{StaticResource CardStyle}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="&#xF2B7;" FontSize="20" VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock Text="{l:Str Key=SettingsLanguageHeader}" />
+                            <TextBlock Text="{l:Str Key=SettingsLanguageDescription}" Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="2" MinWidth="200" VerticalAlignment="Center"
+                                  SelectedIndex="{x:Bind Vm.LanguageIndex, Mode=TwoWay}"
+                                  AutomationProperties.Name="{l:Str Key=SettingsLanguageHeader}">
+                            <ComboBoxItem Content="{l:Str Key=LanguageSystem}" />
+                            <ComboBoxItem Content="{l:Str Key=LanguageHebrew}" />
+                            <ComboBoxItem Content="{l:Str Key=LanguageEnglish}" />
+                        </ComboBox>
+                    </Grid>
+                </Border>
+                <InfoBar IsOpen="{x:Bind Vm.RestartRequired, Mode=OneWay}" Severity="Informational" IsClosable="False"
+                         Message="{l:Str Key=SettingsRestartMessage}">
+                    <InfoBar.ActionButton>
+                        <Button Content="{l:Str Key=SettingsRestartButton}" Click="OnRestartClick" />
+                    </InfoBar.ActionButton>
+                </InfoBar>
+            </StackPanel>
+
+            <TextBlock Text="{l:Str Key=SettingsThemeHeader}" Style="{StaticResource SectionHeaderStyle}" />
+            <Border Style="{StaticResource CardStyle}">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <FontIcon Glyph="&#xE790;" FontSize="20" VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{l:Str Key=SettingsThemeHeader}" />
+                        <TextBlock Text="{l:Str Key=SettingsThemeDescription}" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <ComboBox Grid.Column="2" MinWidth="200" VerticalAlignment="Center"
+                              SelectedIndex="{x:Bind Vm.ThemeIndex, Mode=TwoWay}"
+                              AutomationProperties.Name="{l:Str Key=SettingsThemeHeader}">
+                        <ComboBoxItem Content="{l:Str Key=ThemeSystem}" />
+                        <ComboBoxItem Content="{l:Str Key=ThemeLight}" />
+                        <ComboBoxItem Content="{l:Str Key=ThemeDark}" />
+                    </ComboBox>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="{l:Str Key=SettingsAboutHeader}" Style="{StaticResource SectionHeaderStyle}" />
+            <Border Style="{StaticResource CardStyle}">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Image Source="ms-appx:///Assets/Andruna.ico" Width="32" Height="32" VerticalAlignment="Top" Margin="0,2,0,0" />
+                    <StackPanel Grid.Column="1" Spacing="2">
+                        <TextBlock Text="{l:Str Key=AppTitle}" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock Text="{x:Bind Vm.VersionText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" IsTextSelectionEnabled="True" />
+                        <TextBlock Text="{x:Bind Vm.ServiceText, Mode=OneWay}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                        <TextBlock Text="{l:Str Key=AboutDescription}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Button Grid.Column="2" VerticalAlignment="Top" Content="{l:Str Key=AboutNoticesButton}"
+                            Click="OnNoticesClick" IsEnabled="{x:Bind NoticesAvailable}" />
+                </Grid>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>
