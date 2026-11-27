@@ -28,6 +28,7 @@ name = "andruna-launch"
 version = "0.1.0"
 dependencies = [
  "andruna-ipc",
+ "andruna-pkg",
  "windows",
 ]
 
