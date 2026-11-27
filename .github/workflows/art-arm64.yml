@@ -207,10 +207,9 @@ jobs:
           ANDRUNA_PROFILE: '1'
         run: |
           $app = "target/aarch64-pc-windows-gnullvm/release/andruna-app.exe"
-          foreach ($m in 'int', 'aot') {
-            $extra = if ($m -eq 'int') { @('--no-boot-image') } else { @() }
-            & $app --art-root out/guest/arm64/art-root --mode $m @extra --classpath out/s1/java/hello.dex Hello *>&1 | Tee-Object -Append out/art-arm64/profile.txt
-          }
+          $root = "out/guest/arm64/art-root"
+          & $app --art-root $root --mode int --no-boot-image --classpath out/s1/java/hello.dex Hello *>&1 | Tee-Object -Append out/art-arm64/profile.txt
+          & $app --art-root $root --mode aot --classpath out/s1/java/hello.dex Hello *>&1 | Tee-Object -Append out/art-arm64/profile.txt
 
       - name: andruna-app tests
         id: apptests

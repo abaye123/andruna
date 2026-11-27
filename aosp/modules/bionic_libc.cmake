@@ -26,6 +26,13 @@ foreach(m
     llvmlibc libscudo gwp_asan)
   bp_object(bp_${m} ${m})
 endforeach()
+# Windows does not enable Top-Byte Ignore for user mode on ARM64. scudo
+# assumes it on arm64 Linux (it writes chunk headers through pointers with
+# a tag in the top byte, even without MTE), so the arm64 build turns that
+# assumption off with scudo's own switch.
+if(BP_ARCH STREQUAL "arm64")
+  target_compile_definitions(bp_libscudo PRIVATE SCUDO_DISABLE_TBI)
+endif()
 bp_object(bp_libstdcxx libstdcxx)
 bp_object(bp_libc_syscalls libc_syscalls GENERATED "syscalls-${BP_ARCH}=${_syscalls}")
 bp_object(bp_libarm_optimized_routines_string libarm_optimized_routines_string)
