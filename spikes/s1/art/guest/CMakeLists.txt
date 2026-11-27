@@ -83,6 +83,9 @@ add_dependencies(dex2oat dex2oat_main libart_dex2oat)
 target_link_libraries(dex2oat PRIVATE
   -Wl,--whole-archive "$<TARGET_FILE:libart_dex2oat>" -Wl,--no-whole-archive
   art_so sigchain_so nativehelper_so base_so log_so ${GUEST_LINK})
-target_link_options(dex2oat PRIVATE -Wl,--export-dynamic-symbol=main)
+# Functions the guest libc shim lacks (getppid, fmod) are bound by the
+# loader at run time, as for dalvikvm.
+target_link_options(dex2oat PRIVATE -Wl,--export-dynamic-symbol=main
+  -Wl,--unresolved-symbols=ignore-all)
 
 include(natives.cmake)

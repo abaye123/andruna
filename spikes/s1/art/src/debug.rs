@@ -122,6 +122,32 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     #[cfg(target_arch = "x86_64")]
+    if code == 0x8000_0004 && WATCH_ON.load(core::sync::atomic::Ordering::Relaxed) {
+        // A data breakpoint of S1_WATCH_THREADS: report writes that leave
+        // a value no suspend count can have.
+        let dr6 = ctx.Dr6;
+        for i in 0..4 {
+            if dr6 & (1 << i) != 0 {
+                let addr = [ctx.Dr0, ctx.Dr1, ctx.Dr2, ctx.Dr3][i];
+                // SAFETY: a watched, live ART Thread field.
+                let v = unsafe { core::ptr::read_volatile(addr as *const i32) };
+                if !(0..=64).contains(&v) {
+                    let mut e = std::io::stderr().lock();
+                    let _ = writeln!(
+                        e,
+                        "[s1] watch: {addr:#x} = {v:#x} written at {pc:#x} {}",
+                        describe(pc)
+                            .unwrap_or_else(|| "(not in a loaded object: JIT code?)".into())
+                    );
+                    walk(&mut e, pc, fp, sp);
+                    dump_code(&mut e, pc);
+                }
+            }
+        }
+        // SAFETY: the system passes a valid, writable context record.
+        unsafe { (*(*info).ContextRecord).Dr6 = 0 };
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     {
         // SAFETY: the system passes a valid, writable context record.
         let ctx = unsafe { &mut *(*info).ContextRecord };
@@ -160,6 +186,108 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         walk(&mut e, pc, fp, sp);
     }
     EXCEPTION_CONTINUE_SEARCH
+}
+
+static WATCH_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// 32 bytes before `pc` (the writing instruction ends at `pc`).
+#[cfg(target_arch = "x86_64")]
+fn dump_code(e: &mut impl std::io::Write, pc: u64) {
+    let mut line = String::new();
+    for a in (pc - 32..pc + 8).step_by(8) {
+        if let Some((w, _)) = read_frame(a) {
+            for b in w.to_le_bytes() {
+                line.push_str(&format!("{b:02x} "));
+            }
+        }
+    }
+    let _ = writeln!(e, "[s1]   code from {:#x}: {line}", pc - 32);
+}
+
+/// Debug aid (`S1_WATCH_THREADS=1`, x64): hardware write breakpoints on
+/// `tls32_.suspend_count` of the first four ART threads, set on every
+/// thread of the process and refreshed every 20 ms; the exception handler
+/// reports writes of implausible values with the writing PC.
+#[cfg(target_arch = "x86_64")]
+pub fn start_thread_watch() {
+    use windows::Win32::System::Diagnostics::Debug::{
+        CONTEXT, CONTEXT_DEBUG_REGISTERS_AMD64, GetThreadContext, SetThreadContext,
+    };
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+    use windows::Win32::System::Threading::{
+        GetCurrentProcessId, GetCurrentThreadId, OpenThread, ResumeThread, SuspendThread,
+        THREAD_ALL_ACCESS,
+    };
+    if std::env::var_os("S1_WATCH_THREADS").is_none() {
+        return;
+    }
+    WATCH_ON.store(true, core::sync::atomic::Ordering::Relaxed);
+    std::thread::spawn(|| {
+        let me = unsafe { GetCurrentThreadId() };
+        let pid = unsafe { GetCurrentProcessId() };
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let mut addrs = vec![];
+            for (_, tp) in crate::host::threads::GUEST_TPS.lock().unwrap().iter() {
+                if let Some((t, _)) = read_frame(tp + 7 * 8)
+                    && t != 0
+                    && addrs.len() < 4
+                {
+                    addrs.push(t + 4);
+                }
+            }
+            if addrs.is_empty() {
+                continue;
+            }
+            // SAFETY: snapshot and thread APIs on threads of this process;
+            // only the debug registers are changed.
+            unsafe {
+                let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) else {
+                    continue;
+                };
+                let mut te = THREADENTRY32 {
+                    dwSize: core::mem::size_of::<THREADENTRY32>() as u32,
+                    ..Default::default()
+                };
+                let mut ok = Thread32First(snap, &mut te).is_ok();
+                while ok {
+                    if te.th32OwnerProcessID == pid
+                        && te.th32ThreadID != me
+                        && let Ok(h) = OpenThread(THREAD_ALL_ACCESS, false, te.th32ThreadID)
+                    {
+                        SuspendThread(h);
+                        #[repr(C, align(16))]
+                        struct A(CONTEXT);
+                        let mut a = A(CONTEXT {
+                            ContextFlags: CONTEXT_DEBUG_REGISTERS_AMD64,
+                            ..Default::default()
+                        });
+                        if GetThreadContext(h, &mut a.0).is_ok() {
+                            let c = &mut a.0;
+                            let mut dr7 = 0u64;
+                            for (i, addr) in addrs.iter().enumerate() {
+                                match i {
+                                    0 => c.Dr0 = *addr,
+                                    1 => c.Dr1 = *addr,
+                                    2 => c.Dr2 = *addr,
+                                    _ => c.Dr3 = *addr,
+                                }
+                                // Local enable, RW = 01 (writes), LEN = 11 (4 bytes).
+                                dr7 |= 1 << (2 * i);
+                                dr7 |= 0b1101 << (16 + 4 * i);
+                            }
+                            c.Dr7 = dr7;
+                            let _ = SetThreadContext(h, c);
+                        }
+                        ResumeThread(h);
+                    }
+                    ok = Thread32Next(snap, &mut te).is_ok();
+                }
+            }
+        }
+    });
 }
 
 /// For each guest thread: ART's `Thread*` from bionic's
@@ -270,11 +398,12 @@ pub fn print_guest_backtrace() {
 /// Debug aid (`S1_WATCHDOG=<seconds>`): after the delay, prints the guest
 /// frames of every other thread of the process (suspend, read the context,
 /// frame-pointer walk) and exits with 124. For hangs.
-#[cfg(target_arch = "x86_64")]
 pub fn start_watchdog() {
-    use windows::Win32::System::Diagnostics::Debug::{
-        CONTEXT, CONTEXT_FULL_AMD64, GetThreadContext,
-    };
+    #[cfg(target_arch = "x86_64")]
+    use windows::Win32::System::Diagnostics::Debug::CONTEXT_FULL_AMD64 as CONTEXT_FULL;
+    #[cfg(target_arch = "aarch64")]
+    use windows::Win32::System::Diagnostics::Debug::CONTEXT_FULL_ARM64 as CONTEXT_FULL;
+    use windows::Win32::System::Diagnostics::Debug::{CONTEXT, GetThreadContext};
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     };
@@ -325,24 +454,37 @@ pub fn start_watchdog() {
                     #[repr(C, align(16))]
                     struct A(CONTEXT);
                     let mut a = A(CONTEXT {
-                        ContextFlags: CONTEXT_FULL_AMD64,
+                        ContextFlags: CONTEXT_FULL,
                         ..Default::default()
                     });
                     if GetThreadContext(h, &mut a.0).is_ok() {
                         let c = &a.0;
+                        #[cfg(target_arch = "x86_64")]
+                        let (pc, fp, sp) = (c.Rip, c.Rbp, c.Rsp);
+                        #[cfg(target_arch = "aarch64")]
+                        let (pc, fp, sp) = (c.Pc, c.Anonymous.Anonymous.Fp, c.Sp);
                         let _ = writeln!(
                             e,
-                            "[s1] thread {} rip {:#x} {}",
+                            "[s1] thread {} pc {:#x} {}",
                             te.th32ThreadID,
-                            c.Rip,
-                            describe(c.Rip).unwrap_or_else(|| "(host or system)".into())
+                            pc,
+                            describe(pc).unwrap_or_else(|| "(host or system)".into())
                         );
-                        walk(&mut e, c.Rip, c.Rbp, c.Rsp);
+                        #[cfg(target_arch = "aarch64")]
+                        {
+                            let lr = c.Anonymous.Anonymous.Lr;
+                            let _ = writeln!(
+                                e,
+                                "[s1]   lr {lr:#x} {}",
+                                describe(lr).unwrap_or_default()
+                            );
+                        }
+                        walk(&mut e, pc, fp, sp);
                         // Stack scan: guest code addresses on the stack
                         // (when the thread is stopped in host code).
                         let mut n = 0;
-                        let mut p = c.Rsp & !7;
-                        while n < 24 && p < c.Rsp + (256 << 10) {
+                        let mut p = sp & !7;
+                        while n < 24 && p < sp + (256 << 10) {
                             let Some((v, _)) = read_frame(p) else { break };
                             if let Some(d) = describe(v) {
                                 let _ = writeln!(e, "[s1]   stack {:#x}: {v:#x} {d}", p);

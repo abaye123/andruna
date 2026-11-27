@@ -1,15 +1,18 @@
 Keep R11 (TMP) live where an x86_64 Thread access follows in the ANDRUNA build.
 
-Under ANDRUNA, gs() loads the Thread* into R11 (patch 0002). Three code
+Under ANDRUNA, gs() loads the Thread* into R11 (patch 0002). Four code
 generator sites have TMP live across such an access:
 
+- The inline cache check of JIT code passes the InlineCache* to
+  art_quick_update_inline_cache in TMP; gs()->call replaced it with the
+  Thread*, so the stub stored receiver classes into the Thread's first
+  words (tls32_.suspend_count among them). The thread then kept a
+  suspend request no ResumeAll could clear, and every thread that
+  suspended it hung (the deadlock with -Xjitthreshold:0). The call now
+  takes the Thread* through R10, which the stub uses as scratch too.
 - The read barrier slow path of the System.arraycopy intrinsic marks the
-  reference in TMP with art_quick_read_barrier_mark_reg11; gs()->call
-  replaced the reference with the Thread*, so the GC marked the Thread
-  as an object (its lock word is the thread's suspend count) and the
-  copied element became the Thread*. Threads then kept a suspend request
-  that no ResumeAll could clear. The Thread* now goes through
-  src_stop_addr, saved around the call.
+  reference in TMP with art_quick_read_barrier_mark_reg11; the Thread*
+  now goes through src_stop_addr, saved around the call.
 - The class initialization check at method entry compares TMP (the
   initializing thread id) with Thread::tid; TMP is kept on the stack.
 - The method trace fast path keeps the buffer entry in TMP; the Thread*
@@ -18,7 +21,7 @@ generator sites have TMP live across such an access:
 Without ANDRUNA the code is unchanged.
 
 diff --git a/compiler/optimizing/code_generator_x86_64.cc b/compiler/optimizing/code_generator_x86_64.cc
-index 5194af0..e8fe43b 100644
+index 5194af0..256a65e 100644
 --- a/compiler/optimizing/code_generator_x86_64.cc
 +++ b/compiler/optimizing/code_generator_x86_64.cc
 @@ -1810,15 +1810,28 @@ void InstructionCodeGeneratorX86_64::GenerateMethodEntryExitHook(HInstruction* i
@@ -71,6 +74,25 @@ index 5194af0..e8fe43b 100644
      __ j(kEqual, &frame_entry_label_);
      __ Bind(&resolution);
  
+@@ -3292,8 +3316,18 @@ void CodeGeneratorX86_64::MaybeGenerateInlineCacheCheck(HInstruction* instructio
+       // Fast path for a monomorphic cache.
+       __ cmpl(Address(CpuRegister(TMP), InlineCache::ClassesOffset().Int32Value()), klass);
+       __ j(kEqual, &done);
++#if defined(ANDRUNA)
++      // art_quick_update_inline_cache takes the cache in TMP, so the
++      // Thread* for the call goes through R10: a caller-save register that
++      // is neither an argument nor live across the invoke (the stub uses it
++      // as its scratch too).
++      __ gs(CpuRegister(R10))->call(Address::Absolute(
++          GetThreadOffset<kX86_64PointerSize>(kQuickUpdateInlineCache).Int32Value(),
++          /* no_rip= */ true));
++#else
+       GenerateInvokeRuntime(
+           GetThreadOffset<kX86_64PointerSize>(kQuickUpdateInlineCache).Int32Value());
++#endif
+       __ Bind(&done);
+     } else {
+       // This is unexpected, but we don't guarantee stable compilation across
 diff --git a/compiler/optimizing/intrinsics_x86_64.cc b/compiler/optimizing/intrinsics_x86_64.cc
 index 01368ff..d098b25 100644
 --- a/compiler/optimizing/intrinsics_x86_64.cc

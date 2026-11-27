@@ -38,7 +38,12 @@ endif()
 art_operator_out(libart_dex2oat art/dex2oat art/dex2oat/linker/image_writer.h)
 target_include_directories(libart_dex2oat PUBLIC "${_d}" "${AOSP}/art/cmdline")
 target_include_directories(libart_dex2oat PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/overlay/dex2oat/include" "${AOSP}/external/lzma/C")
+  "${CMAKE_CURRENT_SOURCE_DIR}/overlay/dex2oat/include")
+target_sources(libart_dex2oat PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/overlay/dex2oat/src/sha1.c")
+# Only sha1.c sees the LZMA SDK's headers (its Compiler.h would shadow
+# ART's compiler.h on a case-insensitive file system).
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/overlay/dex2oat/src/sha1.c"
+  PROPERTIES INCLUDE_DIRECTORIES "${AOSP}/external/lzma/C")
 target_link_libraries(libart_dex2oat PUBLIC libart_compiler libelffile libprofile)
 
 # The binary's own sources, as an object library the guest build links.

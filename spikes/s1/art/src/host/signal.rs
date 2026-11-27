@@ -347,6 +347,197 @@ pub fn deliver(
     true
 }
 
+// --- delivery (aarch64) -------------------------------------------------------
+
+#[cfg(target_arch = "aarch64")]
+mod a64 {
+    use windows::Win32::System::Diagnostics::Debug::CONTEXT;
+
+    pub const FPSIMD_MAGIC: u32 = 0x4650_8001;
+    pub const ESR_MAGIC: u32 = 0x4553_5201;
+
+    #[repr(C)]
+    pub struct SigInfo {
+        pub signo: i32,
+        pub errno: i32,
+        pub code: i32,
+        pub pad: i32,
+        pub addr: u64,
+        pub rest: [u64; 13],
+    }
+
+    /// bionic's arm64 `ucontext_t` (4560 bytes): flags, link, stack,
+    /// sigset (8 bytes, then padding to 128), then `struct sigcontext`
+    /// (fault_address, x0-x30, sp, pc, pstate, the 4096-byte record area).
+    #[repr(C, align(16))]
+    pub struct UContext {
+        pub flags: u64,
+        pub link: u64,
+        pub stack: [u64; 3],
+        pub sigmask: u64,
+        pub pad: [u8; 128],
+        pub fault_address: u64,
+        pub regs: [u64; 31],
+        pub sp: u64,
+        pub pc: u64,
+        pub pstate: u64,
+        pub pad2: u64,
+        pub reserved: [u8; 4096],
+    }
+
+    #[repr(C)]
+    pub struct FpsimdContext {
+        pub magic: u32,
+        pub size: u32,
+        pub fpsr: u32,
+        pub fpcr: u32,
+        pub vregs: [[u64; 2]; 32],
+    }
+
+    const _: () = {
+        assert!(core::mem::size_of::<SigInfo>() == 128);
+        assert!(core::mem::offset_of!(UContext, sigmask) == 40);
+        assert!(core::mem::offset_of!(UContext, fault_address) == 176);
+        assert!(core::mem::offset_of!(UContext, regs) == 184);
+        assert!(core::mem::offset_of!(UContext, sp) == 432);
+        assert!(core::mem::offset_of!(UContext, pc) == 440);
+        assert!(core::mem::offset_of!(UContext, pstate) == 448);
+        assert!(core::mem::offset_of!(UContext, reserved) == 464);
+        assert!(core::mem::size_of::<UContext>() == 4560);
+        assert!(core::mem::size_of::<FpsimdContext>() == 528);
+    };
+
+    const ESR_EC_DABT_LOW: u64 = 0x24 << 26;
+    const ESR_IL: u64 = 1 << 25;
+    const ESR_WNR: u64 = 1 << 6;
+    const DFSC_TRANSLATION_L3: u64 = 0x07;
+    const DFSC_PERMISSION_L3: u64 = 0x0f;
+
+    /// The CONTEXT as the kernel's signal frame: registers, an
+    /// `fpsimd_context` record and, for data aborts, an `esr_context`.
+    pub fn to_uc(c: &CONTEXT, uc: &mut UContext, fault: Option<(u64, bool, bool)>) {
+        // SAFETY: the X array view of the register union is always valid.
+        uc.regs = unsafe { c.Anonymous.X };
+        uc.sp = c.Sp;
+        uc.pc = c.Pc;
+        uc.pstate = c.Cpsr as u64;
+        let mut fp = FpsimdContext {
+            magic: FPSIMD_MAGIC,
+            size: 528,
+            fpsr: c.Fpsr,
+            fpcr: c.Fpcr,
+            vregs: [[0; 2]; 32],
+        };
+        for (i, v) in c.V.iter().enumerate() {
+            // SAFETY: the Low/High view of a NEON register is always valid.
+            fp.vregs[i] = unsafe { [v.Anonymous.Low, v.Anonymous.High as u64] };
+        }
+        // SAFETY: records at 16-byte aligned offsets inside the zeroed
+        // 4096-byte area; a zero header ends the list.
+        unsafe {
+            core::ptr::write(uc.reserved.as_mut_ptr() as *mut FpsimdContext, fp);
+            if let Some((addr, write, present)) = fault {
+                uc.fault_address = addr;
+                let esr = ESR_EC_DABT_LOW
+                    | ESR_IL
+                    | if write { ESR_WNR } else { 0 }
+                    | if present {
+                        DFSC_PERMISSION_L3
+                    } else {
+                        DFSC_TRANSLATION_L3
+                    };
+                let e = uc.reserved.as_mut_ptr().add(528) as *mut u32;
+                e.write(ESR_MAGIC);
+                e.add(1).write(16);
+                (e.add(2) as *mut u64).write(esr);
+            }
+        }
+    }
+
+    pub fn from_uc(uc: &UContext, c: &mut CONTEXT) {
+        c.Anonymous.X = uc.regs;
+        c.Sp = uc.sp;
+        c.Pc = uc.pc;
+        // Only NZCV can be changed by a handler.
+        c.Cpsr = (c.Cpsr & 0x0fff_ffff) | (uc.pstate as u32 & 0xf000_0000);
+        // SAFETY: the first record of the area, written by to_uc.
+        let fp = unsafe { &*(uc.reserved.as_ptr() as *const FpsimdContext) };
+        if fp.magic == FPSIMD_MAGIC {
+            c.Fpsr = fp.fpsr;
+            c.Fpcr = fp.fpcr;
+            for (i, v) in c.V.iter_mut().enumerate() {
+                v.Anonymous.Low = fp.vregs[i][0];
+                v.Anonymous.High = fp.vregs[i][1] as i64;
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+type Handler = extern "C" fn(i32, *mut a64::SigInfo, *mut a64::UContext);
+
+/// As the x86_64 `deliver`, with bionic's arm64 signal frame. The guest
+/// thread pointer is TPIDR_EL0, which Windows code on the thread leaves
+/// alone, so nothing is restored before the handler runs.
+#[cfg(target_arch = "aarch64")]
+pub fn deliver(
+    code: u32,
+    info: &[usize; 15],
+    nparams: u32,
+    ctx: &mut windows::Win32::System::Diagnostics::Debug::CONTEXT,
+) -> bool {
+    use a64::*;
+    let (sig, si_code, addr, write) = match code {
+        0xC000_0005 | 0xC000_00FD => {
+            let (a, w) = if nparams >= 2 {
+                (info[1] as u64, info[0] == 1)
+            } else {
+                (ctx.Sp, true)
+            };
+            (SIGSEGV, 0, a, w)
+        }
+        0xC000_001D | 0xC000_0096 => (SIGILL, 1, ctx.Pc, false),
+        0xC000_0094 => (SIGFPE, 1, ctx.Pc, false),
+        0xC000_0095 => (SIGFPE, 2, ctx.Pc, false),
+        _ => return false,
+    };
+    let h = HANDLERS[sig as usize].load(Ordering::Acquire);
+    if h <= 1 || h == usize::MAX || FLAGS[sig as usize].load(Ordering::Acquire) & SA_SIGINFO == 0 {
+        return false;
+    }
+    static LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *LOG.get_or_init(|| std::env::var_os("S1_SIGLOG").is_some()) {
+        eprintln!(
+            "[s1] signal {sig} code {code:#x} pc {:#x} {} addr {addr:#x}",
+            ctx.Pc,
+            crate::debug::describe(ctx.Pc).unwrap_or_default()
+        );
+    }
+    let mut si = SigInfo {
+        signo: sig,
+        errno: 0,
+        code: si_code,
+        pad: 0,
+        addr,
+        rest: [0; 13],
+    };
+    let mut fault = None;
+    if sig == SIGSEGV {
+        let present = mapped(addr);
+        si.code = if present { 2 } else { 1 }; // SEGV_ACCERR / SEGV_MAPERR
+        fault = Some((addr, write, present));
+    }
+    // SAFETY: plain data.
+    let mut uc: Box<UContext> = Box::new(unsafe { core::mem::zeroed() });
+    to_uc(ctx, &mut uc, fault);
+    // SAFETY: the guest registered an SA_SIGINFO handler (AAPCS64).
+    let f: Handler = unsafe { core::mem::transmute(h) };
+    f(sig, &mut si, &mut *uc);
+    from_uc(&uc, ctx);
+    DELIVERED.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
 fn mapped(addr: u64) -> bool {
     use windows::Win32::System::Memory::{MEM_COMMIT, MEMORY_BASIC_INFORMATION, VirtualQuery};
     let mut m = MEMORY_BASIC_INFORMATION::default();
