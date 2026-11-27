@@ -2,6 +2,7 @@
 name = "xtask"
 description = "Build orchestration for Andruna: toolchain, AOSP fetch and patch, builds."
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

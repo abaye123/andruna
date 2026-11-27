@@ -20,6 +20,12 @@ redistributable license terms, is allowed as a named exception: it is the
 platform of the management app chosen in ADR 0005 and has no permissive
 alternative. It ships only with the management app.
 
+## Amendment, 2026-11-27 (ADR 0018)
+The project license is chosen: AGPL-3.0-only for Andruna's own code, with
+contributions under a CLA. The dependency policy above does not change:
+third-party code stays permissive, so the project owner keeps the option of
+other licensing terms.
+
 ## Consequences
 - `cargo deny` and a notices file are enforced in CI.
 - Contribution terms (CLA or DCO) must be decided before outside

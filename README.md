@@ -44,9 +44,13 @@ Rust.
 
 ## License
 
-Open source. The exact license is not chosen yet
+Andruna is licensed under the GNU Affero General Public License, version 3
+only (AGPL-3.0-only), with an additional permission for the Windows App SDK.
+See [LICENSING.md](LICENSING.md) and
+[ADR 0018](docs/decisions/0018-project-license-agpl.md). Contributions are
+accepted under the [Contributor License Agreement](CLA.md). Third-party
+dependencies stay permissively licensed
 ([ADR 0006](docs/decisions/0006-open-source-permissive-dependencies.md)).
-Until it is, only permissively licensed dependencies are allowed.
 
 Android is a trademark of Google LLC. Andruna is not affiliated with Google or
 Microsoft.

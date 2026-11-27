@@ -50,5 +50,7 @@
   <ItemGroup>
     <Content Include="Assets\Andruna.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\..\THIRD_PARTY_NOTICES" Link="THIRD_PARTY_NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\..\LICENSING.md" Link="LICENSING.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

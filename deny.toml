@@ -25,8 +25,8 @@ allow = [
 confidence-threshold = 0.9
 
 [licenses.private]
-# Workspace crates are `publish = false` and carry no license field until the
-# project license is chosen.
+# Workspace crates are our own code under AGPL-3.0-only (ADR 0018) and are
+# `publish = false`; the allow list above applies to dependencies only.
 ignore = true
 
 [bans]

@@ -2,6 +2,7 @@
 name = "andruna-linker"
 description = "The ELF loader and dynamic linker for Android ELF code in a Windows process."
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

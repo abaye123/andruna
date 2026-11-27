@@ -9,7 +9,8 @@ exclude = ["spikes/*"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
-# The project license is not chosen yet (ADR 0006), so nothing is published.
+license = "AGPL-3.0-only"
+# Nothing is published to crates.io (ADR 0018).
 publish = false
 
 [workspace.lints.rust]
