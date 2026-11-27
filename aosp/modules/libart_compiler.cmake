@@ -102,7 +102,13 @@ if(ANDRUNA_ARCH STREQUAL "x64")
     utils/x86/jni_macro_assembler_x86.cc
     utils/x86/managed_register_x86.cc)
   target_compile_definitions(libart_compiler PUBLIC ART_ENABLE_CODEGEN_x86 ART_ENABLE_CODEGEN_x86_64)
-else()
+endif()
+# ANDRUNA_ART_CROSS_ARM64 (default off) also builds the arm64 code generator
+# into an x64 build, so that an x64-hosted dex2oat can write arm64 oat files
+# (to tell the arm64 back end and oat writer apart from dex2oat running on
+# arm64). Soong's host dex2oat carries every code generator the same way.
+option(ANDRUNA_ART_CROSS_ARM64 "x64 build: also build the arm64 code generator" OFF)
+if(ANDRUNA_ARCH STREQUAL "arm64" OR ANDRUNA_ART_CROSS_ARM64)
   aosp_sources(libart_compiler "${_d}"
     jni/quick/arm64/calling_convention_arm64.cc
     optimizing/code_generator_arm64.cc

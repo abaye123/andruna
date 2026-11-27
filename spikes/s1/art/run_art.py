@@ -67,17 +67,17 @@ BOOT_IMAGE = "/system/framework/boot.art"
 BOOT_BASE = "0x60000000"
 
 
-def dex2oat_boot_args(bcp):
+def dex2oat_boot_args(bcp, isa):
     """dex2oat options that compile the boot class path into a boot image
     (one image, oat and vdex per jar, as on a device) in
     /system/framework/<isa>."""
-    out = f"/system/framework/{ISA}"
+    out = f"/system/framework/{isa}"
     args = ["--runtime-arg", "-Xms64m", "--runtime-arg", "-Xmx512m"]
     for j in BOOT_JARS:
         args += [f"--dex-file={JAVALIB}/{j}", f"--dex-location={JAVALIB}/{j}"]
     args += [f"--image={out}/boot.art", f"--oat-file={out}/boot.oat",
              f"--oat-location={out}/boot.oat", f"--base={BOOT_BASE}",
-             f"--instruction-set={ISA}", "--compiler-filter=speed",
+             f"--instruction-set={isa}", "--compiler-filter=speed",
              "--image-format=uncompressed", "--android-root=/system",
              "--runtime-arg", f"-Xbootclasspath:{bcp}",
              "--runtime-arg", f"-Xbootclasspath-locations:{bcp}",
@@ -88,15 +88,15 @@ def dex2oat_boot_args(bcp):
     return args
 
 
-def dex2oat_app_args(bcp, dex):
+def dex2oat_app_args(bcp, dex, isa):
     """dex2oat options that compile one test dex file against the boot
     image into /data/local/tmp/oat/<isa>/<name>.odex (where ART looks)."""
     name = Path(dex).stem
     return ["--runtime-arg", "-Xms64m", "--runtime-arg", "-Xmx256m",
             f"--dex-file={dex}", f"--dex-location={dex}",
-            f"--oat-file=/data/local/tmp/oat/{ISA}/{name}.odex",
+            f"--oat-file=/data/local/tmp/oat/{isa}/{name}.odex",
             f"--boot-image={BOOT_IMAGE}", "--class-loader-context=PCL[]",
-            f"--instruction-set={ISA}", "--compiler-filter=speed",
+            f"--instruction-set={isa}", "--compiler-filter=speed",
             "--android-root=/system",
             "--runtime-arg", f"-Xbootclasspath:{bcp}",
             "--runtime-arg", f"-Xbootclasspath-locations:{bcp}",
@@ -108,23 +108,26 @@ def main():
     ap.add_argument("--mode", default="int", choices=["int", "jit", "jit0", "aot"])
     ap.add_argument("--extra", action="append", default=[])
     ap.add_argument("--timeout", type=float, default=300)
+    ap.add_argument("--isa", default=ISA, choices=["x86_64", "arm64"],
+                    help="dex2oat target instruction set (arm64 on x64 needs the guest "
+                    "build with --cross-arm64, S1_GUEST=out/s1art/x64-cross)")
     ap.add_argument("cls", help="test class (Hello, Bench, Faults), or dex2oat-boot, "
                     "or dex2oat:<Class> to compile that class's dex file")
     ap.add_argument("args", nargs="*")
     a = ap.parse_args()
     root = Path(os.environ.get("S8_ROOT", Path(tempfile.gettempdir()) / "andruna-s1-root"))
     setup_root(root)
-    (root / "system" / "framework" / ISA).mkdir(parents=True, exist_ok=True)
-    (root / "data" / "local" / "tmp" / "oat" / ISA).mkdir(parents=True, exist_ok=True)
+    (root / "system" / "framework" / a.isa).mkdir(parents=True, exist_ok=True)
+    (root / "data" / "local" / "tmp" / "oat" / a.isa).mkdir(parents=True, exist_ok=True)
     bcp = ":".join(f"{JAVALIB}/{j}" for j in BOOT_JARS)
     env = dict(os.environ)
     env["S8_ROOT"] = str(root)
     env.setdefault("S8_LIB_PATH", ";".join(str(GUEST / d) for d in ("aosp", "natives-build", "natives-build/manual", "sysroot/usr/lib", "libcxx-install/lib")))
     if a.cls == "dex2oat-boot" or a.cls.startswith("dex2oat:"):
         if a.cls == "dex2oat-boot":
-            dargs = dex2oat_boot_args(bcp)
+            dargs = dex2oat_boot_args(bcp, a.isa)
         else:
-            dargs = dex2oat_app_args(bcp, "/data/local/tmp/" + a.cls.split(":", 1)[1].lower() + ".dex")
+            dargs = dex2oat_app_args(bcp, "/data/local/tmp/" + a.cls.split(":", 1)[1].lower() + ".dex", a.isa)
         cmd = [str(RUNNER), "run", str(GUEST / "aosp" / "dex2oat")] + dargs + a.extra
     else:
         dex = "/data/local/tmp/" + a.cls.lower() + ".dex"
