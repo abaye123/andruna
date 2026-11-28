@@ -128,6 +128,9 @@ def main():
     angle = ROOT / "out" / "angle" / a.arch / "bin"
     if "ANDRUNA_ANGLE_DIR" not in env and angle.is_dir():
         env["ANDRUNA_ANGLE_DIR"] = str(angle)
+    elif "ANDRUNA_ANGLE_DIR" in env:
+        # The DLLs are loaded by absolute path.
+        env["ANDRUNA_ANGLE_DIR"] = str(Path(env["ANDRUNA_ANGLE_DIR"]).resolve())
     print("+", " ".join(cmd), flush=True)
     r = subprocess.run(cmd, env=env)
     produced = root / "data" / "local" / "tmp" / "scene.png"

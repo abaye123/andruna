@@ -189,6 +189,9 @@ jobs:
   arm64:
     name: raster test (arm64)
     needs: build
+    # The arm64 artifact exists when the arm64 build succeeded, whatever the
+    # x64 tests did.
+    if: ${{ !cancelled() }}
     runs-on: windows-11-arm
     timeout-minutes: 60
     defaults:
