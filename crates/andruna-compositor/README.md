@@ -14,7 +14,8 @@ and [ADR 0032](../../docs/decisions/0032-surfaces-and-input-across-processes.md)
 | `config` | Pure: `Configuration`, window bounds, caption inset, letterbox and minimum size from a window's measurements |
 | `input::pointer`, `input::keys`, `input::kcm` | Pure: Windows pointer frames and key messages to `MotionEvent`/`KeyEvent`; key character map overlays from a keyboard layout |
 | `surface` | **The interface for andruna-gles**: `NativeSurface`, the producer side of a surface (an `ANativeWindow`'s swap chain) |
-| `vsync` | `VsyncSource`: compositor clock ticks as vsync events |
+| `producer` | The app process's end of a window channel: surfaces handed over by the compositor (`RemoteSurface`, an `andruna_gles` `WindowTarget` with the `gles` feature), configuration, input ([ADR 0047](../../docs/decisions/0047-surface-handshake-on-the-window-channel.md)) |
+| `vsync` | `VsyncSource`: compositor clock ticks as vsync events, one per refresh period on the frames' target present times |
 | `wire`, `channel` | The input message format and the shared-memory input channel (until `InputChannel` over Binder) |
 | `clock` | Timestamps on `CLOCK_MONOTONIC`, as andruna-lx defines it |
 | `sys` | All `unsafe` Windows API wrappers |
@@ -31,7 +32,11 @@ Opens a task window whose surface a producer in the same process fills
 with a color (a press changes it) and prints every event as logfmt:
 configurations, input with its latency, IME text, keyboard layout, vsync.
 `--fixed` is a non-resizable portrait app (maximize it to see the
-letterbox). A screenshot path ending in `.screen.bmp` captures the screen
+letterbox). `--app <exe> [args...]` makes an app process the producer:
+the host starts `<exe> --compositor <handles> [args...]`, hands it the
+surface and forwards resizes (`--app target\release\andruna-app.exe
+--exec out\gles\x64\guest\gles_demo 100000` shows GL from an app
+process). A screenshot path ending in `.screen.bmp` captures the screen
 instead of the window.
 
 ## Tests

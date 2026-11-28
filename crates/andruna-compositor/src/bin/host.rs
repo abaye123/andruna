@@ -9,12 +9,20 @@
 //! ```text
 //! andruna-compositor-host [--title T] [--size WxH] [--color RRGGBB]
 //!     [--caption-color RRGGBB] [--fixed] [--splash] [--vsync]
-//!     [--seconds N] [--screenshot file.bmp]
+//!     [--seconds N] [--screenshot file.bmp] [--app <exe> [args...]]
 //! ```
+//!
+//! With `--app`, the surface's producer is an app process instead: the
+//! host starts `<exe> --compositor <handles> [args...]` with the window
+//! channel's handles inherited, hands it the surface (the producer module
+//! of the crate documents the handshake) and forwards each configuration
+//! change as a surface resize, as sysd's activity manager will. For GL in
+//! an app process: `--app andruna-app.exe --exec gles_demo 100000`.
 
 use std::time::{Duration, Instant};
 
-use andruna_compositor::compositor::{Compositor, Event, Splash, WindowSpec};
+use andruna_compositor::channel::{DEFAULT_CAPACITY, InputChannel, InputPublisher};
+use andruna_compositor::compositor::{Compositor, Event, Splash, SurfaceId, WindowId, WindowSpec};
 use andruna_compositor::config::{ActivitySpec, RequestedOrientation};
 use andruna_compositor::geom::{Rect, Size};
 use andruna_compositor::input::{ImeEvent, InputEvent};
@@ -32,6 +40,8 @@ struct Args {
     vsync: bool,
     seconds: Option<u64>,
     screenshot: Option<String>,
+    /// The app process command (`--app`).
+    app: Option<Vec<String>>,
 }
 
 fn hex(s: &str) -> Result<u32, String> {
@@ -49,6 +59,7 @@ fn parse() -> Result<Args, String> {
         vsync: false,
         seconds: None,
         screenshot: None,
+        app: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -70,6 +81,14 @@ fn parse() -> Result<Args, String> {
             "--vsync" => a.vsync = true,
             "--seconds" => a.seconds = Some(v()?.parse().map_err(|_| "bad seconds")?),
             "--screenshot" => a.screenshot = Some(v()?),
+            "--app" => {
+                let rest: Vec<String> = it.by_ref().collect();
+                if rest.is_empty() {
+                    return Err("`--app` needs a program".into());
+                }
+                a.app = Some(rest);
+                break;
+            }
             o => return Err(format!("unexpected argument `{o}`")),
         }
     }
@@ -116,6 +135,38 @@ fn save_bmp(path: &str, img: &Image) -> std::io::Result<()> {
     b.extend_from_slice(&[0u8; 24]);
     b.extend_from_slice(&img.bgra);
     std::fs::write(path, b)
+}
+
+/// Starts the app process with the window channel and hands it a surface
+/// of `width`x`height`.
+fn start_app(
+    c: &Compositor,
+    w: WindowId,
+    cmd: &[String],
+    width: u32,
+    height: u32,
+) -> Result<(std::process::Child, SurfaceId), String> {
+    use std::os::windows::io::AsRawHandle;
+    let (comp_end, app_end) = InputChannel::pair(DEFAULT_CAPACITY).map_err(|e| e.to_string())?;
+    let inherited = app_end.export_inheritable().map_err(|e| e.to_string())?;
+    let child = std::process::Command::new(&cmd[0])
+        .arg("--compositor")
+        .arg(inherited.values.to_arg())
+        .args(&cmd[1..])
+        .spawn()
+        .map_err(|e| format!("{}: {e}", cmd[0]))?;
+    drop(inherited);
+    drop(app_end);
+    c.attach_input(w, InputPublisher::new(comp_end))
+        .map_err(|e| e.to_string())?;
+    let (sid, h) = c
+        .create_surface(w, 0, Rect::new(0, 0, width as i32, height as i32))
+        .map_err(|e| e.to_string())?;
+    // SAFETY: the host's own copy of the handle; the app gets another.
+    drop(unsafe { andruna_compositor::sys::shm::Handle::from_raw(h.handle) });
+    c.offer_surface(w, sid, Some(child.as_raw_handle() as usize))
+        .map_err(|e| e.to_string())?;
+    Ok((child, sid))
 }
 
 fn main() {
@@ -169,6 +220,8 @@ fn main() {
     let vrx = vs.as_ref().map(|v| v.subscribe());
     let mut shot_due = args.screenshot.clone();
     let mut latencies: Vec<i64> = Vec::new();
+    // `--app`: the app process and its surface.
+    let mut app: Option<(std::process::Child, SurfaceId)> = None;
 
     loop {
         if let Some(s) = args.seconds
@@ -212,6 +265,24 @@ fn main() {
                     layout.scale
                 );
                 let size = cfg.window.bounds.size();
+                if let Some(cmd) = &args.app {
+                    let b = cfg.window.app_bounds;
+                    let (aw, ah) = (b.width().max(1) as u32, b.height().max(1) as u32);
+                    match &app {
+                        None => match start_app(&c, w, cmd, aw, ah) {
+                            Ok(x) => {
+                                println!("event=app_started pid={}", x.0.id());
+                                app = Some(x);
+                            }
+                            Err(e) => {
+                                eprintln!("andruna-compositor-host: --app: {e}");
+                                break;
+                            }
+                        },
+                        Some((_, sid)) => c.resize_surface(w, *sid, aw, ah).unwrap(),
+                    }
+                    continue;
+                }
                 match &mut surface {
                     None => {
                         let (_, h) = c
@@ -330,6 +401,20 @@ fn main() {
             }
             Event::Destroyed { .. } => {
                 println!("event=destroyed");
+                if let Some((mut child, _)) = app.take() {
+                    // The app sees its surface detached and ends.
+                    let end = Instant::now() + Duration::from_secs(10);
+                    while child.try_wait().ok().flatten().is_none() && Instant::now() < end {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    match child.try_wait() {
+                        Ok(Some(s)) => println!("event=app_exited code={:?}", s.code()),
+                        _ => {
+                            let _ = child.kill();
+                            println!("event=app_killed");
+                        }
+                    }
+                }
                 break;
             }
             Event::SurfacePresented {
@@ -342,7 +427,17 @@ fn main() {
                 println!(
                     "event=surface_presented surface={} size={width}x{height} bottom_up={bottom_up}",
                     surface.0
-                )
+                );
+                // `--app`: the screenshot shows the app's first frames.
+                if args.app.is_some()
+                    && let Some(p) = shot_due.take()
+                {
+                    std::thread::sleep(Duration::from_millis(500));
+                    match c.screenshot(w).and_then(|i| save_bmp(&p, &i)) {
+                        Ok(()) => println!("event=screenshot path={p}"),
+                        Err(e) => println!("event=screenshot_failed error=\"{e}\""),
+                    }
+                }
             }
         }
     }
