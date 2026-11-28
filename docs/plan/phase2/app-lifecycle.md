@@ -58,6 +58,18 @@ The view saves 25.7 MiB of private working set and 21 MiB of commit per
 app. The shared part is charged once, to the file cache. The remaining
 commit is ART's heap reservations as lx commits them (see S7).
 
+With the boot class path of current main (core-oj, core-libart,
+core-icu4j, conscrypt, bouncycastle: 5 images, 2026-11-28, same machine,
+loaded), 15 interleaved runs:
+
+| | View mapped by sysd | andruna-app reads the image |
+| --- | ---: | ---: |
+| Image adopted / copied | 35 264 KiB / 0 KiB | - |
+| Start to exit, median [min-max] | 262.1 ms [237.3-331.8] | 293.5 ms [234.9-451.9] |
+| Start to `Running` | 34.9 ms | 33.7 ms |
+| Map | 0.189 ms [0.090-2.202] | - |
+| Idle app: working set / private working set / private commit | 89.3 / 79.0 / 1076.8 MiB | 116.5 / 110.7 / 1102.2 MiB |
+
 From `ANDRUNA_PROFILE` (one run each): `mmap` took 26-28 ms over 656 calls
 with the view and 37-39 ms over 691 calls without it.
 
