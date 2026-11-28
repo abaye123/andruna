@@ -114,6 +114,12 @@ pub fn extrapolate(start: i64, target: i64, period: i64, now: i64) -> (i64, i64,
     (start + n * period, target + n * period, n)
 }
 
+/// Whether a tick `since_last` after the last one belongs to the same
+/// refresh period (less than half a period later).
+pub fn too_soon(since_last: i64, period: i64) -> bool {
+    since_last < period / 2
+}
+
 fn run(shared: Arc<(Mutex<Shared>, Condvar)>) {
     let (m, cv) = &*shared;
     let mut last_ts = i64::MIN;
@@ -135,12 +141,22 @@ fn run(shared: Arc<(Mutex<Shared>, Condvar)>) {
             continue;
         };
         let (now, _) = crate::sys::time::qpc();
-        let (start, target, n) = extrapolate(f.start, f.target, f.period, now);
-        // One event per tick: a new frame's start lands near a tick
-        // already sent.
+        // The grid is the frames' target present times (vblanks): a
+        // frame's start is when DWM began composing it, which is not on
+        // the grid while producers present (on the reference laptop DWM
+        // then creates frames every 0.1 ms or so, all with the same
+        // target). The vsync of a target is one period before it.
+        let base = f.target - f.period;
+        let (start, target, n) = extrapolate(base, f.target, f.period, now);
+        // One event per refresh period: later frames for the same target
+        // land on a tick already sent.
         let period = f.period.max(1);
         let _ = n;
-        if last_ts != i64::MIN && start - last_ts < period / 2 {
+        if last_ts != i64::MIN && too_soon(start - last_ts, period) {
+            // The compositor clock wait returns at once while DWM creates
+            // frames (hundreds of times per refresh on the reference
+            // laptop): sleep until shortly before the next tick.
+            nap(last_ts + period, now);
             continue;
         }
         // Ticks count from the first one, including ticks this thread did
@@ -167,6 +183,17 @@ fn run(shared: Arc<(Mutex<Shared>, Condvar)>) {
         };
         let mut g = m.lock().unwrap();
         g.subscribers.retain(|s| s.send(e.clone()).is_ok());
+        drop(g);
+        nap(start + period, crate::sys::time::qpc().0);
+    }
+}
+
+/// Sleeps until 1 ms before `next` (performance counter units), when that
+/// is more than 1.5 ms away.
+fn nap(next: i64, now: i64) {
+    let left_ns = clock::qpc_duration_ns(next - now);
+    if left_ns > 1_500_000 {
+        std::thread::sleep(Duration::from_nanos((left_ns - 1_000_000) as u64));
     }
 }
 
@@ -202,5 +229,17 @@ mod tests {
             (1000 + 10 * p, 1000 + 11 * p, 10)
         );
         assert_eq!(extrapolate(1000, 1100, 0, 5000), (1000, 1100, 0));
+    }
+
+    #[test]
+    fn one_tick_per_refresh_period() {
+        let p = 83_333;
+        // Frames for the same target are not new ticks.
+        assert!(super::too_soon(0, p));
+        assert!(super::too_soon(41_000, p));
+        // A tick a little early or late, or after missed ticks, is one.
+        assert!(!super::too_soon(80_000, p));
+        assert!(!super::too_soon(p, p));
+        assert!(!super::too_soon(3 * p, p));
     }
 }
