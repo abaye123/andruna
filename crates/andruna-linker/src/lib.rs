@@ -19,8 +19,7 @@
 //! - [`tls`]: thread pointer and TLS modules; [`bridge`]: the
 //!   loader-side bionic state in `ld-android.so`.
 //! - [`host`]: the host symbol table; [`syscall`], [`thread`], [`dl`],
-//!   [`icu`]: the host functions; [`interim`]: system calls
-//!   the loader answers while andruna-lx does not implement them.
+//!   [`icu`]: the host functions.
 //! - [`vdso`]: the clock functions bionic calls without a system call.
 //! - [`process`]: starting a program; [`debug`], [`unwind`]: crash
 //!   reports, debugger registration and Windows unwind tables;
@@ -61,7 +60,6 @@ pub mod guestfs;
 pub mod host;
 pub mod icu;
 pub mod image;
-pub mod interim;
 pub mod linker;
 pub mod logd;
 pub mod object;

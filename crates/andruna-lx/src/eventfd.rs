@@ -18,6 +18,16 @@ const MAX: u64 = u64::MAX - 1;
 pub struct EventFd {
     count: Mutex<u64>,
     semaphore: bool,
+    /// Event generation for edge-triggered epoll.
+    events: core::sync::atomic::AtomicU64,
+}
+
+impl EventFd {
+    fn changed(&self) {
+        self.events
+            .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+        waitq::notify();
+    }
 }
 
 impl FileOps for EventFd {
@@ -37,7 +47,7 @@ impl FileOps for EventFd {
             }
             Ok(None)
         })?;
-        waitq::notify();
+        self.changed();
         copy_to_user(buf, 0, &v.to_ne_bytes())?;
         Ok(8)
     }
@@ -62,7 +72,7 @@ impl FileOps for EventFd {
             }
             Ok(None)
         })?;
-        waitq::notify();
+        self.changed();
         Ok(8)
     }
 
@@ -72,6 +82,10 @@ impl FileOps for EventFd {
 
     fn kind_name(&self) -> &'static str {
         "eventfd"
+    }
+
+    fn poll_generation(&self) -> u64 {
+        self.events.load(core::sync::atomic::Ordering::SeqCst)
     }
 
     fn poll(&self) -> u32 {
@@ -96,6 +110,7 @@ pub fn eventfd2(initval: u32, flags: u32) -> SysResult<i32> {
         Box::new(EventFd {
             count: Mutex::new(u64::from(initval)),
             semaphore: flags & EFD_SEMAPHORE != 0,
+            events: core::sync::atomic::AtomicU64::new(0),
         }),
         O_RDWR | (flags & EFD_NONBLOCK),
     ));

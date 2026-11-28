@@ -47,6 +47,7 @@ as an ADR and listed here.
 | Windows accent color as Android's dynamic color source | Proposed |
 | System property defaults (SDK level, ABI, Andruna's brand, product and device) | Accepted ([ADR 0019](../decisions/0019-system-property-defaults.md)) |
 | File modes stored by lx, initial umask 077, resource limits of the real process | Proposed ([ADR 0020](../decisions/0020-lx-file-modes-and-limits.md)) |
+| Kernel identity (`Linux 6.19.0-andruna`, node `localhost`), estimated load average, Android's `RLIMIT_NICE` | Proposed ([ADR 0039](../decisions/0039-lx-kernel-identity.md)) |
 
 ## Review
 

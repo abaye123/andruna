@@ -16,6 +16,7 @@
 pub mod errno;
 pub mod fcntl;
 pub mod futex;
+pub mod info;
 pub mod mman;
 pub mod poll;
 pub mod signal;

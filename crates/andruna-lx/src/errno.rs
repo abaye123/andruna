@@ -40,6 +40,8 @@ impl Errno {
     pub const EACCES: Self = Self(EACCES);
     pub const EFAULT: Self = Self(EFAULT);
     pub const EBUSY: Self = Self(EBUSY);
+    pub const ETXTBSY: Self = Self(ETXTBSY);
+    pub const EDEADLK: Self = Self(EDEADLK);
     pub const EEXIST: Self = Self(EEXIST);
     pub const ENOTDIR: Self = Self(ENOTDIR);
     pub const EISDIR: Self = Self(EISDIR);
@@ -115,6 +117,8 @@ impl Errno {
             wf::ERROR_FILE_TOO_LARGE => EFBIG,
             wf::ERROR_TOO_MANY_OPEN_FILES => EMFILE,
             wf::ERROR_TOO_MANY_LINKS => EMLINK,
+            // A section view of the file reaches past the new end.
+            wf::ERROR_USER_MAPPED_FILE => ETXTBSY,
             _ => EIO,
         };
         Self(e)

@@ -26,6 +26,9 @@ pub struct RegularFile {
     pos: Mutex<u64>,
     /// The Linux path it was opened by (empty if unknown).
     path: Vec<u8>,
+    /// Handles with execute access for executable mappings, opened again
+    /// from `handle` on first use: (with write access, handle).
+    exec: Mutex<Vec<(bool, OwnedHandle)>>,
 }
 
 impl RegularFile {
@@ -43,6 +46,7 @@ impl RegularFile {
             handle,
             pos: Mutex::new(0),
             path,
+            exec: Mutex::new(Vec::new()),
         }
     }
 
@@ -54,6 +58,54 @@ impl RegularFile {
     /// `h` must be a valid file handle that nothing else closes.
     pub unsafe fn from_raw_handle(h: windows::Win32::Foundation::HANDLE) -> Self {
         Self::new(OwnedHandle::from_raw(h))
+    }
+
+    /// A section of the file for a mapping ([`crate::mem`]): shared
+    /// (`writable` when the description is open for writing) or
+    /// copy-on-write, executable when `exec`. An executable section needs a
+    /// handle with execute access, which is opened once per description.
+    pub fn section(&self, shared: bool, writable: bool, exec: bool) -> SysResult<OwnedHandle> {
+        use windows::Win32::Foundation::{GENERIC_EXECUTE, GENERIC_READ, GENERIC_WRITE};
+        use windows::Win32::System::Memory::{
+            PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_READONLY,
+            PAGE_READWRITE, PAGE_WRITECOPY,
+        };
+        let protect = match (shared, writable, exec) {
+            (false, _, false) => PAGE_WRITECOPY,
+            (false, _, true) => PAGE_EXECUTE_WRITECOPY,
+            (true, false, false) => PAGE_READONLY,
+            (true, false, true) => PAGE_EXECUTE_READ,
+            (true, true, false) => PAGE_READWRITE,
+            (true, true, true) => PAGE_EXECUTE_READWRITE,
+        };
+        if !exec {
+            return crate::sys::section::create(self.handle.raw(), protect);
+        }
+        let write = shared && writable;
+        let mut cache = lock(&self.exec);
+        if let Some((_, h)) = cache.iter().find(|(w, _)| *w == write) {
+            return crate::sys::section::create(h.raw(), protect);
+        }
+        let mut access = GENERIC_READ.0 | GENERIC_EXECUTE.0;
+        if write {
+            access |= GENERIC_WRITE.0;
+        }
+        let h = os::reopen(self.handle.raw(), access)?;
+        let s = crate::sys::section::create(h.raw(), protect)?;
+        cache.push((write, h));
+        Ok(s)
+    }
+
+    /// Writes `buf` at `offset`, ignoring `O_APPEND` (a mapping's pages
+    /// written back to the file).
+    pub fn write_back(&self, buf: UserBuf, offset: u64) -> SysResult<usize> {
+        os::write_at(self.handle.raw(), buf, WriteAt::Offset(offset))
+    }
+
+    /// The file's identity: (volume, file id).
+    pub fn identity(&self) -> SysResult<(u64, u64)> {
+        let i = os::info(self.handle.raw())?;
+        Ok((i.volume, i.file_id))
     }
 
     fn size(&self) -> SysResult<u64> {
@@ -131,8 +183,18 @@ impl FileOps for RegularFile {
         stat_of(&self.handle)
     }
 
+    /// Windows refuses to cut a file below a mapped view; Linux allows it
+    /// (the pages past the new end raise `SIGBUS`). lx then turns its views
+    /// of the file into copies ([`crate::mem::release_views_of`]) and
+    /// truncates.
     fn truncate(&self, len: u64) -> SysResult<()> {
-        os::set_len(self.handle.raw(), len)
+        match os::set_len(self.handle.raw(), len) {
+            Err(Errno::ETXTBSY) => {
+                crate::mem::release_views_of(self.identity()?);
+                os::set_len(self.handle.raw(), len)
+            }
+            r => r,
+        }
     }
 
     /// A handle without write access cannot be flushed on Windows; Linux

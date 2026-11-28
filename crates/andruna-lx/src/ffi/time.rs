@@ -6,7 +6,7 @@
 //! writing (results) one bionic `struct timespec`.
 
 use super::{guard, guard_errno, read_arg, write_arg};
-use crate::errno::SysResult;
+use crate::errno::{Errno, SysResult};
 use crate::linux::time::Timespec;
 use crate::{process, time};
 
@@ -27,22 +27,48 @@ pub(crate) unsafe fn sys_clock_getres(clk: i32, res: *mut Timespec) -> SysResult
     Ok(0)
 }
 
-pub(crate) unsafe fn sys_nanosleep(req: *const Timespec) -> SysResult<i64> {
+pub(crate) unsafe fn sys_nanosleep(req: *const Timespec, rem: *mut Timespec) -> SysResult<i64> {
     // SAFETY: forwarded from the export's contract.
     let r = unsafe { read_arg(req) }?;
-    time::nanosleep(&r)?;
-    // `rem` is written only on EINTR, which cannot happen yet.
-    Ok(0)
+    // SAFETY: as above.
+    unsafe { finish_sleep(time::nanosleep(&r), rem, true) }.map(|()| 0)
 }
 
 pub(crate) unsafe fn sys_clock_nanosleep(
     clk: i32,
     flags: i32,
     req: *const Timespec,
+    rem: *mut Timespec,
 ) -> SysResult<()> {
     // SAFETY: forwarded from the export's contract.
     let r = unsafe { read_arg(req) }?;
-    time::clock_nanosleep(clk, flags, &r)
+    let relative = flags & crate::linux::time::TIMER_ABSTIME == 0;
+    // SAFETY: as above.
+    unsafe { finish_sleep(time::clock_nanosleep(clk, flags, &r), rem, relative) }
+}
+
+/// The result of a sleep: on `EINTR` a relative sleep writes the time left
+/// to `rem` (when it is not NULL).
+///
+/// # Safety
+///
+/// `rem` is NULL or valid for writing a `timespec`.
+unsafe fn finish_sleep(
+    r: Result<(), time::Interrupted>,
+    rem: *mut Timespec,
+    relative: bool,
+) -> SysResult<()> {
+    match r {
+        Ok(()) => Ok(()),
+        Err(time::Interrupted::Signal(left)) => {
+            if relative && !rem.is_null() {
+                // SAFETY: contract.
+                unsafe { write_arg(rem, left) }?;
+            }
+            Err(Errno::EINTR)
+        }
+        Err(time::Interrupted::Error(e)) => Err(e),
+    }
 }
 
 /// `int clock_gettime(clockid_t, struct timespec*)`.
@@ -73,9 +99,9 @@ pub unsafe extern "C" fn clock_getres(clk: i32, res: *mut Timespec) -> i32 {
 ///
 /// See the module documentation.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nanosleep(req: *const Timespec, _rem: *mut Timespec) -> i32 {
+pub unsafe extern "C" fn nanosleep(req: *const Timespec, rem: *mut Timespec) -> i32 {
     // SAFETY: forwarded from this function's contract.
-    guard(|| unsafe { sys_nanosleep(req) }.map(|_| 0))
+    guard(|| unsafe { sys_nanosleep(req, rem) }.map(|_| 0))
 }
 
 /// `int clock_nanosleep(clockid_t, int, const struct timespec*, struct
@@ -89,10 +115,10 @@ pub unsafe extern "C" fn clock_nanosleep(
     clk: i32,
     flags: i32,
     req: *const Timespec,
-    _rem: *mut Timespec,
+    rem: *mut Timespec,
 ) -> i32 {
     // SAFETY: forwarded from this function's contract.
-    guard_errno(|| unsafe { sys_clock_nanosleep(clk, flags, req) })
+    guard_errno(|| unsafe { sys_clock_nanosleep(clk, flags, req, rem) })
 }
 
 /// `int sched_yield(void)`.

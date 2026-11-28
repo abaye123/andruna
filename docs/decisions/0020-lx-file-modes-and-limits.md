@@ -25,7 +25,7 @@ so they are a maintainer decision (compatibility policy).
 - Resource limits describe the real process: `RLIMIT_STACK` is the main
   thread's stack size; `RLIMIT_NOFILE` is lx's descriptor table size
   (32768) and is enforced; `RLIMIT_CORE` is 0 (no core files are written);
-  `RLIMIT_NICE` and `RLIMIT_RTPRIO` are 0 (raised and real-time priorities
+  `RLIMIT_NICE` is 40 since ADR 0039 (it was 0) and `RLIMIT_RTPRIO` is 0 (real-time priorities
   are refused); all other limits are unlimited. Lowering a limit other than
   `RLIMIT_NOFILE` is recorded but not enforced.
 

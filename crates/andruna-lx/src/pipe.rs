@@ -47,6 +47,16 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     ino: u64,
+    /// Event generation for edge-triggered epoll.
+    events: AtomicU64,
+}
+
+impl Shared {
+    /// Reports a state change of the pipe.
+    fn changed(&self) {
+        self.events.fetch_add(1, Ordering::SeqCst);
+        waitq::notify();
+    }
 }
 
 /// One end of a pipe.
@@ -66,7 +76,7 @@ impl Drop for PipeEnd {
                 s.readers -= 1;
             }
         }
-        waitq::notify();
+        self.shared.changed();
     }
 }
 
@@ -137,7 +147,7 @@ impl FileOps for PipeEnd {
             Ok(None)
         })?;
         if n > 0 {
-            waitq::notify();
+            self.shared.changed();
         }
         Ok(n)
     }
@@ -172,7 +182,7 @@ impl FileOps for PipeEnd {
             match r {
                 Ok(n) => {
                     done += n;
-                    waitq::notify();
+                    self.shared.changed();
                     if done == len {
                         return Ok(done);
                     }
@@ -211,6 +221,10 @@ impl FileOps for PipeEnd {
         Some(format!("pipe:[{}]", self.shared.ino).into_bytes())
     }
 
+    fn poll_generation(&self) -> u64 {
+        self.shared.events.load(Ordering::SeqCst)
+    }
+
     fn poll(&self) -> u32 {
         let s = lock(&self.shared.state);
         if self.write {
@@ -247,6 +261,7 @@ pub fn pipe2(flags: u32) -> SysResult<[i32; 2]> {
             writers: 1,
         }),
         ino: next_ino(),
+        events: AtomicU64::new(0),
     });
     let status = flags & O_NONBLOCK;
     let cloexec = flags & O_CLOEXEC != 0;

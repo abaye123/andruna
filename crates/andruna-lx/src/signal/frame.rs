@@ -30,7 +30,7 @@ use windows::Win32::System::Diagnostics::Debug::{
     RtlRestoreContext,
 };
 use windows::Win32::System::Memory::{
-    MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
+    MEM_COMMIT, MEM_IMAGE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
     PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
 };
 
@@ -224,12 +224,26 @@ unsafe fn handle(ep: *mut EXCEPTION_POINTERS) -> bool {
             if code == STATUS_ACCESS_VIOLATION && retry(addr, write) {
                 return true;
             }
-            let present = mapped(addr);
-            Fault {
-                sig: SIGSEGV,
-                code: if present { SEGV_ACCERR } else { SEGV_MAPERR },
-                addr,
-                mem: Some((write, present)),
+            match crate::mem::fault_kind(addr as usize) {
+                // A page of a file mapping past the end of the file.
+                Some(crate::mem::FaultKind::PastEof) => Fault {
+                    sig: SIGBUS,
+                    code: BUS_ADRERR,
+                    addr,
+                    mem: None,
+                },
+                kind => {
+                    let present = match kind {
+                        Some(k) => k == crate::mem::FaultKind::Mapped,
+                        None => mapped(addr),
+                    };
+                    Fault {
+                        sig: SIGSEGV,
+                        code: if present { SEGV_ACCERR } else { SEGV_MAPERR },
+                        addr,
+                        mem: Some((write, present)),
+                    }
+                }
             }
         }
         STATUS_IN_PAGE_ERROR => Fault {
@@ -271,19 +285,28 @@ unsafe fn handle(ep: *mut EXCEPTION_POINTERS) -> bool {
         _ => return false,
     };
     let act = action(fault.sig);
-    if act.handler == SIG_DFL || act.handler == SIG_IGN {
-        // Linux forces the default action for an ignored fault too.
-        return false;
-    }
     let t = current();
     let mask = t.blocked();
-    if mask & sigbit(fault.sig) != 0 {
-        return false;
+    if act.handler == SIG_DFL || act.handler == SIG_IGN || mask & sigbit(fault.sig) != 0 {
+        // Linux forces the default action for an ignored or blocked fault
+        // too: the process ends. Faults in Windows images (host code) are
+        // Windows' to handle (structured exception handlers may expect
+        // them), so they go on to the next handler.
+        if host_code(pc) {
+            return false;
+        }
+        super::terminate_after(fault.sig, ep);
     }
     let info = SigInfo::fault(fault.sig, fault.code, fault.addr);
     let mem = fault.mem.map(|(w, p)| (fault.addr, w, p));
     // SAFETY: `ctx` is the exception context (contract).
     unsafe { setup(ctx, &info, act, mask, mem) }
+}
+
+/// Whether `pc` lies in a Windows image (the host executable or a DLL):
+/// host code. Guest code runs from lx's private memory or file views.
+fn host_code(pc: u64) -> bool {
+    crate::sys::mem::query(pc as usize).is_some_and(|r| r.kind == MEM_IMAGE)
 }
 
 /// An access violation on a page that is accessible now was a transient
@@ -345,14 +368,10 @@ fn accessible(addr: u64, write: bool) -> bool {
     if write { writable } else { readable }
 }
 
-/// Whether `addr` is mapped (`SEGV_ACCERR`) rather than unmapped
-/// (`SEGV_MAPERR`). lx's `PROT_NONE` mappings are reserved, not committed.
+/// Whether `addr`, outside lx's table (or while the table is busy), is
+/// mapped (`SEGV_ACCERR`) rather than unmapped (`SEGV_MAPERR`).
 fn mapped(addr: u64) -> bool {
-    match crate::sys::mem::query(addr as usize) {
-        Some(r) if r.state == MEM_COMMIT => true,
-        Some(r) if r.state == MEM_RESERVE => crate::mem::is_mapped(addr as usize).unwrap_or(false),
-        _ => false,
-    }
+    matches!(crate::sys::mem::query(addr as usize), Some(r) if r.state == MEM_COMMIT)
 }
 
 // ---- queued signals ----------------------------------------------------------

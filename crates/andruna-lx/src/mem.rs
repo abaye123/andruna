@@ -1,4 +1,4 @@
-//! Anonymous memory: `mmap`, `munmap`, `mprotect`, `madvise`.
+//! Memory: `mmap`, `munmap`, `mprotect`, `madvise`, `mremap`, `msync`.
 //!
 //! # Model
 //!
@@ -8,18 +8,25 @@
 //!
 //! - a placeholder (`MEM_RESERVE_PLACEHOLDER`): unmapped from the Linux
 //!   point of view, free for lx to map at 4 KiB granularity;
-//! - a mapping: a private allocation that replaced a placeholder
-//!   (`MEM_REPLACE_PLACEHOLDER`). A `PROT_NONE` mapping that was never made
-//!   accessible is reserved only and charges no commit, as Linux does not
-//!   account `PROT_NONE` private mappings.
+//! - a private allocation that replaced a placeholder
+//!   (`MEM_REPLACE_PLACEHOLDER`): anonymous memory, a file mapping's copy
+//!   ([`file`], where a view is not possible) or the pages of a file
+//!   mapping past the end of the file. A `PROT_NONE` mapping that was never
+//!   made accessible is reserved only and charges no commit, as Linux does
+//!   not account `PROT_NONE` private mappings;
+//! - part of a section view of a file (`MapViewOfFile3` replacing a
+//!   placeholder; see [`file`]): a Linux file mapping, or a *hidden* page
+//!   of a view, which Linux sees as unmapped (`PROT_NONE` in Windows) but
+//!   which stays taken until the whole view is unmapped.
 //!
-//! Each placeholder span is exactly one Windows placeholder, and each mapped
-//! span lies inside one Windows allocation, so every Windows call lx makes
-//! covers ranges Windows accepts. `munmap` of part of a mapping releases that
-//! part back to a placeholder (`MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER`),
-//! which splits the Windows allocation; this was verified on Windows 11
-//! build 26300 (see the tests) and gives true page-granular partial unmaps.
-//! When no mapping is left in a reservation, it is returned to Windows.
+//! Each placeholder span is exactly one Windows placeholder, each private
+//! span lies inside one Windows allocation and each view span inside one
+//! view, so every Windows call lx makes covers ranges Windows accepts.
+//! `munmap` of part of a private allocation releases that part back to a
+//! placeholder (`MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER`), which splits the
+//! Windows allocation; this was verified on Windows 11 build 26300 (see the
+//! tests) and gives true page-granular partial unmaps. When no mapping is
+//! left in a reservation, it is returned to Windows.
 //!
 //! # Deviations from Linux
 //!
@@ -31,36 +38,35 @@
 //!   fails (`ENOMEM`, or `EEXIST` with `MAP_FIXED_NOREPLACE`).
 //! - Writable private mappings are committed when created, so they count
 //!   against the Windows commit limit at once (Linux overcommits).
-//! - `madvise(MADV_DONTNEED)` decommits and recommits the pages. Another
-//!   thread touching them during that window takes an access violation; the
-//!   signal layer waits for the window to close and retries such faults
-//!   ([`DISCARDS_ACTIVE`], [`DISCARDS_DONE`], `crate::signal`).
-//! - File mappings are private memory filled from the file when the
-//!   mapping is made (`pread`). For `MAP_PRIVATE` this is Linux behavior,
-//!   except that later changes to the file are never seen (Linux leaves
-//!   that unspecified) and pages wholly past the end of the file read as
-//!   zero instead of raising `SIGBUS`. A read-only `MAP_SHARED` mapping is
-//!   the same snapshot: writes to the file after the mapping was made are
-//!   not seen, and `mprotect` to `PROT_WRITE` fails with `EACCES`.
-//!   Writable `MAP_SHARED` file mappings fail with `ENODEV` (the error of a
-//!   file system that cannot map files), and shared anonymous mappings
-//!   with `ENOSYS`. Sharing views between processes (`MapViewOfFile3` with
-//!   placeholders, `docs/spec/03-components.md`) is the next step.
+//! - `madvise(MADV_DONTNEED)` decommits and recommits anonymous pages.
+//!   Another thread touching them during that window takes an access
+//!   violation; the signal layer waits for the window to close and retries
+//!   such faults ([`DISCARDS_ACTIVE`], [`DISCARDS_DONE`], `crate::signal`).
+//! - The pages of a file mapping that `munmap` removes from the middle or
+//!   the end of a view stay taken (hidden) until the rest of the view is
+//!   unmapped; a later fixed mapping there first turns the view's other
+//!   pages into copies ([`file`]).
+//! - Shared anonymous mappings fail with `ENOSYS`.
 //! - `MAP_32BIT` returns `ENOMEM` for now (TODO: `MEM_ADDRESS_REQUIREMENTS`).
 
+mod file;
+
 use std::collections::BTreeMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use windows::Win32::System::Memory::{
-    MEM_COMMIT, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_NOACCESS, PAGE_PROTECTION_FLAGS,
-    PAGE_READONLY, PAGE_READWRITE,
+    MEM_COMMIT, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_NOACCESS,
+    PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
 };
 
 use crate::errno::{Errno, SysResult};
+use crate::fd::OpenFile;
 use crate::linux::mman::*;
 use crate::sys::mem as os;
 use crate::util::lock;
+
+pub use file::{msync, release_views_of, sync_all};
 
 /// Windows allocation granularity.
 pub const GRANULARITY: usize = 0x1_0000;
@@ -110,12 +116,35 @@ pub fn page_protection(prot: u32) -> PAGE_PROTECTION_FLAGS {
     }
 }
 
+/// The protection of a view page: copy-on-write for writable private
+/// mappings.
+fn view_protection(prot: u32, shared: bool) -> PAGE_PROTECTION_FLAGS {
+    match page_protection(prot) {
+        p if shared => p,
+        PAGE_READWRITE => PAGE_WRITECOPY,
+        PAGE_EXECUTE_READWRITE => PAGE_EXECUTE_WRITECOPY,
+        p => p,
+    }
+}
+
 fn page_round_up(n: usize) -> Option<usize> {
     n.checked_add(PAGE_SIZE - 1).map(|v| v & !(PAGE_SIZE - 1))
 }
 
 fn is_page_aligned(n: usize) -> bool {
     n.is_multiple_of(PAGE_SIZE)
+}
+
+/// What backs a private allocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Src {
+    /// Anonymous memory.
+    Anon,
+    /// A copy of a file mapping (file id in [`AddressSpace::files`]).
+    Copy(u32),
+    /// Pages of a file mapping wholly past the end of the file: reserved
+    /// and never accessible; an access raises `SIGBUS`.
+    PastEof(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,9 +158,59 @@ enum Kind {
         prot: u32,
         committed: bool,
         /// A read-only shared file mapping: `PROT_WRITE` is refused
-        /// (`EACCES`), since writes would not reach the file.
+        /// (`EACCES`).
         no_write: bool,
+        src: Src,
     },
+    /// Part of the section view starting at `view`.
+    View {
+        view: usize,
+        prot: u32,
+        file: u32,
+        /// Not a Linux mapping any more (unmapped, `PAGE_NOACCESS`).
+        hidden: bool,
+        /// A private page may have been written (made writable once).
+        dirty: bool,
+        /// The section cannot be written (a shared mapping of a read-only
+        /// descriptor): `PROT_WRITE` is refused (`EACCES`).
+        no_write: bool,
+        /// The section was made without execute access.
+        no_exec: bool,
+    },
+}
+
+impl Kind {
+    fn is_placeholder(&self) -> bool {
+        matches!(self, Kind::Placeholder { .. })
+    }
+
+    /// A Linux mapping (not a placeholder or a hidden view page).
+    fn is_mapping(&self) -> bool {
+        match self {
+            Kind::Placeholder { .. } => false,
+            Kind::Mapped { .. } => true,
+            Kind::View { hidden, .. } => !hidden,
+        }
+    }
+
+    fn prot(&self) -> Option<u32> {
+        match self {
+            Kind::Mapped { prot, .. } | Kind::View { prot, .. } if self.is_mapping() => Some(*prot),
+            _ => None,
+        }
+    }
+
+    /// The file a span maps, if any.
+    fn file(&self) -> Option<u32> {
+        match *self {
+            Kind::Mapped {
+                src: Src::Copy(f) | Src::PastEof(f),
+                ..
+            } => Some(f),
+            Kind::View { file, .. } => Some(file),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -154,6 +233,24 @@ enum Piece {
     },
 }
 
+/// The file of one file mapping (`mmap` call): file offset `off0` is at
+/// address `addr0`.
+#[derive(Clone, Debug)]
+struct FileMap {
+    file: Arc<OpenFile>,
+    addr0: usize,
+    off0: u64,
+    shared: bool,
+    /// (volume, file id), to find the views of a file.
+    ident: (u64, u64),
+}
+
+impl FileMap {
+    fn offset(&self, addr: usize) -> u64 {
+        self.off0 + (addr - self.addr0) as u64
+    }
+}
+
 /// The address-space table of one process (see the module documentation).
 #[derive(Debug, Default)]
 pub struct AddressSpace {
@@ -161,6 +258,11 @@ pub struct AddressSpace {
     spans: BTreeMap<usize, Span>,
     /// Reservations, start to end.
     reservations: BTreeMap<usize, usize>,
+    /// Files of file mappings, by id.
+    files: BTreeMap<u32, FileMap>,
+    next_file: u32,
+    /// Section views, start to end (page-rounded).
+    views: BTreeMap<usize, usize>,
 }
 
 static SPACE: Mutex<AddressSpace> = Mutex::new(AddressSpace::new());
@@ -215,8 +317,8 @@ pub fn mmap(
     Ok(a)
 }
 
-/// A file mapping: private memory filled from the file (see the module
-/// documentation).
+/// A file mapping: a section view of the file where Windows allows it,
+/// a copy otherwise ([`file`]).
 fn map_file(
     addr: usize,
     len: usize,
@@ -247,40 +349,10 @@ fn map_file(
     if !file.ops().mappable() {
         return Err(Errno::ENODEV);
     }
-    if shared && prot & PROT_WRITE != 0 {
-        if file.access() != O_RDWR {
-            return Err(Errno::EACCES);
-        }
-        // Writable shared file mappings are not supported yet.
-        return Err(Errno::ENODEV);
+    if shared && prot & PROT_WRITE != 0 && file.access() != O_RDWR {
+        return Err(Errno::EACCES);
     }
-    let anon = (flags & !MAP_TYPE & !MAP_SHARED_VALIDATE) | MAP_PRIVATE | MAP_ANONYMOUS;
-    let start = lock(&SPACE).mmap(addr, len, PROT_READ | PROT_WRITE, anon, -1, 0)?;
-    let size = page_round_up(len).ok_or(Errno::EINVAL)?;
-    let mut done = 0usize;
-    while done < size {
-        // SAFETY: the new mapping is writable and nothing else refers to
-        // it yet.
-        let buf = unsafe { crate::util::UserBuf::new((start + done) as *mut u8, size - done) };
-        match file.pread(buf, offset + done as i64) {
-            Ok(0) => break,
-            Ok(n) => done += n,
-            Err(e) => {
-                let _ = munmap(start, size);
-                return Err(e);
-            }
-        }
-    }
-    let mut s = lock(&SPACE);
-    if prot != PROT_READ | PROT_WRITE {
-        s.mprotect(start, size, prot)?;
-    }
-    if shared {
-        s.split_at(start)?;
-        s.split_at(start + size)?;
-        s.set_no_write(start, start + size);
-    }
-    Ok(start)
+    file::map(file, addr, len, prot, flags, offset as u64, shared)
 }
 
 /// Anonymous memory outside the boot image region, for the parts of a
@@ -344,11 +416,13 @@ pub fn mprotect(addr: usize, len: usize, prot: u32) -> SysResult<()> {
 pub const MREMAP_MAYMOVE: u32 = 1;
 pub const MREMAP_FIXED: u32 = 2;
 
-/// `mremap` on the process address space, for lx's anonymous memory:
-/// shrinking unmaps the tail; growing extends in place when the pages after
-/// the mapping are free, otherwise (with `MREMAP_MAYMOVE`) maps a new range
-/// with the same protection, copies the contents and unmaps the old one.
-/// `MREMAP_FIXED` and `MREMAP_DONTUNMAP` are not supported (`EINVAL`).
+/// `mremap`: shrinking unmaps the tail; growing extends in place when the
+/// pages after the mapping are free (anonymous memory), otherwise (with
+/// `MREMAP_MAYMOVE`) maps a new range with the same protection and
+/// contents and unmaps the old one. A file mapping that grows or moves is
+/// mapped again from its file, with the old range's private changes
+/// copied. `MREMAP_FIXED` and `MREMAP_DONTUNMAP` are not supported
+/// (`EINVAL`).
 pub fn mremap(addr: usize, old_len: usize, new_len: usize, flags: u32) -> SysResult<usize> {
     if flags & !MREMAP_MAYMOVE != 0 || !is_page_aligned(addr) {
         return Err(Errno::EINVAL);
@@ -364,7 +438,7 @@ pub fn mremap(addr: usize, old_len: usize, new_len: usize, flags: u32) -> SysRes
     };
     let mut s = lock(&SPACE);
     if old == 0 {
-        // Duplicating a shared mapping; lx has none.
+        // Duplicating a shared mapping; lx does not.
         return Err(Errno::EINVAL);
     }
     let prot = s.protection_of(addr, old).ok_or(Errno::EFAULT)?;
@@ -373,6 +447,13 @@ pub fn mremap(addr: usize, old_len: usize, new_len: usize, flags: u32) -> SysRes
             s.munmap(addr + new, old - new)?;
         }
         return Ok(addr);
+    }
+    if let Some((fm, shared)) = s.file_of(addr, old) {
+        drop(s);
+        if flags & MREMAP_MAYMOVE == 0 {
+            return Err(Errno::ENOMEM);
+        }
+        return file::remap(fm, shared, addr, old, new, prot);
     }
     let tail = addr.checked_add(old).ok_or(Errno::ENOMEM)?;
     let anon = MAP_PRIVATE | MAP_ANONYMOUS;
@@ -438,7 +519,7 @@ fn clear_names(n: &mut BTreeMap<usize, (usize, Vec<u8>)>, start: usize, end: usi
 }
 
 /// `/proc/self/maps` for lx's mappings: one line per run of pages with
-/// the same protection and name.
+/// the same protection, sharing, file offset and name.
 pub fn maps() -> Vec<u8> {
     // The region lock is taken before (never while holding) the table lock.
     let image = crate::image::mapped_runs();
@@ -451,20 +532,24 @@ pub fn maps() -> Vec<u8> {
             .filter(|(_, (e, _))| *e > a)
             .map(|(_, (_, n))| n.clone())
     };
-    // (start, end, protection, shared, name)
-    type Line = (usize, usize, u32, bool, Option<Vec<u8>>);
+    // (start, end, protection, shared, file offset of start, name)
+    type Line = (usize, usize, u32, bool, Option<u64>, Option<Vec<u8>>);
     let mut lines: Vec<Line> = Vec::new();
-    let mut all: Vec<(usize, usize, u32, bool)> = s
+    // (start, end, protection, file of the span); the boot image region's
+    // runs have no lx file.
+    let mut all: Vec<(usize, usize, u32, Option<&FileMap>)> = s
         .spans
         .iter()
-        .filter_map(|(&start, span)| match span.kind {
-            Kind::Mapped { prot, no_write, .. } => Some((start, span.end, prot, no_write)),
-            Kind::Placeholder { .. } => None,
+        .filter_map(|(&start, span)| {
+            let prot = span.kind.prot()?;
+            let fm = span.kind.file().and_then(|f| s.files.get(&f));
+            Some((start, span.end, prot, fm))
         })
-        .chain(image.into_iter().map(|(a, b, p)| (a, b, p, false)))
+        .chain(image.into_iter().map(|(a, b, p)| (a, b, p, None)))
         .collect();
     all.sort_unstable_by_key(|x| x.0);
-    for (start, span_end, prot, no_write) in all {
+    for (start, span_end, prot, fm) in all {
+        let shared = fm.is_some_and(|f| f.shared);
         // Split at name boundaries inside the span.
         let mut cuts = vec![start, span_end];
         for (&ns, (ne, _)) in names.range(start..span_end) {
@@ -476,21 +561,31 @@ pub fn maps() -> Vec<u8> {
         for w in cuts.windows(2) {
             let (a, b) = (w[0], w[1]);
             let name = name_at(a);
+            let off = fm.map(|f| f.offset(a));
             match lines.last_mut() {
-                Some(l) if l.1 == a && l.2 == prot && l.3 == no_write && l.4 == name => l.1 = b,
-                _ => lines.push((a, b, prot, no_write, name)),
+                Some(l)
+                    if l.1 == a
+                        && l.2 == prot
+                        && l.3 == shared
+                        && l.4.map(|o| o + (a - l.0) as u64) == off
+                        && l.5 == name =>
+                {
+                    l.1 = b
+                }
+                _ => lines.push((a, b, prot, shared, off, name)),
             }
         }
     }
     let mut out = String::new();
-    for (a, b, prot, shared, name) in lines {
+    for (a, b, prot, shared, off, name) in lines {
         let p = |bit: u32, c: char| if prot & bit != 0 { c } else { '-' };
         out.push_str(&format!(
-            "{a:08x}-{b:08x} {}{}{}{} 00000000 00:00 0",
+            "{a:08x}-{b:08x} {}{}{}{} {:08x} 00:00 0",
             p(PROT_READ, 'r'),
             p(PROT_WRITE, 'w'),
             p(PROT_EXEC, 'x'),
             if shared { 's' } else { 'p' },
+            off.unwrap_or(0),
         ));
         if let Some(n) = name {
             out.push_str("                          ");
@@ -501,17 +596,68 @@ pub fn maps() -> Vec<u8> {
     out.into_bytes()
 }
 
-/// Whether lx has a mapping at `addr` (`None` if the table is busy, as it
-/// can be when a fault happens while it is locked).
+/// The table for the signal layer: waits a little for another thread to
+/// release it, but never blocks (the faulting thread may hold it itself).
+fn try_space() -> Option<std::sync::MutexGuard<'static, AddressSpace>> {
+    for _ in 0..1000 {
+        match SPACE.try_lock() {
+            Ok(g) => return Some(g),
+            Err(std::sync::TryLockError::Poisoned(p)) => return Some(p.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => std::thread::yield_now(),
+        }
+    }
+    None
+}
+
+/// How the signal layer reports a fault at an lx address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FaultKind {
+    /// Not mapped (`SEGV_MAPERR`).
+    Unmapped,
+    /// Mapped, without the access (`SEGV_ACCERR`).
+    Mapped,
+    /// A file mapping's page past the end of the file (`SIGBUS`).
+    PastEof,
+}
+
+/// What a fault at `addr` means, if lx owns `addr` (`None` also when the
+/// table is busy, as it can be when a fault happens while it is locked).
+pub fn fault_kind(addr: usize) -> Option<FaultKind> {
+    let s = try_space()?;
+    match s.pieces(addr, addr + 1).first()? {
+        Piece::Own {
+            kind:
+                Kind::Mapped {
+                    src: Src::PastEof(_),
+                    ..
+                },
+            ..
+        } => Some(FaultKind::PastEof),
+        Piece::Own { kind, .. } if kind.is_mapping() => Some(FaultKind::Mapped),
+        Piece::Own { .. } => Some(FaultKind::Unmapped),
+        Piece::Foreign { .. } => None,
+    }
+}
+
+/// Whether lx has a mapping at `addr` (`None` if the table is busy).
 pub fn is_mapped(addr: usize) -> Option<bool> {
-    let s = SPACE.try_lock().ok()?;
+    let s = try_space()?;
     Some(matches!(
         s.pieces(addr, addr + 1).first(),
-        Some(Piece::Own {
-            kind: Kind::Mapped { .. },
-            ..
-        })
+        Some(Piece::Own { kind, .. }) if kind.is_mapping()
     ))
+}
+
+/// Whether every page of `[start, end)` is mapped (for `mincore`): an lx
+/// mapping, or memory lx does not own that is not free (one query per
+/// Windows region, not per page).
+pub fn is_range_mapped(start: usize, end: usize) -> bool {
+    lock(&SPACE).pieces(start, end).iter().all(|p| match p {
+        Piece::Own { kind, .. } => kind.is_mapping(),
+        Piece::Foreign { start, end } => {
+            region_all(*start, *end, |r| r.state.0 != 0x10000 /* MEM_FREE */)
+        }
+    })
 }
 
 /// `madvise` on the process address space.
@@ -534,6 +680,9 @@ impl AddressSpace {
         Self {
             spans: BTreeMap::new(),
             reservations: BTreeMap::new(),
+            files: BTreeMap::new(),
+            next_file: 1,
+            views: BTreeMap::new(),
         }
     }
 
@@ -571,21 +720,30 @@ impl AddressSpace {
         if flags & MAP_HUGETLB != 0 || cfg!(target_arch = "x86_64") && flags & MAP_32BIT != 0 {
             return Err(Errno::ENOMEM);
         }
+        self.map_private(addr, len, prot, flags, Src::Anon)
+    }
 
+    /// Maps `len` (page-rounded) bytes of private memory: at `addr` with
+    /// `MAP_FIXED`/`MAP_FIXED_NOREPLACE`, at the hint when it is free, or
+    /// anywhere.
+    fn map_private(
+        &mut self,
+        addr: usize,
+        len: usize,
+        prot: u32,
+        flags: u32,
+        src: Src,
+    ) -> SysResult<usize> {
         let fixed = flags & (MAP_FIXED | MAP_FIXED_NOREPLACE) != 0;
         if fixed {
-            if !is_page_aligned(addr) {
-                return Err(Errno::EINVAL);
-            }
-            let end = addr.checked_add(len).ok_or(Errno::ENOMEM)?;
-            if end > USER_END {
-                return Err(Errno::ENOMEM);
-            }
-            if addr < MIN_ADDR {
-                return Err(Errno::EPERM);
-            }
+            let end = check_fixed(addr, len)?;
             let noreplace = flags & MAP_FIXED_NOREPLACE != 0;
-            self.map_fixed(addr, end, prot, noreplace)?;
+            self.prepare_fixed(addr, end, noreplace)?;
+            if let Err(e) = self.map_placeholders(addr, end, prot, src) {
+                let _ = self.unmap_range(addr, end);
+                self.collect_reservations(addr, end);
+                return Err(e);
+            }
             return Ok(addr);
         }
 
@@ -594,16 +752,27 @@ impl AddressSpace {
         if hint >= MIN_ADDR
             && let Some(end) = hint.checked_add(len)
             && end <= USER_END
-            && self.map_fixed(hint, end, prot, true).is_ok()
+            && self.prepare_fixed(hint, end, true).is_ok()
         {
-            return Ok(hint);
+            if self.map_placeholders(hint, end, prot, src).is_ok() {
+                return Ok(hint);
+            }
+            let _ = self.unmap_range(hint, end);
+            self.collect_reservations(hint, end);
         }
 
-        let start = match self.find_free(len) {
+        // Mappings of 64 KiB or more start on a 64 KiB boundary, so that
+        // file views can later be mapped into them at matching offsets.
+        let align = if len >= GRANULARITY {
+            GRANULARITY
+        } else {
+            PAGE_SIZE
+        };
+        let start = match self.find_free(len, align) {
             Some(s) => s,
             None => self.new_reservation(None, len.next_multiple_of(GRANULARITY))?,
         };
-        if let Err(e) = self.map_placeholders(start, start + len, prot) {
+        if let Err(e) = self.map_placeholders(start, start + len, prot, src) {
             let _ = self.unmap_range(start, start + len);
             self.collect_reservations(start, start + len);
             return Err(e);
@@ -635,36 +804,90 @@ impl AddressSpace {
             return Err(Errno::EINVAL);
         }
         let (start, end) = check_range(addr, len)?;
-        let pieces = self.require_mapped(start, end)?;
+        let mut pieces = self.require_mapped(start, end)?;
+        let no_write = |k: &Kind| {
+            matches!(
+                k,
+                Kind::Mapped { no_write: true, .. } | Kind::View { no_write: true, .. }
+            )
+        };
         if prot & PROT_WRITE != 0
-            && pieces.iter().any(|p| {
-                matches!(
-                    p,
-                    Piece::Own {
-                        kind: Kind::Mapped { no_write: true, .. },
-                        ..
-                    }
-                )
-            })
+            && pieces
+                .iter()
+                .any(|p| matches!(p, Piece::Own { kind, .. } if no_write(kind)))
         {
             return Err(Errno::EACCES);
+        }
+        if prot & PROT_EXEC != 0 {
+            // A view of a section without execute access cannot become
+            // executable: it becomes a copy first.
+            let views: Vec<usize> = pieces
+                .iter()
+                .filter_map(|p| match p {
+                    Piece::Own {
+                        kind:
+                            Kind::View {
+                                view,
+                                no_exec: true,
+                                ..
+                            },
+                        ..
+                    } => Some(*view),
+                    _ => None,
+                })
+                .collect();
+            if !views.is_empty() {
+                for v in views {
+                    self.materialize(v)?;
+                }
+                pieces = self.require_mapped(start, end)?;
+            }
         }
         let page_prot = page_protection(prot);
         for p in pieces {
             match p {
                 Piece::Own { start, end, kind } => {
-                    let Kind::Mapped { committed, .. } = kind else {
-                        unreachable!("require_mapped returned a placeholder")
-                    };
                     self.split_at(start)?;
                     self.split_at(end)?;
-                    let make_accessible = prot != PROT_NONE && !committed;
-                    if make_accessible {
-                        os::commit(start, end - start, page_prot)?;
-                    } else if committed {
-                        os::protect(start, end - start, page_prot)?;
+                    match kind {
+                        Kind::Mapped {
+                            src: Src::PastEof(_),
+                            ..
+                        } => {}
+                        Kind::Mapped { committed, .. } => {
+                            let make_accessible = prot != PROT_NONE && !committed;
+                            if make_accessible {
+                                os::commit(start, end - start, page_prot)?;
+                            } else if committed {
+                                os::protect(start, end - start, page_prot)?;
+                            }
+                        }
+                        Kind::View { file, .. } => {
+                            let shared = self.files.get(&file).is_some_and(|f| f.shared);
+                            os::protect(start, end - start, view_protection(prot, shared))?;
+                        }
+                        Kind::Placeholder { .. } => {
+                            unreachable!("require_mapped returned a placeholder")
+                        }
                     }
-                    self.set_mapped(start, end, prot, committed || make_accessible);
+                    self.update(start, end, |k| match k {
+                        Kind::Mapped {
+                            prot: p,
+                            committed,
+                            src,
+                            ..
+                        } => {
+                            *p = prot;
+                            if !matches!(src, Src::PastEof(_)) {
+                                *committed |= prot != PROT_NONE;
+                            }
+                        }
+                        Kind::View { prot: p, dirty, .. } => {
+                            *p = prot;
+                            *dirty |= prot & PROT_WRITE != 0;
+                        }
+                        Kind::Placeholder { .. } => {}
+                    });
                 }
                 Piece::Foreign { start, end } => os::protect(start, end - start, page_prot)?,
             }
@@ -686,31 +909,55 @@ impl AddressSpace {
         }
         // Check everything before changing anything.
         if pieces.iter().any(|p| matches!(p, Piece::Foreign { .. })) {
-            // Not lx's anonymous memory; zero-filling it is not possible.
+            // Not lx's memory; zero-filling it is not possible.
+            return Err(Errno::EINVAL);
+        }
+        if advice == MADV_FREE
+            && pieces.iter().any(|p| {
+                !matches!(
+                    p,
+                    Piece::Own {
+                        kind: Kind::Mapped { src: Src::Anon, .. },
+                        ..
+                    }
+                )
+            })
+        {
+            // Linux takes MADV_FREE for private anonymous memory only.
             return Err(Errno::EINVAL);
         }
         for p in pieces {
-            if let Piece::Own {
-                start,
-                end,
-                kind: Kind::Mapped {
-                    prot, committed, ..
-                },
-            } = p
-            {
-                if !committed {
-                    continue;
+            let Piece::Own { start, end, kind } = p else {
+                continue;
+            };
+            match kind {
+                Kind::Mapped {
+                    prot,
+                    committed,
+                    src: Src::Anon,
+                    ..
+                } => {
+                    if !committed {
+                        continue;
+                    }
+                    let _window = DiscardWindow::open();
+                    os::decommit(start, end - start)?;
+                    if prot == PROT_NONE {
+                        // Stays reserved; the next mprotect commits zero
+                        // pages.
+                        self.split_at(start)?;
+                        self.split_at(end)?;
+                        self.update(start, end, |k| {
+                            if let Kind::Mapped { committed, .. } = k {
+                                *committed = false;
+                            }
+                        });
+                    } else {
+                        os::commit(start, end - start, page_protection(prot))?;
+                    }
                 }
-                let _window = DiscardWindow::open();
-                os::decommit(start, end - start)?;
-                if prot == PROT_NONE {
-                    // Stays reserved; the next mprotect commits zero pages.
-                    self.split_at(start)?;
-                    self.split_at(end)?;
-                    self.set_mapped(start, end, prot, false);
-                } else {
-                    os::commit(start, end - start, page_protection(prot))?;
-                }
+                // File pages go back to the file's contents.
+                _ => self.discard_file_pages(start, end, kind)?,
             }
         }
         self.merge_around(start, end);
@@ -720,11 +967,11 @@ impl AddressSpace {
     /// Marks the mapped spans of `[start, end)` as read-only shared file
     /// mappings.
     fn set_no_write(&mut self, start: usize, end: usize) {
-        for (_, span) in self.spans.range_mut(start..end) {
-            if let Kind::Mapped { no_write, .. } = &mut span.kind {
+        self.update(start, end, |k| {
+            if let Kind::Mapped { no_write, .. } = k {
                 *no_write = true;
             }
-        }
+        });
     }
 
     /// Whether `[addr, addr+len)` is entirely mapped by lx, and with what
@@ -733,10 +980,8 @@ impl AddressSpace {
         let mut prot = None;
         for p in self.pieces(addr, addr + len) {
             match p {
-                Piece::Own {
-                    kind: Kind::Mapped { prot: q, .. },
-                    ..
-                } => {
+                Piece::Own { kind, .. } => {
+                    let q = kind.prot()?;
                     if prot.is_some_and(|p| p != q) {
                         return None;
                     }
@@ -748,13 +993,34 @@ impl AddressSpace {
         prot
     }
 
+    /// The file mapping `[addr, addr+len)` belongs to, if it is one file
+    /// mapping (for `mremap`): its file at `addr` and whether it is shared.
+    fn file_of(&self, addr: usize, len: usize) -> Option<(FileMap, bool)> {
+        let first = self.pieces(addr, addr + 1).first().copied()?;
+        let Piece::Own { kind, .. } = first else {
+            return None;
+        };
+        let fm = self.files.get(&kind.file()?)?.clone();
+        let shared = fm.shared;
+        let fm = FileMap {
+            off0: fm.offset(addr),
+            addr0: addr,
+            ..fm
+        };
+        let _ = len;
+        Some((fm, shared))
+    }
+
     // ---- internals -------------------------------------------------------
 
-    /// Maps `[start, end)` with a fixed address. With `noreplace`, fails
-    /// with `EEXIST` if anything is mapped there.
-    fn map_fixed(&mut self, start: usize, end: usize, prot: u32, noreplace: bool) -> SysResult<()> {
+    /// Makes `[start, end)` lx-owned placeholders for a fixed mapping: the
+    /// 64 KiB blocks around free foreign pieces are reserved, existing
+    /// mappings are unmapped, and views with hidden pages in the range
+    /// are turned into copies. With `noreplace`, fails with `EEXIST` if
+    /// anything is mapped there.
+    fn prepare_fixed(&mut self, start: usize, end: usize, noreplace: bool) -> SysResult<()> {
         let occupied = |p: &Piece| match p {
-            Piece::Own { kind, .. } => matches!(kind, Kind::Mapped { .. }),
+            Piece::Own { kind, .. } => !kind.is_placeholder(),
             Piece::Foreign { start, end } => !is_free(*start, *end),
         };
         let pieces = self.pieces(start, end);
@@ -794,23 +1060,34 @@ impl AddressSpace {
 
         // Linux replaces existing mappings in the range.
         self.unmap_range(start, end)?;
-        if let Err(e) = self.map_placeholders(start, end, prot) {
-            let _ = self.unmap_range(start, end);
-            self.collect_reservations(start, end);
-            return Err(e);
+        let hidden: Vec<usize> = self
+            .pieces(start, end)
+            .iter()
+            .filter_map(|p| match p {
+                Piece::Own {
+                    kind: Kind::View { view, .. },
+                    ..
+                } => Some(*view),
+                _ => None,
+            })
+            .collect();
+        for v in dedup(hidden) {
+            self.materialize(v)?;
         }
         Ok(())
     }
 
-    /// Replaces the placeholders that make up `[start, end)` with mappings.
-    fn map_placeholders(&mut self, start: usize, end: usize, prot: u32) -> SysResult<()> {
+    /// Replaces the placeholders that make up `[start, end)` with private
+    /// allocations.
+    fn map_placeholders(&mut self, start: usize, end: usize, prot: u32, src: Src) -> SysResult<()> {
         self.split_at(start)?;
         self.split_at(end)?;
         let keys: Vec<usize> = self.spans.range(start..end).map(|(k, _)| *k).collect();
-        let commit = (prot != PROT_NONE).then(|| page_protection(prot));
+        let commit =
+            (prot != PROT_NONE && !matches!(src, Src::PastEof(_))).then(|| page_protection(prot));
         for s in keys {
             let span = self.spans[&s];
-            debug_assert!(matches!(span.kind, Kind::Placeholder { .. }));
+            debug_assert!(span.kind.is_placeholder());
             os::replace_placeholder(s, span.end - s, commit)?;
             self.spans.insert(
                 s,
@@ -821,6 +1098,7 @@ impl AddressSpace {
                         prot,
                         committed: commit.is_some(),
                         no_write: false,
+                        src,
                     },
                 },
             );
@@ -828,8 +1106,10 @@ impl AddressSpace {
         Ok(())
     }
 
-    /// Turns every mapped span in `[start, end)` back into placeholders.
-    /// Reservations are kept; see [`Self::collect_reservations`].
+    /// Unmaps every mapping in `[start, end)`: private allocations become
+    /// placeholders (shared file copies are written back first), view
+    /// pages become hidden, and views with no Linux mapping left are
+    /// unmapped. Reservations are kept; see [`Self::collect_reservations`].
     fn unmap_range(&mut self, start: usize, end: usize) -> SysResult<()> {
         let first = self
             .spans
@@ -843,34 +1123,109 @@ impl AddressSpace {
         self.split_at(start)?;
         self.split_at(end)?;
         let keys: Vec<usize> = self.spans.range(start..end).map(|(k, _)| *k).collect();
+        let mut files = Vec::new();
+        let mut views = Vec::new();
         for s in keys {
             let span = self.spans[&s];
-            let Kind::Mapped { alloc, .. } = span.kind else {
-                continue;
-            };
-            os::release_to_placeholder(s, span.end - s)?;
-            let reservation = self.reservation_of(s);
-            self.spans.insert(
-                s,
-                Span {
-                    end: span.end,
-                    kind: Kind::Placeholder { reservation },
-                },
-            );
-            // Windows split the allocation: the part after this span is now
-            // an allocation of its own, starting at `span.end`.
-            let mut next = span.end;
-            while let Some(n) = self.spans.get_mut(&next) {
-                match &mut n.kind {
-                    Kind::Mapped { alloc: a, .. } if *a == alloc => {
-                        *a = span.end;
-                        next = n.end;
+            match span.kind {
+                Kind::Placeholder { .. } => {}
+                Kind::Mapped { alloc, src, .. } => {
+                    if let Src::Copy(f) = src {
+                        self.write_back(s, span.end, f);
                     }
-                    _ => break,
+                    if let Src::Copy(f) | Src::PastEof(f) = src {
+                        files.push(f);
+                    }
+                    os::release_to_placeholder(s, span.end - s)?;
+                    let reservation = self.reservation_of(s);
+                    self.spans.insert(
+                        s,
+                        Span {
+                            end: span.end,
+                            kind: Kind::Placeholder { reservation },
+                        },
+                    );
+                    // Windows split the allocation: the part after this
+                    // span is now an allocation of its own, starting at
+                    // `span.end`.
+                    let mut next = span.end;
+                    while let Some(n) = self.spans.get_mut(&next) {
+                        match &mut n.kind {
+                            Kind::Mapped { alloc: a, .. } if *a == alloc => {
+                                *a = span.end;
+                                next = n.end;
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+                Kind::View { view, hidden, .. } => {
+                    if !hidden {
+                        os::protect(s, span.end - s, PAGE_NOACCESS)?;
+                        if let Some(sp) = self.spans.get_mut(&s)
+                            && let Kind::View { hidden, .. } = &mut sp.kind
+                        {
+                            *hidden = true;
+                        }
+                    }
+                    views.push(view);
                 }
             }
         }
+        for v in dedup(views) {
+            if let Some(f) = self.drop_view_if_hidden(v)? {
+                files.push(f);
+            }
+        }
+        self.forget_files(dedup(files));
         Ok(())
+    }
+
+    /// Unmaps the view at `view` if none of its pages is a Linux mapping
+    /// any more; returns its file id then.
+    fn drop_view_if_hidden(&mut self, view: usize) -> SysResult<Option<u32>> {
+        let vend = self.views[&view];
+        let mut file = None;
+        for (_, sp) in self.spans.range(view..vend) {
+            match sp.kind {
+                Kind::View {
+                    hidden: true,
+                    file: f,
+                    ..
+                } => file = Some(f),
+                _ => return Ok(None),
+            }
+        }
+        crate::sys::section::unmap(view)?;
+        self.replace_with_placeholder(view, vend);
+        self.views.remove(&view);
+        Ok(file)
+    }
+
+    /// Records `[start, end)`, now one Windows placeholder, as one
+    /// placeholder span.
+    fn replace_with_placeholder(&mut self, start: usize, end: usize) {
+        let keys: Vec<usize> = self.spans.range(start..end).map(|(k, _)| *k).collect();
+        for k in keys {
+            self.spans.remove(&k);
+        }
+        let reservation = self.reservation_of(start);
+        self.spans.insert(
+            start,
+            Span {
+                end,
+                kind: Kind::Placeholder { reservation },
+            },
+        );
+    }
+
+    /// Drops the files of `ids` that no span refers to any more.
+    fn forget_files(&mut self, ids: Vec<u32>) {
+        for id in ids {
+            if !self.spans.values().any(|s| s.kind.file() == Some(id)) {
+                self.files.remove(&id);
+            }
+        }
     }
 
     /// Returns to Windows every reservation overlapping `[start, end)` that
@@ -888,7 +1243,7 @@ impl AddressSpace {
             let in_use = self
                 .spans
                 .range(r..rend)
-                .any(|(_, s)| matches!(s.kind, Kind::Mapped { .. }));
+                .any(|(_, s)| !s.kind.is_placeholder());
             if !in_use {
                 self.drop_reservation(r);
             }
@@ -934,19 +1289,21 @@ impl AddressSpace {
         *s
     }
 
-    /// First run of adjacent placeholders at least `len` bytes long.
-    fn find_free(&self, len: usize) -> Option<usize> {
-        let mut run: Option<(usize, usize)> = None;
+    /// First run of adjacent placeholders of one reservation with `len`
+    /// bytes from an `align`-aligned address.
+    fn find_free(&self, len: usize, align: usize) -> Option<usize> {
+        let mut run: Option<(usize, usize, usize)> = None;
         for (s, span) in &self.spans {
-            if let Kind::Placeholder { .. } = span.kind {
+            if let Kind::Placeholder { reservation } = span.kind {
                 run = match run {
-                    Some((rs, re)) if re == *s => Some((rs, span.end)),
-                    _ => Some((*s, span.end)),
+                    Some((rs, re, r)) if re == *s && r == reservation => Some((rs, span.end, r)),
+                    _ => Some((*s, span.end, reservation)),
                 };
-                if let Some((rs, re)) = run
-                    && re - rs >= len
-                {
-                    return Some(rs);
+                if let Some((rs, re, _)) = run {
+                    let a = rs.next_multiple_of(align);
+                    if a + len <= re {
+                        return Some(a);
+                    }
                 }
             } else {
                 run = None;
@@ -978,24 +1335,16 @@ impl AddressSpace {
         Ok(())
     }
 
-    /// Sets the attributes of the mapped spans in `[start, end)`, which must
-    /// be span boundaries.
-    fn set_mapped(&mut self, start: usize, end: usize, prot: u32, committed: bool) {
+    /// Changes the kinds of the spans in `[start, end)`, which must be span
+    /// boundaries.
+    fn update(&mut self, start: usize, end: usize, mut f: impl FnMut(&mut Kind)) {
         for (_, span) in self.spans.range_mut(start..end) {
-            if let Kind::Mapped {
-                prot: p,
-                committed: c,
-                ..
-            } = &mut span.kind
-            {
-                *p = prot;
-                *c = committed;
-            }
+            f(&mut span.kind);
         }
     }
 
-    /// Merges equal mapped spans of one allocation around `[start, end)` so
-    /// that repeated `mprotect` calls do not fragment the table.
+    /// Merges equal spans of one allocation or view around `[start, end)`
+    /// so that repeated `mprotect` calls do not fragment the table.
     fn merge_around(&mut self, start: usize, end: usize) {
         let from = self
             .spans
@@ -1010,7 +1359,7 @@ impl AddressSpace {
             };
             if let Some(p) = prev {
                 let ps = self.spans[&p];
-                if ps.end == k && ps.kind == cur.kind && matches!(cur.kind, Kind::Mapped { .. }) {
+                if ps.end == k && ps.kind == cur.kind && !cur.kind.is_placeholder() {
                     self.spans.remove(&k);
                     self.spans.get_mut(&p).expect("span exists").end = cur.end;
                     continue;
@@ -1059,7 +1408,7 @@ impl AddressSpace {
         let pieces = self.pieces(start, end);
         for p in &pieces {
             let ok = match p {
-                Piece::Own { kind, .. } => matches!(kind, Kind::Mapped { .. }),
+                Piece::Own { kind, .. } => kind.is_mapping(),
                 Piece::Foreign { start, end } => is_committed(*start, *end),
             };
             if !ok {
@@ -1068,6 +1417,27 @@ impl AddressSpace {
         }
         Ok(pieces)
     }
+}
+
+fn dedup<T: Ord>(mut v: Vec<T>) -> Vec<T> {
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// Checks a fixed mapping's range and returns its end.
+fn check_fixed(addr: usize, len: usize) -> SysResult<usize> {
+    if !is_page_aligned(addr) {
+        return Err(Errno::EINVAL);
+    }
+    let end = addr.checked_add(len).ok_or(Errno::ENOMEM)?;
+    if end > USER_END {
+        return Err(Errno::ENOMEM);
+    }
+    if addr < MIN_ADDR {
+        return Err(Errno::EPERM);
+    }
+    Ok(end)
 }
 
 /// Validates an `munmap`/`mprotect`/`madvise` range and returns it rounded
@@ -1149,8 +1519,9 @@ mod tests {
         }
         assert_eq!(s.protection_of(a, 3 * PAGE_SIZE), Some(RW));
         s.munmap(a, 3 * PAGE_SIZE).unwrap();
+        // The reservation is returned to Windows. (Its state is not checked:
+        // another test thread may take the range at once.)
         assert!(s.spans.is_empty() && s.reservations.is_empty());
-        assert_eq!(state(a).0, 0x10000, "reservation returned to Windows");
     }
 
     #[test]
@@ -1248,7 +1619,7 @@ mod tests {
             Err(Errno::EEXIST)
         );
         s.munmap(a, 4 * PAGE_SIZE).unwrap();
-        assert_eq!(state(a).0, 0x10000);
+        assert!(s.reservations.is_empty());
 
         // MAP_FIXED into free memory at a page (not 64 KiB) boundary.
         let f = a + 3 * PAGE_SIZE;
@@ -1269,15 +1640,18 @@ mod tests {
     #[test]
     fn hint_is_used_when_free() {
         let mut s = AddressSpace::new();
-        let a = s.mmap(0, PAGE_SIZE, RW, ANON, -1, 0).unwrap();
-        s.munmap(a, PAGE_SIZE).unwrap();
+        // The pages freed stay in this table's reservation (its first pages
+        // are still mapped), so no other thread can take them meanwhile.
+        let a = s.mmap(0, 16 * PAGE_SIZE, RW, ANON, -1, 0).unwrap();
+        s.munmap(a + 4 * PAGE_SIZE, 12 * PAGE_SIZE).unwrap();
         let b = s
-            .mmap(a + 5 * PAGE_SIZE, PAGE_SIZE, RW, ANON, -1, 0)
+            .mmap(a + 9 * PAGE_SIZE, PAGE_SIZE, RW, ANON, -1, 0)
             .unwrap();
-        assert_eq!(b, a + 5 * PAGE_SIZE);
+        assert_eq!(b, a + 9 * PAGE_SIZE);
         // A hint on occupied memory is ignored.
         let c = s.mmap(b, PAGE_SIZE, RW, ANON, -1, 0).unwrap();
         assert_ne!(c, b);
+        s.munmap(a, 4 * PAGE_SIZE).unwrap();
         s.munmap(b, PAGE_SIZE).unwrap();
         s.munmap(c, PAGE_SIZE).unwrap();
         assert!(s.reservations.is_empty());

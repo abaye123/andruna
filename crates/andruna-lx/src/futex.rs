@@ -22,8 +22,16 @@
 //!   `SA_RESTART` (callers in bionic retry).
 //! - `FUTEX_REQUEUE` and `FUTEX_CMP_REQUEUE` wake the waiters to be moved
 //!   instead of moving them ([`requeue`]).
-//! - Bitsets other than `FUTEX_BITSET_MATCH_ANY` and PI operations return
-//!   `ENOSYS`.
+//! - PI futexes (`FUTEX_LOCK_PI`, `FUTEX_LOCK_PI2`, `FUTEX_TRYLOCK_PI`,
+//!   `FUTEX_UNLOCK_PI`) keep Linux's word protocol (owner tid,
+//!   `FUTEX_WAITERS`, `FUTEX_OWNER_DIED`) and mutual exclusion, but no
+//!   priority is inherited: Windows has no way to lend a thread's priority
+//!   to another. Unlocking frees the word and wakes one waiter instead of
+//!   handing the lock to the highest-priority waiter, so a thread that
+//!   arrives then can take it first. A lock wait is not ended by signals
+//!   (Linux restarts it after the handler); `FUTEX_WAIT_REQUEUE_PI` and
+//!   `FUTEX_CMP_REQUEUE_PI` return `ENOSYS`.
+//! - Bitsets other than `FUTEX_BITSET_MATCH_ANY` return `ENOSYS`.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -179,6 +187,84 @@ pub fn wake(addr: usize, n: i32) -> u32 {
     }
 }
 
+/// `FUTEX_LOCK_PI` / `FUTEX_TRYLOCK_PI` (`try_only`): takes the PI futex
+/// `word` for the calling thread.
+pub fn lock_pi(word: &AtomicU32, deadline: Option<Deadline>, try_only: bool) -> SysResult<i64> {
+    let me = crate::process::gettid() as u32;
+    let addr = word.as_ptr() as usize;
+    let mut registered = false;
+    let r = loop {
+        let v = word.load(Ordering::SeqCst);
+        let owner = v & FUTEX_TID_MASK;
+        if owner == 0 {
+            let others = waiters(addr) - u32::from(registered);
+            let mut new = me | (v & FUTEX_OWNER_DIED);
+            if others > 0 {
+                new |= FUTEX_WAITERS;
+            }
+            if word
+                .compare_exchange(v, new, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                break Ok(0);
+            }
+            continue;
+        }
+        if owner == me {
+            break Err(Errno::EDEADLK);
+        }
+        if try_only {
+            break Err(Errno::EAGAIN);
+        }
+        if !crate::sys::thread::is_own_thread(owner) {
+            // The owner is gone and nobody marked the word.
+            break Err(Errno::ESRCH);
+        }
+        if !registered {
+            add_waiter(addr);
+            registered = true;
+        }
+        let want = v | FUTEX_WAITERS;
+        if v != want
+            && word
+                .compare_exchange(v, want, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+        {
+            continue;
+        }
+        let ms = match deadline {
+            None => 1000,
+            Some(d) => match d.remaining_ms() {
+                Ok(Some(ms)) => ms.min(1000),
+                Ok(None) => break Err(Errno::ETIMEDOUT),
+                Err(e) => break Err(e),
+            },
+        };
+        // Bounded, so that an owner that ends without unlocking is noticed.
+        os::wait_on_address(word, want, Some(ms));
+    };
+    if registered {
+        remove_waiter(addr);
+    }
+    r
+}
+
+/// `FUTEX_UNLOCK_PI`: releases `word`, which the calling thread owns, and
+/// wakes a waiter.
+pub fn unlock_pi(word: &AtomicU32) -> SysResult<i64> {
+    let me = crate::process::gettid() as u32;
+    let v = word.load(Ordering::SeqCst);
+    if v & FUTEX_TID_MASK != me {
+        return Err(Errno::EPERM);
+    }
+    word.store(0, Ordering::SeqCst);
+    let addr = word.as_ptr() as usize;
+    if waiters(addr) > 0 {
+        os::wake_one(addr);
+    }
+    Ok(0)
+}
+
 /// The `futex` system call. `word` is `uaddr` as a reference; the caller
 /// checks it for NULL and alignment ([`check_uaddr`]).
 pub fn futex(
@@ -218,6 +304,15 @@ pub fn futex(
             }
             Ok(i64::from(wake(word.as_ptr() as usize, val as i32)))
         }
+        // FUTEX_LOCK_PI's timeout is on CLOCK_REALTIME; FUTEX_LOCK_PI2's on
+        // CLOCK_MONOTONIC unless FUTEX_CLOCK_REALTIME is given.
+        FUTEX_LOCK_PI | FUTEX_LOCK_PI2 => {
+            let rt = realtime || op & FUTEX_CMD_MASK == FUTEX_LOCK_PI;
+            let d = timeout.map(|t| Deadline::absolute(t, rt)).transpose()?;
+            lock_pi(word, d, false)
+        }
+        FUTEX_TRYLOCK_PI => lock_pi(word, None, true),
+        FUTEX_UNLOCK_PI => unlock_pi(word),
         _ => Err(Errno::ENOSYS),
     }
 }
@@ -328,6 +423,53 @@ mod tests {
     use std::time::{Duration, Instant};
 
     const PRIV: i32 = FUTEX_PRIVATE_FLAG;
+
+    #[test]
+    fn pi_lock_protocol() {
+        let word = Arc::new(AtomicU32::new(0));
+        let me = crate::process::gettid() as u32;
+        let op = |o: i32| o | PRIV;
+        assert_eq!(futex(&word, op(FUTEX_LOCK_PI), 0, None, 0), Ok(0));
+        assert_eq!(word.load(Ordering::SeqCst), me);
+        assert_eq!(
+            futex(&word, op(FUTEX_LOCK_PI), 0, None, 0),
+            Err(Errno::EDEADLK)
+        );
+        // Another thread waits; its timeout passes first.
+        let w = word.clone();
+        let t = std::thread::spawn(move || {
+            let past = Timespec::default();
+            let r = futex(&w, op(FUTEX_LOCK_PI), 0, Some(&past), 0);
+            assert_eq!(r, Err(Errno::ETIMEDOUT));
+            assert_eq!(
+                futex(&w, op(FUTEX_TRYLOCK_PI), 0, None, 0),
+                Err(Errno::EAGAIN)
+            );
+            let r = futex(&w, op(FUTEX_LOCK_PI), 0, None, 0);
+            let tid = crate::process::gettid() as u32;
+            (r, w.load(Ordering::SeqCst) & FUTEX_TID_MASK == tid)
+        });
+        // Wait until it marks the word.
+        let start = Instant::now();
+        while word.load(Ordering::SeqCst) & FUTEX_WAITERS == 0 {
+            assert!(start.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(word.load(Ordering::SeqCst) & FUTEX_TID_MASK, me);
+        assert_eq!(futex(&word, op(FUTEX_UNLOCK_PI), 0, None, 0), Ok(0));
+        let (r, owns) = t.join().unwrap();
+        assert_eq!(r, Ok(0));
+        assert!(owns);
+        // Not the owner: EPERM; the owner ended: ESRCH.
+        assert_eq!(
+            futex(&word, op(FUTEX_UNLOCK_PI), 0, None, 0),
+            Err(Errno::EPERM)
+        );
+        assert_eq!(
+            futex(&word, op(FUTEX_LOCK_PI), 0, None, 0),
+            Err(Errno::ESRCH)
+        );
+    }
 
     #[test]
     fn requeue_and_wake_op() {
@@ -447,7 +589,10 @@ mod tests {
             futex(&w, FUTEX_WAKE | FUTEX_CLOCK_REALTIME, 1, None, 0),
             Err(Errno::ENOSYS)
         );
-        assert_eq!(futex(&w, 6 /* LOCK_PI */, 0, None, 0), Err(Errno::ENOSYS));
+        assert_eq!(
+            futex(&w, 11 /* WAIT_REQUEUE_PI */, 0, None, 0),
+            Err(Errno::ENOSYS)
+        );
         let bad = Timespec {
             tv_sec: 0,
             tv_nsec: -1,

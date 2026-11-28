@@ -1,11 +1,10 @@
 # lx conformance
 
-**Status:** 2026-11-27, second phase 1 round of the andruna-lx track
-(branch `phase1-lx-round2`, on `main` after the ART-on-linker merge). The
-phase 1 exit criterion "lx conformance suite green" is measured here with
-the suites of S4 round 2 / S8: libbase's gtest suite and bionic's own tests
-(21 files), both built against real bionic and run through andruna-linker.
-The first round's results follow the second's.
+**Status:** 2026-11-28, third phase 1 round of the andruna-lx track
+(branch `p1-lx-round3`). The phase 1 exit criterion "lx conformance suite
+green" is measured here with the suites of S4 round 2 / S8: libbase's gtest
+suite and bionic's own tests (21 files), both built against real bionic
+and run through andruna-linker. Earlier rounds' results follow the third's.
 
 ## How it is measured
 
@@ -26,6 +25,111 @@ bionic, libc++, libbase and the tests at the pinned AOSP tag), the same
 machine (Intel Core Ultra 7 258V, Windows 11 build 26300, shared with other
 work), and andruna-elf built from `main` at `40d7f82` (before) and from
 this branch (after), release, `x86_64-pc-windows-msvc` host.
+
+## Round 3 results (x64)
+
+Same method and machine as rounds 1 and 2 (loaded by other work during
+the runs). "Before" is andruna-elf built from `main` at `da8ef51`, "after"
+is this branch, both release, `x86_64-pc-windows-gnullvm`; the guest
+objects are the round 2 ones.
+
+| Suite | Before | After |
+| --- | --- | --- |
+| libbase (367 tests) | 324 pass, 27 fail, 16 end the process | 324 pass, 27 fail, 16 end the process |
+| bionic tests (1327 listed, 34 death tests excluded) | 1168 pass, 79 fail, 13 skipped, 28 end the process | **1194 pass**, 68 fail, 13 skipped, 13 end the process |
+
+No test that passed before fails or ends the process after (checked test by
+test). Newly passing, by feature:
+
+- `/proc/version` and `uname` (ADR 0039): `stdio.getc`, `putc`,
+  `fopen64_freopen64`, `fdopen_failures`, `fdopen_add_CLOEXEC`,
+  `fdopen_remove_CLOEXEC`, `freopen_invalid_mode`,
+  `freopen_add_CLOEXEC`, `freopen_remove_CLOEXEC`,
+  `freopen_append_mode_and_ftell`, `fflush_POSIX_2008`,
+  `cantwrite_EBADF`, `fprintf_to_read_only_stream`,
+  `fputc_to_read_only_stream`, `fwrite_to_read_only_stream`, the four
+  `wchar.fwide_*` tests (which ended the process before),
+  `stdlib.ttyname_r_ENOTTY`, `unlockpt_ENOTTY`.
+- `/proc/loadavg` and `sysinfo` loads: `stdlib.getloadavg`.
+- `/proc/sys/kernel/pid_max`: `time.clock_getcpuclockid_ESRCH`.
+- PI futexes: `pthread_mutex_timedlock_pi`, `pthread_mutex_clocklock_pi`,
+  `pthread_mutex_timedlock_monotonic_np_pi`.
+
+libbase is unchanged: its remaining failures are fork, setting properties,
+the test binary outside the guest tree, long link targets and permission
+enforcement (below).
+
+## What lx gained in round 3
+
+- **File mappings are section views** (`MapViewOfFile3` into
+  placeholders) wherever the address and the file offset agree modulo
+  64 KiB, which lx arranges for every mapping without `MAP_FIXED`.
+  `MAP_SHARED` is the file's own pages, coherent with `read`/`write` and
+  other mappings (the read-only snapshot of rounds 1 and 2 is gone);
+  writable shared mappings work, and andruna-linker's interim fallback for
+  them is deleted. `MAP_PRIVATE` is copy-on-write; `MADV_DONTNEED` gives
+  written pages the file's contents again; pages wholly past the end of
+  the file raise `SIGBUS`. Fixed mappings that Windows cannot view
+  (offset and address not congruent modulo 64 KiB, or the view's first
+  block taken) are copies, as before; shared copies are written back on
+  `msync`, `munmap` and exit. Design and deviations:
+  `crates/andruna-lx/src/mem/file.rs`.
+- **Per-process `/proc/<pid>/stat` and `status`**: `NtGetNextThread`,
+  `NtQueryInformationThread` and `NtQueryInformationProcess` instead of a
+  snapshot of every process of the system.
+- **Default signal actions** as on Linux (ADR 0040): terminate and core end
+  the process with `0xE0A00000` plus the Linux wait status, stop suspends
+  the process, an unclaimed fault in guest code ends it at once. The
+  exit-code rule for supervisors is in `crates/andruna-lx/README.md`.
+- `nanosleep`/`clock_nanosleep` end with `EINTR` and the time left;
+  `EPOLLET` reports new events only (pipes, eventfd and timerfd count
+  their own; other objects use the process-wide change count);
+  `FUTEX_LOCK_PI`, `LOCK_PI2`, `TRYLOCK_PI`, `UNLOCK_PI` without priority
+  inheritance.
+- `uname`, `sethostname`, `sysinfo`, `getrusage`, `getpriority`/
+  `setpriority` (nice values on Windows thread priorities, `RLIMIT_NICE`
+  40), `getcpu`, `membarrier`, `mincore` (working-set residency, one query
+  per region), `msync`; `/proc/version`, `/proc/loadavg`,
+  `/proc/sys/kernel/{pid_max,osrelease,ostype,version,hostname}`. The
+  kernel identity is ADR 0039.
+
+## Loader fallbacks made dead and removed (round 3)
+
+`crates/andruna-linker/src/interim.rs` is deleted: `uname`, `getrusage`,
+`sysinfo`, priorities, `getcpu`, `membarrier`, `mincore`, `msync` and the
+writable `MAP_SHARED` write-back are lx's. The loader calls
+`andruna_lx::mem::sync_all` at exit and prints its crash report from lx's
+fatal hook. Verified with both suites above and `cargo test -p
+andruna-app` with `ANDRUNA_REQUIRE_GUEST=1` (9 of 9, ART root with
+Conscrypt). dex2oat writing the boot image through writable shared views
+gives the same `boot.oat` and `.vdex` files as before (`.art` files differ
+between any two runs, also before this round).
+
+## What still fails after round 3, by cause
+
+bionic (68 failing, 13 ending the process):
+
+- Fork, `popen`, `system`, `pthread_atfork_*`, `pthread_key_fork`,
+  `timer_create` (forks), ptys and ttys, `quick_exit`, `_Exit` (about 30).
+- `getdelim`, `getline`, `fgetln` (7): pass alone, fail after
+  `tmpfile_TMPDIR` leaves `TMPDIR` naming a removed directory.
+- `clock_getres` (4): Windows clocks have 100 ns resolution, reported
+  honestly.
+- Time zones (about 10): andruna-elf's temporary guest tree has no tzdata
+  (andruna-app's ART root has it since ADR 0021).
+- `gwp_asan_integration.*` (7) and `android_mallopt.*` (8): properties set
+  at run time, `fork`.
+- `stack_unwinding.unwind_through_signal_frame*` (2), `realpath*` (4),
+  `pthread_mutex_pi_wakeup` (checks the waiter's scheduler state while it
+  waits; lx's PI wait is a bounded `WaitOnAddress` loop),
+  `pthread_setaffinity_np_failure`, `sscanf_ls_n`, `consistent_fpos_t`,
+  `fprintf_failures_7229520`.
+- Ending the process: `malloc.allocation_slack`,
+  `android_mallopt.set_allocation_limit`, `pthread_create__mmap_failures`,
+  `freopen_null_filename_*` (2), `fread_fwrite_int_overflow`,
+  `exit_torture`, `strchr_chk_bounds`, `strrchr_chk_bounds`,
+  `timer_create_EINVAL`, `localtime_rz`,
+  `mktime_z`, `thread_local.dtor_for_main_thread`.
 
 ## Round 2 results (x64)
 
@@ -347,7 +451,7 @@ bionic (115 failing, 30 ending the process), largest groups:
 - Cross-process behavior: properties, shared file mappings, signals, pipes
   and Unix sockets are per process (a socket bound in another process
   cannot be reached).
-- `EPOLLET` is reported level-triggered; sleeps (`nanosleep`) still do not
-  end early with `EINTR`.
+- `EPOLLET` and interruptible sleeps (done in round 3; the bionic suite
+  has no edge-triggered epoll test, the lx unit tests cover them).
 - Timer precision beyond the bionic tests' 500 ms windows.
 - Modes on volumes without extended attributes.

@@ -45,6 +45,7 @@ pub mod sched;
 pub mod signal;
 pub mod socket;
 mod sys;
+pub mod sysinfo;
 pub mod time;
 pub mod timer;
 mod util;
