@@ -94,6 +94,12 @@ commit = "e3bef0ad2e9d4ea38ba3b4b2b59e0514f7025fed"
 purpose = "formatting library used by libbase"
 
 [[project]]
+name = "platform/external/freetype"
+path = "external/freetype"
+commit = "358ad23f2a144ad0f43b0300a252f692a191de1b"
+purpose = "FreeType font rasterizer for Skia (FreeType License, chosen over GPL-2.0)"
+
+[[project]]
 name = "platform/external/google-highway"
 path = "external/google-highway"
 commit = "94b90ab8cb9df9b3719a64751ea2fcb62caa3391"
@@ -112,10 +118,28 @@ commit = "54826e96fc883088ac6cfc80240c094e671d6e24"
 purpose = "GWP-ASan, linked into the guest bionic's malloc"
 
 [[project]]
+name = "platform/external/harfbuzz_ng"
+path = "external/harfbuzz_ng"
+commit = "31e11a7283dce4ffc573fc8d249b3483988f8bde"
+purpose = "HarfBuzz text shaping for Skia and minikin (MIT)"
+
+[[project]]
 name = "platform/external/icu"
 path = "external/icu"
 commit = "00c713278f65a4db343c388f0c4f8501f70387b9"
 purpose = "ICU for libcore (text, locale, time zones)"
+
+[[project]]
+name = "platform/external/libjpeg-turbo"
+path = "external/libjpeg-turbo"
+commit = "a83d12ab3266dae9a9a0ab8f3c1799459d24ed96"
+purpose = "JPEG codec for Skia (IJG and BSD-3-Clause)"
+
+[[project]]
+name = "platform/external/libpng"
+path = "external/libpng"
+commit = "f3997b4b299d808f122ab1d999556d57abf5540d"
+purpose = "PNG codec for Skia (libpng license)"
 
 [[project]]
 name = "platform/external/llvm-libc"
@@ -142,6 +166,12 @@ commit = "15715589eebe155c799ce6fe27005bc8775b86ad"
 purpose = "Scudo, the guest bionic's allocator (Android default)"
 
 [[project]]
+name = "platform/external/skia"
+path = "external/skia"
+commit = "508606366e71a3daa933a4e08bc49b84e387ec18"
+purpose = "Skia 2D graphics library, linked into libhwui (BSD-3-Clause)"
+
+[[project]]
 name = "platform/external/tinyxml2"
 path = "external/tinyxml2"
 commit = "33ba115074c80a720826efffab1937d5b355c3b8"
@@ -152,6 +182,24 @@ name = "platform/external/vixl"
 path = "external/vixl"
 commit = "ce11d32c9cc395fd0fd961e30b1ab56e06fd30dc"
 purpose = "arm64 assembler and disassembler for ART's compiler"
+
+[[project]]
+name = "platform/external/vulkan-headers"
+path = "external/vulkan-headers"
+commit = "ee4343a1f27d9faca189b9ac2c064254e23ba2e2"
+purpose = "Vulkan headers that Skia and libhwui include (Apache-2.0 or MIT)"
+
+[[project]]
+name = "platform/external/webp"
+path = "external/webp"
+commit = "e39d7f63945d02f6e2f8262f57e74a38172e72fd"
+purpose = "WebP codec for Skia (BSD-3-Clause)"
+
+[[project]]
+name = "platform/external/wuffs-mirror-release-c"
+path = "external/wuffs-mirror-release-c"
+commit = "11c7df296d76dc00991111c1aebd9dfb48b8812e"
+purpose = "GIF decoder for Skia (Apache-2.0 or MIT)"
 
 [[project]]
 name = "platform/external/xz-embedded"
@@ -166,10 +214,22 @@ commit = "8731e6760935ad5289fd64c37d28155a0fa289e3"
 purpose = "zlib for libziparchive and libcore"
 
 [[project]]
+name = "platform/frameworks/base"
+path = "frameworks/base"
+commit = "94b4c163b7dfe5ce3607f7bb8456f9573f7de57d"
+purpose = "the Android framework: framework.jar, libandroid_runtime, libandroidfw, framework-res, aapt2"
+
+[[project]]
 name = "platform/frameworks/libs/modules-utils"
 path = "frameworks/libs/modules-utils"
 commit = "a11fa5c814cc3239217ce4d093bfc5c808f73785"
 purpose = "SDK level helpers used by libartbase (android-modules-utils/sdk_level.h)"
+
+[[project]]
+name = "platform/frameworks/minikin"
+path = "frameworks/minikin"
+commit = "915f1232cff2f38be1ed2273769c5ffd00928dff"
+purpose = "minikin text layout, used by libhwui (Apache-2.0)"
 
 [[project]]
 name = "platform/frameworks/native"
