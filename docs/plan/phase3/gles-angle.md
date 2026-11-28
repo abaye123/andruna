@@ -129,6 +129,12 @@ when the two are connected:
   uses the device of ANGLE's default display, so one device serves every
   EGL display of the process. Either works with the same handle.
 
+Connected on branch `p3-gl-in-apps`: see [gl-in-apps.md](gl-in-apps.md)
+(orientation is a per-surface flip reported by the producer; ANGLE's
+default device serves the producer). That work also found and fixed draws
+after the first present not reaching the screen (the window surface is
+bound again after each present).
+
 ## Open points
 
 - Present to photon is not measured end to end; measure it
