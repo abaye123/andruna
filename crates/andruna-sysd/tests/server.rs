@@ -1,6 +1,10 @@
 //! The pipe server, in this test process: the real listener, server,
 //! supervisor and request handling, with a client on the test thread. The
-//! host processes are the real placeholder (`andruna-sysd --host`).
+//! app processes are real (`andruna-app --host` running ART in the
+//! package's AppContainer); the tests that start one skip without the ART
+//! root (see `common`).
+
+mod common;
 
 use std::fs;
 use std::io::{Read, Write};
@@ -12,6 +16,8 @@ use andruna_ipc::proto;
 use andruna_ipc::{
     Client, Endpoint, ErrorCode, PROTOCOL_VERSION, PipeListener, PipeSecurity, Request, Response,
 };
+use andruna_sysd::appcontainer::Salt;
+use andruna_sysd::apps::store::{DatabaseStore, InstalledPackage, Launchable, RecordStore};
 use andruna_sysd::{Activity, Context, Layout, Server, Supervisor};
 
 struct Fixture {
@@ -19,10 +25,21 @@ struct Fixture {
     root: PathBuf,
     ctx: Arc<Context>,
     server: Option<Server>,
+    salts: std::sync::Mutex<Vec<(String, Salt)>>,
 }
 
 impl Fixture {
     fn new(name: &str) -> Self {
+        Self::make(name, false).expect("no app host needed")
+    }
+
+    /// A fixture whose supervisor starts andruna-app with the ART root;
+    /// `None` (skipped) without them.
+    fn with_apps(name: &str) -> Option<Self> {
+        Self::make(name, true)
+    }
+
+    fn make(name: &str, apps: bool) -> Option<Self> {
         let instance = format!("t{}-{name}", std::process::id());
         let root = std::env::temp_dir().join(format!("andruna-sysd-{instance}"));
         let _ = fs::remove_dir_all(&root);
@@ -32,15 +49,25 @@ impl Fixture {
             PipeListener::bind(&endpoint, &PipeSecurity::current_user_only(&endpoint)).unwrap();
         let layout = Layout::new(root.clone());
         let activity = Arc::new(Activity::new(Duration::from_secs(3600)));
-        let supervisor = Arc::new(
-            Supervisor::new(
-                PathBuf::from(env!("CARGO_BIN_EXE_andruna-sysd")),
+        let store = Arc::new(andruna_sysd::open_store(&layout, false).unwrap());
+        let supervisor = if apps {
+            let (art, _) = common::guest()?;
+            let config = common::host_config(&root, &art, true)?;
+            Supervisor::with(
+                config,
                 layout.clone(),
+                Box::new(DatabaseStore::new(
+                    store.clone(),
+                    RecordStore::new(layout.clone()),
+                )),
                 activity.clone(),
             )
-            .unwrap(),
-        );
-        let store = Arc::new(andruna_sysd::open_store(&layout, false).unwrap());
+        } else {
+            // No app host: starts fail before any process is made.
+            let exe = root.join("missing").join("andruna-app.exe");
+            Supervisor::new(exe, layout.clone(), activity.clone())
+        };
+        let supervisor = Arc::new(supervisor.unwrap());
         let ctx = Arc::new(Context {
             layout,
             activity,
@@ -49,12 +76,13 @@ impl Fixture {
             started: Instant::now(),
         });
         let server = Server::spawn(listener, ctx.clone()).unwrap();
-        Self {
+        Some(Self {
             endpoint,
             root,
             ctx,
             server: Some(server),
-        }
+            salts: std::sync::Mutex::new(vec![]),
+        })
     }
 
     fn client(&self) -> Client {
@@ -65,6 +93,19 @@ impl Fixture {
     /// exists) without a database record, for the host tests.
     fn install_dir_only(&self, package: &str) {
         fs::create_dir_all(self.root.join("app").join(package)).unwrap();
+    }
+
+    /// Installs a package whose main is Faults with `args`.
+    fn install_faults(&self, package: &str, args: &[&str]) {
+        let (_, dex) = common::guest().unwrap();
+        let salt = common::install(
+            &self.ctx.layout,
+            package,
+            Some(&dex.join("faults.dex")),
+            "Faults",
+            args,
+        );
+        self.salts.lock().unwrap().push((package.to_string(), salt));
     }
 
     /// Waits until the activity counts reach `want`.
@@ -86,6 +127,9 @@ impl Drop for Fixture {
         self.ctx.supervisor.shutdown();
         if let Some(s) = self.server.take() {
             s.stop();
+        }
+        for (p, salt) in self.salts.lock().unwrap().iter() {
+            let _ = andruna_sysd::appcontainer::uninstall(p, salt);
         }
         let _ = fs::remove_dir_all(&self.root);
     }
@@ -165,8 +209,10 @@ fn start_refusals() {
 
 #[test]
 fn start_focus_and_exit_of_a_host() {
-    let f = Fixture::new("host");
-    f.install_dir_only("com.example.demo");
+    let Some(f) = Fixture::with_apps("host") else {
+        return;
+    };
+    f.install_faults("com.example.demo", &["wait"]);
     let mut c = f.client();
     let start = Request::StartPackage {
         package: "com.example.demo".into(),
@@ -187,32 +233,67 @@ fn start_focus_and_exit_of_a_host() {
         } => assert_eq!(again, pid),
         r => panic!("{r:?}"),
     }
-    // The placeholder shows its window shortly after it starts.
+    // The app runs (in ART) but has no window yet: an honest answer.
     let focus = Request::FocusWindow {
         package: "com.example.demo".into(),
     };
-    let t = Instant::now();
-    loop {
-        match c.request(&focus).unwrap() {
-            Response::Focused => break,
-            Response::Error {
-                code: ErrorCode::NoWindow,
-                ..
-            } if t.elapsed() < Duration::from_secs(10) => {
-                std::thread::sleep(Duration::from_millis(20))
-            }
-            r => panic!("{r:?}"),
-        }
+    match c.request(&focus).unwrap() {
+        Response::Error {
+            code: ErrorCode::NoWindow,
+            ..
+        } => {}
+        r => panic!("{r:?}"),
     }
     f.wait_counts((1, 1));
     // Ending the job ends the host; the supervisor notices.
     f.ctx.supervisor.shutdown();
     f.wait_counts((1, 0));
     assert_eq!(f.ctx.supervisor.host_pid("com.example.demo"), None);
-    // The placeholder logged that it is one.
-    let log = fs::read_to_string(f.root.join("logs").join("host.log")).unwrap();
-    assert!(log.contains("event=placeholder_host"), "{log}");
-    assert!(log.contains("package=com.example.demo"), "{log}");
+}
+
+#[test]
+fn start_without_an_app_host_fails_honestly() {
+    let f = Fixture::new("nohost");
+    f.install_dir_only("com.example.demo");
+    RecordStore::write(
+        &f.ctx.layout,
+        &InstalledPackage {
+            name: "com.example.demo".into(),
+            salt: Salt::generate().unwrap(),
+            launch: Launchable::Framework,
+            mode: "jit".into(),
+            permissions: vec![],
+        },
+    )
+    .unwrap();
+    let mut c = f.client();
+    match c
+        .request(&Request::StartPackage {
+            package: "com.example.demo".into(),
+        })
+        .unwrap()
+    {
+        Response::Error {
+            code: ErrorCode::HostStartFailed,
+            message,
+        } => assert!(message.contains("andruna-app.exe"), "{message}"),
+        r => panic!("{r:?}"),
+    }
+    // Installed without a package record: also an honest failure.
+    f.install_dir_only("com.example.norecord");
+    match c
+        .request(&Request::StartPackage {
+            package: "com.example.norecord".into(),
+        })
+        .unwrap()
+    {
+        Response::Error {
+            code: ErrorCode::HostStartFailed,
+            message,
+        } => assert!(message.contains("record"), "{message}"),
+        r => panic!("{r:?}"),
+    }
+    f.wait_counts((1, 0));
 }
 
 /// Opens the pipe as a plain file to send hand-made frames.
@@ -311,8 +392,10 @@ fn started_pid(r: Response) -> u32 {
 #[test]
 fn a_crashed_host_is_an_event_and_waiters_are_passive() {
     use andruna_ipc::EventKind;
-    let f = Fixture::new("crash");
-    f.install_dir_only("com.example.crash");
+    let Some(f) = Fixture::with_apps("crash") else {
+        return;
+    };
+    f.install_faults("com.example.crash", &["wait"]);
     let mut waiter = f.client();
     let (epoch, next) = match waiter
         .request(&Request::WaitEvents {
@@ -380,8 +463,6 @@ fn a_crashed_host_is_an_event_and_waiters_are_passive() {
         }
         k => panic!("{k:?}"),
     }
-    let log = fs::read_to_string(f.root.join("logs").join("host.log")).unwrap();
-    assert!(log.contains("activity=.Main"), "{log}");
 }
 
 #[test]

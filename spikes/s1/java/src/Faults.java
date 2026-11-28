@@ -17,7 +17,15 @@ public class Faults {
         recurse();
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
+        if (args.length > 0 && args[0].equals("wait")) {
+            System.out.println("faults: waiting");
+            Thread.sleep(600000);
+        }
+        if (args.length > 0 && args[0].equals("uncaught")) {
+            System.out.println("faults: uncaught exception next");
+            System.out.println(read(null));
+        }
         Faults obj = new Faults();
         long sum = 0;
         int npes = 0;

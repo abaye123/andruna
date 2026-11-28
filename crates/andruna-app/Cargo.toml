@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 andruna-binder-device = { path = "../andruna-binder-device" }
+andruna-ipc = { path = "../andruna-ipc" }
 andruna-linker = { path = "../andruna-linker" }
 andruna-lx = { path = "../andruna-lx" }
 

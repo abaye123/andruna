@@ -89,10 +89,22 @@ pub fn args() -> (i32, *const *const u8, *const *const u8) {
     }
 }
 
+static EXIT_HOOK: OnceLock<fn(i32)> = OnceLock::new();
+
+/// Sets a function that [`exit_process`] calls with the status before the
+/// process ends (the app host reports the status to sysd). Only the first
+/// call has an effect.
+pub fn set_exit_hook(f: fn(i32)) {
+    let _ = EXIT_HOOK.set(f);
+}
+
 /// `exit_group`: ends the process.
 pub fn exit_process(code: i32) -> ! {
     use std::io::Write as _;
     crate::interim::flush_all();
+    if let Some(hook) = EXIT_HOOK.get() {
+        hook(code & 0xff);
+    }
     crate::profile::report();
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();

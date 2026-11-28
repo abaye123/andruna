@@ -1,32 +1,37 @@
-//! Host process supervision: start a process for a package, track it, focus
-//! its window, notice when it exits.
+//! Host process supervision: start a package's app process, track it,
+//! focus its window, stop it, notice how it ended.
 //!
-//! **Placeholder.** The host executable is meant to be `andruna-app.exe`,
-//! which does not exist yet. Until it does, sysd starts itself in `--host`
-//! mode ([`crate::host`]), a real process that shows a window saying it is
-//! a placeholder. Supervision (job object, exit tracking, focus, idle
-//! accounting) is the production code and stays when andruna-app replaces
-//! the placeholder. AppContainer creation and the warm host pool are not
-//! implemented (spike S7 decides the pool design).
+//! Each package has at most one process: `andruna-app --host`, created
+//! suspended inside the package's AppContainer and sysd's kill-on-close
+//! job, with the boot image view mapped before it runs ([`crate::apps`],
+//! ADR 0035, ADR 0036). Packages come from a [`PackageStore`]. A process
+//! that ends with a crash (not stopped by sysd) is published as an
+//! `AppCrashed` event with the crash summary.
 
 use std::collections::HashMap;
 use std::io;
-use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
-use andruna_ipc::{ErrorCode, EventKind, is_valid_activity_name, is_valid_package_name};
+use andruna_ipc::{
+    ErrorCode, EventKind, MissingFunction, is_valid_activity_name, is_valid_package_name,
+};
 
 use crate::activity::Activity;
+use crate::apps::bootimage::BootImage;
+use crate::apps::store::{PackageStore, RecordStore};
+use crate::apps::{self, ExitReport, HostConfig, HostProcess, StartContext, StartError};
 use crate::events::Events;
 use crate::sys::{self, Job};
-use crate::{Layout, error, info, packages, warn};
+use crate::{Layout, diagnostics, error, info, warn};
 
 /// Most host processes sysd runs at once.
 pub const MAX_HOSTS: usize = 32;
+
+/// How long a stopped app may take to end before it is killed.
+pub const STOP_GRACE: Duration = Duration::from_secs(2);
 
 /// A failed supervision request: the protocol error code and a message.
 #[derive(Debug, PartialEq, Eq)]
@@ -44,12 +49,27 @@ impl Failure {
     }
 }
 
+/// The boot image section, prepared at the first start.
+enum Boot {
+    Unprepared,
+    Ready(Option<Arc<BootImage>>),
+}
+
 pub struct Supervisor {
-    host_exe: PathBuf,
+    config: HostConfig,
     layout: Layout,
+    store: Box<dyn PackageStore>,
     job: Job,
-    /// Running hosts by package name: the process id.
-    hosts: Mutex<HashMap<String, u32>>,
+    /// Running hosts by package name.
+    hosts: Mutex<HashMap<String, Arc<HostProcess>>>,
+    /// Serializes starts, so a package never gets two processes.
+    starting: Mutex<()>,
+    boot: Mutex<Boot>,
+    /// Runtime files granted to the `andrunaRuntime` capability once.
+    granted: AtomicBool,
+    /// How each package's last process ended.
+    exits: Mutex<HashMap<String, ExitReport>>,
+    exited: Condvar,
     activity: Arc<Activity>,
     /// Crash reports go here.
     events: Arc<Events>,
@@ -58,16 +78,43 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
+    /// A supervisor that starts `host_exe` with the ART root next to it
+    /// (`art\`), packages from the [`RecordStore`] of `layout`.
     pub fn new(host_exe: PathBuf, layout: Layout, activity: Arc<Activity>) -> io::Result<Self> {
+        let dir = host_exe.parent().map(Path::to_path_buf).unwrap_or_default();
+        let config = HostConfig {
+            exe: host_exe,
+            ..HostConfig::beside(&dir)
+        };
+        let store = Box::new(RecordStore::new(layout.clone()));
+        Self::with(config, layout, store, activity)
+    }
+
+    pub fn with(
+        config: HostConfig,
+        layout: Layout,
+        store: Box<dyn PackageStore>,
+        activity: Arc<Activity>,
+    ) -> io::Result<Self> {
         Ok(Self {
-            host_exe,
+            config,
             layout,
+            store,
             job: Job::new()?,
             hosts: Mutex::new(HashMap::new()),
+            starting: Mutex::new(()),
+            boot: Mutex::new(Boot::Unprepared),
+            granted: AtomicBool::new(false),
+            exits: Mutex::new(HashMap::new()),
+            exited: Condvar::new(),
             activity,
             events: Arc::new(Events::new()),
             stopping: AtomicBool::new(false),
         })
+    }
+
+    pub fn config(&self) -> &HostConfig {
+        &self.config
     }
 
     /// The event stream that host crashes are published to.
@@ -81,7 +128,7 @@ impl Supervisor {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .find(|(_, p)| **p == pid)
+            .find(|(_, h)| h.pid == pid)
             .map(|(name, _)| name.clone())
     }
 
@@ -108,6 +155,66 @@ impl Supervisor {
         self.start_with(package, None)
     }
 
+    fn boot_image(&self) -> Option<Arc<BootImage>> {
+        if !self.config.map_boot_image {
+            return None;
+        }
+        let mut g = self.boot.lock().unwrap_or_else(|e| e.into_inner());
+        if let Boot::Ready(b) = &*g {
+            return b.clone();
+        }
+        let t = Instant::now();
+        let b = match BootImage::open(
+            &self.config.art_root,
+            &self.layout.root.join("cache").join("boot-image"),
+        ) {
+            Ok(Some(b)) => {
+                info!(
+                    "boot_image_ready",
+                    base = format!("{:#x}", b.layout.base),
+                    size = b.layout.size,
+                    extents = b.layout.extents.len(),
+                    view_file = b.view_file.display(),
+                    ms = format!("{:.1}", t.elapsed().as_secs_f64() * 1000.0)
+                );
+                Some(Arc::new(b))
+            }
+            Ok(None) => {
+                info!(
+                    "boot_image_absent",
+                    art_root = self.config.art_root.display()
+                );
+                None
+            }
+            Err(e) => {
+                // Apps still run: ART then reads the image files itself.
+                error!("boot_image_failed", error = e);
+                None
+            }
+        };
+        *g = Boot::Ready(b.clone());
+        b
+    }
+
+    /// Lets the containers read the runtime files (idempotent; the
+    /// installer does the same).
+    fn grant_runtime(&self) {
+        if self.granted.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let mut dirs: Vec<PathBuf> = vec![self.config.art_root.clone()];
+        if let Some(d) = self.config.exe.parent()
+            && !self.config.art_root.starts_with(d)
+        {
+            dirs.push(d.to_path_buf());
+        }
+        for d in dirs {
+            if let Err(e) = crate::appcontainer::grant_runtime(&d) {
+                warn!("grant_runtime_failed", dir = d.display(), error = e);
+            }
+        }
+    }
+
     fn start_with(
         self: &Arc<Self>,
         package: &str,
@@ -119,14 +226,8 @@ impl Supervisor {
                 format!("`{package}` is not a valid package name"),
             ));
         }
-        if !packages::is_installed(&self.layout.app_dir(), package) {
-            return Err(Failure::new(
-                ErrorCode::NotInstalled,
-                format!("{package} is not installed"),
-            ));
-        }
-        let mut hosts = self.hosts.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(&pid) = hosts.get(package) {
+        let _starting = self.starting.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(pid) = self.host_pid(package) {
             let focused = sys::focus_process_window(pid);
             info!(
                 "start_package",
@@ -137,101 +238,161 @@ impl Supervisor {
             );
             return Ok((pid, true));
         }
-        if hosts.len() >= MAX_HOSTS {
+        let pkg = match self.store.get(package) {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                return Err(Failure::new(
+                    ErrorCode::NotInstalled,
+                    format!("{package} is not installed"),
+                ));
+            }
+            Err(e) => {
+                error!("package_record_failed", package = package, error = e);
+                return Err(Failure::new(ErrorCode::HostStartFailed, e.to_string()));
+            }
+        };
+        if self.hosts.lock().unwrap_or_else(|e| e.into_inner()).len() >= MAX_HOSTS {
             return Err(Failure::new(
                 ErrorCode::Busy,
                 format!("{MAX_HOSTS} app processes are already running"),
             ));
         }
-        let mut command = Command::new(&self.host_exe);
-        command
-            .arg("--host")
-            .arg(package)
-            .arg("--root")
-            .arg(&self.layout.root);
-        if let Some(a) = activity {
-            command.arg("--activity").arg(a);
-        }
-        let mut child = command
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            // CREATE_NEW_PROCESS_GROUP: console signals of a parent console
-            // (when sysd runs under a terminal in development) do not reach
-            // the app.
-            .creation_flags(0x0000_0200)
-            .spawn()
-            .map_err(|e| {
-                error!("host_start_failed", package = package, error = e);
-                Failure::new(
-                    ErrorCode::HostStartFailed,
-                    format!("cannot start host: {e}"),
-                )
-            })?;
-        let pid = child.id();
-        // The child runs briefly before it joins the job; the placeholder
-        // creates no processes in that time. andruna-app will be created
-        // suspended (or in the job directly) once AppContainer launch is
-        // added.
-        if let Err(e) = self.job.assign(&child) {
-            error!("job_assign_failed", package = package, pid = pid, error = e);
-            let _ = child.kill();
-            let _ = child.wait();
+        if !self.config.exe.is_file() {
             return Err(Failure::new(
                 ErrorCode::HostStartFailed,
-                format!("cannot supervise host: {e}"),
+                format!("{} is missing", self.config.exe.display()),
             ));
         }
-        sys::allow_foreground(pid);
-        hosts.insert(package.to_string(), pid);
+        self.grant_runtime();
+        let boot = self.boot_image();
+        let layout = self.layout.clone();
+        let diag_dir = self.layout.diagnostics_dir();
+        let on_missing = Arc::new(move |package: &str, entries: &[(String, u64)]| {
+            let entries: Vec<MissingFunction> = entries
+                .iter()
+                .map(|(name, calls)| MissingFunction {
+                    name: name.clone(),
+                    calls: *calls,
+                })
+                .collect();
+            if let Err(e) = diagnostics::add(&diag_dir, package, &entries) {
+                warn!("missing_functions_failed", package = package, error = e);
+            }
+        });
+        let ctx = StartContext {
+            layout: &layout,
+            config: &self.config,
+            job: self.job.handle(),
+            boot_image: boot.as_deref(),
+            on_missing,
+        };
+        // Counted before the process exists, so its exit (which may come
+        // at any time) is never counted first.
         self.activity.host_started();
+        let this = Arc::clone(self);
+        let on_exit = Box::new(move |h: &Arc<HostProcess>, r: ExitReport| this.ended(h, r));
+        let h = match apps::start_host(&ctx, &pkg, activity, on_exit) {
+            Ok(h) => h,
+            Err(e) => {
+                // A host that was created ends through `ended`, which
+                // balances the count; one that never existed does not.
+                if matches!(e, StartError::Launch(_)) {
+                    self.activity.host_exited();
+                }
+                error!("host_start_failed", package = package, error = e);
+                return Err(Failure::new(ErrorCode::HostStartFailed, e.to_string()));
+            }
+        };
+        sys::allow_foreground(h.pid);
+        let t = h.times();
         info!(
             "host_started",
             package = package,
-            pid = pid,
-            exe = self.host_exe.display(),
-            placeholder = true
+            activity = activity.unwrap_or("-"),
+            pid = h.pid,
+            exe = self.config.exe.display(),
+            boot_image = boot.is_some(),
+            map_ms = format!("{:.3}", t.mapped_ms),
+            running_ms = format!("{:.1}", t.running_ms)
         );
-        drop(hosts);
-
-        let this = Arc::clone(self);
-        let package = package.to_string();
-        thread::Builder::new()
-            .name(format!("host-wait-{pid}"))
-            .spawn(move || {
-                let status = child.wait();
-                {
-                    let mut hosts = this.hosts.lock().unwrap_or_else(|e| e.into_inner());
-                    if hosts.get(&package) == Some(&pid) {
-                        hosts.remove(&package);
-                    }
-                }
-                match status {
-                    Ok(s) => {
-                        let code = s.code().unwrap_or(-1);
-                        info!("host_exited", package = package, pid = pid, code = code);
-                        // A host that ends on its own with a non-zero code
-                        // crashed; hosts ended by sysd's shutdown did not.
-                        if code != 0 && !this.stopping.load(Ordering::SeqCst) {
-                            this.events.publish(EventKind::AppCrashed {
-                                package: package.clone(),
-                                pid,
-                                exit_code: code as u32,
-                                reason: String::new(),
-                            });
-                        }
-                    }
-                    Err(e) => warn!("host_wait_failed", package = package, pid = pid, error = e),
-                }
-                this.activity.host_exited();
-            })
-            .map_err(|e| {
-                Failure::new(
-                    ErrorCode::Internal,
-                    format!("cannot start wait thread: {e}"),
-                )
-            })?;
+        let pid = h.pid;
+        let mut hosts = self.hosts.lock().unwrap_or_else(|e| e.into_inner());
+        // It may have ended already (a short program); `ended` then ran.
+        let gone = self
+            .exits
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(package)
+            .is_some_and(|r| r.pid == pid);
+        if !gone {
+            hosts.insert(package.to_string(), h);
+        }
         Ok((pid, false))
+    }
+
+    /// Called once per process when it has ended.
+    fn ended(&self, h: &Arc<HostProcess>, r: ExitReport) {
+        {
+            let mut hosts = self.hosts.lock().unwrap_or_else(|e| e.into_inner());
+            if hosts.get(&r.package).is_some_and(|x| Arc::ptr_eq(x, h)) {
+                hosts.remove(&r.package);
+            }
+        }
+        let shutting_down = self.stopping.load(Ordering::SeqCst);
+        info!(
+            "host_exited",
+            package = r.package,
+            pid = r.pid,
+            code = r.exit_code,
+            status = r.status.map_or("-".to_string(), |s| s.to_string()),
+            stopped = r.stopped || shutting_down,
+            crashed = r.crash.is_some(),
+            run_ms = r.run_time.as_millis()
+        );
+        if let Some(c) = &r.crash
+            && !shutting_down
+        {
+            warn!(
+                "app_crashed",
+                package = r.package,
+                pid = r.pid,
+                kind = format!("{:?}", c.kind),
+                summary = c.summary.replace('\n', " | ")
+            );
+            self.events.publish(EventKind::AppCrashed {
+                package: r.package.clone(),
+                pid: r.pid,
+                exit_code: r.exit_code,
+                reason: c.summary.clone(),
+            });
+        }
+        self.exits
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(r.package.clone(), r);
+        self.exited.notify_all();
+        self.activity.host_exited();
+    }
+
+    /// How process `pid` of `package` ended, waiting up to `timeout` for
+    /// it to end.
+    pub fn wait_exit(&self, package: &str, pid: u32, timeout: Duration) -> Option<ExitReport> {
+        let deadline = Instant::now() + timeout;
+        let mut g = self.exits.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some(r) = g.get(package).filter(|r| r.pid == pid) {
+                return Some(r.clone());
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            g = self
+                .exited
+                .wait_timeout(g, deadline - now)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
     }
 
     /// Brings the package's window to the foreground.
@@ -242,13 +403,7 @@ impl Supervisor {
                 format!("`{package}` is not a valid package name"),
             ));
         }
-        let pid = self
-            .hosts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(package)
-            .copied();
-        let Some(pid) = pid else {
+        let Some(pid) = self.host_pid(package) else {
             return Err(Failure::new(
                 ErrorCode::NotRunning,
                 format!("{package} is not running"),
@@ -264,18 +419,57 @@ impl Supervisor {
         }
     }
 
+    /// Stops the package's process (asks, then kills after
+    /// [`STOP_GRACE`]). Not a crash.
+    pub fn stop(&self, package: &str) -> Result<(), Failure> {
+        let h = self
+            .hosts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(package)
+            .cloned();
+        let Some(h) = h else {
+            return Err(Failure::new(
+                ErrorCode::NotRunning,
+                format!("{package} is not running"),
+            ));
+        };
+        info!("stop_package", package = package, pid = h.pid);
+        h.stop(STOP_GRACE);
+        Ok(())
+    }
+
+    /// Memory counters of the package's process, if it runs.
+    pub fn host_memory(&self, package: &str) -> Option<io::Result<apps::Memory>> {
+        let h = self
+            .hosts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(package)
+            .cloned()?;
+        Some(h.memory())
+    }
+
     /// Process id of the package's host, if it runs.
     pub fn host_pid(&self, package: &str) -> Option<u32> {
         self.hosts
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(package)
-            .copied()
+            .map(|h| h.pid)
     }
 
     /// Ends every host process.
     pub fn shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
+        for h in self
+            .hosts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+        {
+            h.kill();
+        }
         self.events.stop();
         self.job.terminate(1);
     }

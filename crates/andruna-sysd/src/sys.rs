@@ -17,9 +17,8 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject,
+    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetSystemTime;
@@ -156,9 +155,10 @@ impl Job {
         }
     }
 
-    pub fn assign(&self, process: &impl AsRawHandle) -> io::Result<()> {
-        // SAFETY: both handles are valid for the call.
-        unsafe { AssignProcessToJobObject(handle(&self.0), handle(process)).map_err(to_io) }
+    /// The job handle, for creating a process inside the job.
+    pub fn handle(&self) -> std::os::windows::io::BorrowedHandle<'_> {
+        use std::os::windows::io::AsHandle;
+        self.0.as_handle()
     }
 
     pub fn terminate(&self, code: u32) {

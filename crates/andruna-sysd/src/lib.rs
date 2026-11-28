@@ -15,11 +15,15 @@
 //! - Lifetime: exits after [`DEFAULT_IDLE_TIMEOUT`] with no client
 //!   connected and no host running ([`activity`]).
 //! - Pipe: the launcher protocol of `andruna-ipc` ([`server`]).
-//! - Hosts: started in a kill-on-close job ([`supervisor`]); the host is a
-//!   **placeholder** until andruna-app exists ([`host`]).
+//! - Apps: `andruna-app --host` per package, created suspended in the
+//!   package's AppContainer and a kill-on-close job, with the boot image
+//!   view mapped before it runs ([`supervisor`], [`apps`]). The
+//!   `--host` mode of sysd itself ([`host`]) is the earlier placeholder
+//!   and is no longer started.
 
 pub mod activity;
 pub mod appcontainer;
+pub mod apps;
 pub mod binder;
 pub mod diagnostics;
 pub mod events;
@@ -103,10 +107,16 @@ pub struct ServerConfig {
     pub idle_timeout: Duration,
     /// Inherited event handle to signal once the pipe accepts clients.
     pub ready_event: Option<usize>,
+    /// The app host executable; `andruna-app.exe` next to sysd when not
+    /// given.
+    pub app_exe: Option<PathBuf>,
+    /// The ART root; `art` next to the app host when not given.
+    pub art_root: Option<PathBuf>,
 }
 
 pub const USAGE: &str = "\
 usage: andruna-sysd [--instance <name>] [--root <dir>] [--idle-timeout-ms <n>] [--ready-event <handle>]
+                    [--app-exe <andruna-app.exe>] [--art-root <dir>]
        andruna-sysd --host <package> [--activity <name>] [--root <dir>]";
 
 /// Parses the command line (without the program name).
@@ -117,6 +127,8 @@ pub fn parse_args(args: &[String]) -> Result<Mode, String> {
     let mut ready_event = None;
     let mut host = None;
     let mut activity = None;
+    let mut app_exe = None;
+    let mut art_root = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || {
@@ -132,6 +144,8 @@ pub fn parse_args(args: &[String]) -> Result<Mode, String> {
                 }
             }
             "--root" => root = Some(PathBuf::from(value()?)),
+            "--app-exe" => app_exe = Some(PathBuf::from(value()?)),
+            "--art-root" => art_root = Some(PathBuf::from(value()?)),
             "--idle-timeout-ms" => {
                 let v = value()?;
                 let ms: u64 = v
@@ -174,6 +188,8 @@ pub fn parse_args(args: &[String]) -> Result<Mode, String> {
             root,
             idle_timeout,
             ready_event,
+            app_exe,
+            art_root,
         }),
     })
 }
@@ -284,12 +300,44 @@ fn serve(cfg: &ServerConfig, layout: Layout) -> std::io::Result<i32> {
         })?;
     let window = sys::create_control_window()?;
     let activity = Arc::new(Activity::new(cfg.idle_timeout));
-    // Placeholder: the host executable is sysd itself in --host mode until
-    // andruna-app exists.
-    let host_exe = std::env::current_exe()?;
-    let supervisor = Arc::new(Supervisor::new(host_exe, layout.clone(), activity.clone())?);
+    let exe_dir = std::env::current_exe()?
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    let mut host = apps::HostConfig::beside(&exe_dir);
+    // Development overrides, the same variables andruna-app reads: an app
+    // host and an ART root outside the install directory.
+    let env_path = |v: &str| std::env::var_os(v).map(PathBuf::from);
+    if let Some(e) = cfg.app_exe.clone().or_else(|| env_path("ANDRUNA_APP_EXE")) {
+        host.exe = std::path::absolute(&e)?;
+        if let Some(d) = host.exe.parent() {
+            host.art_root = d.join("art");
+        }
+    }
+    if let Some(a) = cfg
+        .art_root
+        .clone()
+        .or_else(|| env_path("ANDRUNA_ART_ROOT"))
+    {
+        host.art_root = std::path::absolute(a)?;
+    }
+    info!(
+        "app_host",
+        exe = host.exe.display(),
+        art_root = host.art_root.display()
+    );
     let layout_root = layout.root.clone();
     let store = Arc::new(open_store(&layout, cfg.root.is_none())?);
+    let packages = Box::new(apps::store::DatabaseStore::new(
+        store.clone(),
+        apps::store::RecordStore::new(layout.clone()),
+    ));
+    let supervisor = Arc::new(Supervisor::with(
+        host,
+        layout.clone(),
+        packages,
+        activity.clone(),
+    )?);
     let ctx = Arc::new(Context {
         layout,
         activity: activity.clone(),

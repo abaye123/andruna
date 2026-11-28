@@ -5,6 +5,9 @@ use andruna_app::{Action, ArtRoot, Layout, USAGE, exe_dir, execute, parse, plan}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.len() == 1 && args[0] == "--host" {
+        std::process::exit(andruna_app::host::run());
+    }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("{USAGE}");
         return;

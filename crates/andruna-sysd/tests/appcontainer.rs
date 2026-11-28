@@ -90,6 +90,7 @@ fn run(pkg: &Pkg, exe: &Path, args: &[String], caps: &[Capability]) -> Output {
         inherit: &[],
         job: None,
         environment: Some(&env),
+        handle_env: None,
         current_dir: Some(&pkg.data()),
         suspended: false,
     })
@@ -204,6 +205,7 @@ fn peer_identity_comes_from_the_token() {
         inherit: &[w.as_handle()],
         job: None,
         environment: None,
+        handle_env: None,
         current_dir: None,
         suspended: true,
     })
@@ -232,6 +234,7 @@ fn launch_failure_is_reported() {
         inherit: &[],
         job: None,
         environment: None,
+        handle_env: None,
         current_dir: None,
         suspended: false,
     })
