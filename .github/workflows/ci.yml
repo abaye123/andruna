@@ -226,9 +226,10 @@ jobs:
           key: nsis-3.11
 
       # Builds the Rust executables for x64 and arm64, publishes the manager
-      # for both and builds one unsigned installer.
+      # for both and builds one unsigned installer without the runtime (the
+      # Installer workflow builds the one with the ART root and ANGLE).
       - name: Installer
-        run: ./installer/build.ps1 -Unsigned
+        run: ./installer/build.ps1 -Unsigned -NoRuntime
 
       # After the installer step, so RealSysdTests runs against the
       # andruna-sysd.exe it built.

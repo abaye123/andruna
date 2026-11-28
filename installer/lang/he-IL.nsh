@@ -5,3 +5,5 @@ LangString NoBuildForThisPC ${LANG_HEBREW} "תוכנית ההתקנה הזו ל�
 LangString PackageFileType ${LANG_HEBREW} "חבילת אפליקציית Android"
 LangString InstallVerb ${LANG_HEBREW} "התקנה עם Andruna"
 LangString RemoveDataQuestion ${LANG_HEBREW} "להסיר גם את אפליקציות Android שהתקנתם עם Andruna ואת הנתונים שלהן?$\r$\n$\r$\nבחרו 'לא' כדי לשמור אותן להתקנה הבאה של Andruna."
+LangString PreparingRuntime ${LANG_HEBREW} "מכינים את סביבת ההרצה של Android..."
+LangString PrepareRuntimeFailed ${LANG_HEBREW} "לא הצלחנו להכין עכשיו את סביבת ההרצה של Android. Andruna תכין אותה שוב כשהיא תופעל."

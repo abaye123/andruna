@@ -9,6 +9,18 @@ Builds the Andruna installer (ADR 0017).
    target\<triple>\release\ files, -RustBinDir another folder.
 2. Checks that the Rust executables import no llvm-mingw runtime DLL
    (libc++, libunwind, libwinpthread, ...), which the installer does not carry.
+   With the runtime (the default), andruna-app.exe is one of them, and the
+   guest ART root of each architecture is checked and staged as art\ next
+   to it (debug sections stripped, no boot image: the installer writes the
+   boot image on the user's PC, ADR 0043). The ART root comes from
+   -ArtRootX64 / -ArtRootArm64, ANDRUNA_ART_ROOT_X64 / ANDRUNA_ART_ROOT_ARM64
+   or out\guest\<arch>\art-root. ANGLE's libEGL.dll and libGLESv2.dll (ADR
+   0029) are staged in angle\ from -AngleDirX64 / -AngleDirArm64,
+   ANDRUNA_ANGLE_DIR_X64 / ANDRUNA_ANGLE_DIR_ARM64 or out\angle\<arch>\bin
+   and signed with the rest. -BuildRuntime builds a missing ART root
+   (aosp/tools/build_guest.py) or ANGLE build (cargo xtask angle-build).
+   A missing or incomplete one fails the build; -NoRuntime builds an
+   installer without the runtime (manager, sysd and launcher only).
 3. Publishes Andruna.Manager self-contained for each architecture and stages
    the Rust executables next to it.
 4. Signs every .exe and .dll in the staged files that has no signature yet
@@ -37,7 +49,13 @@ param(
     [string] $OutDir,
     [string] $RustBinDir,
     [switch] $SkipRustBuild,
-    [switch] $Unsigned
+    [switch] $Unsigned,
+    [switch] $NoRuntime,
+    [switch] $BuildRuntime,
+    [string] $ArtRootX64,
+    [string] $ArtRootArm64,
+    [string] $AngleDirX64,
+    [string] $AngleDirArm64
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,6 +73,12 @@ $TimestampUrl = 'http://timestamp.digicert.com'
 $RustTriples = @{ x64 = 'x86_64-pc-windows-gnullvm'; arm64 = 'aarch64-pc-windows-gnullvm' }
 # Rust executables the installer carries; the build fails when one is missing.
 $RustBinaries = @('andruna-sysd.exe', 'andruna-launch.exe')
+if (-not $NoRuntime) { $RustBinaries += 'andruna-app.exe' }
+# ELF e_machine of each architecture's guest code.
+$ElfMachine = @{ x64 = 62; arm64 = 183 }
+# What andruna-app needs in the ART root (crates/andruna-app/src/layout.rs).
+$ArtRequired = @('lib64\libart.so', 'lib64\libc.so', 'bin\dalvikvm', 'bin\dex2oat',
+    'javalib\core-oj.jar', 'javalib\core-libart.jar', 'javalib\core-icu4j.jar')
 
 function Invoke-Cargo([string[]] $CargoArgs) {
     Push-Location $Repo
@@ -159,6 +183,128 @@ function Test-Signature([string] $File, [string] $Thumbprint) {
     }
 }
 
+function Get-ArtRootProblem([string] $Dir, [string] $A) {
+    if (-not (Test-Path $Dir)) { return "$Dir does not exist" }
+    $missing = @($ArtRequired | Where-Object { -not (Test-Path (Join-Path $Dir $_)) })
+    if (-not (Get-ChildItem (Join-Path $Dir 'icu') -Filter 'icudt*.dat' -ErrorAction SilentlyContinue)) { $missing += 'icu\icudt*.dat' }
+    if ($missing.Count -gt 0) { return "$Dir is incomplete; missing: $($missing -join ', ')" }
+    # The guest code must be for this architecture.
+    $head = [byte[]]::new(20)
+    $fs = [IO.File]::OpenRead((Join-Path $Dir 'lib64\libart.so'))
+    try { [void]$fs.Read($head, 0, 20) } finally { $fs.Dispose() }
+    $machine = [BitConverter]::ToUInt16($head, 18)
+    if ($head[0] -ne 0x7f -or $machine -ne $ElfMachine[$A]) {
+        return "$Dir\lib64\libart.so is not an ELF file for $A (e_machine $machine)"
+    }
+    $null
+}
+
+# Builds the guest ART root of one architecture (crates/andruna-app/README.md):
+# boot class path jars, then the guest userland and ART (arm64 is cross-built).
+function Invoke-ArtRootBuild([string] $A) {
+    Push-Location $Repo
+    try {
+        if (-not (Test-Path 'third_party\aosp\art\.git')) {
+            & cargo xtask fetch; if ($LASTEXITCODE -ne 0) { throw 'cargo xtask fetch failed' }
+        }
+        & cargo xtask patch; if ($LASTEXITCODE -ne 0) { throw 'cargo xtask patch failed' }
+        $jars = if ($env:ANDRUNA_BOOT_JARS) { $env:ANDRUNA_BOOT_JARS } else { 'out\s1\java' }
+        if (-not (Test-Path (Join-Path $jars 'core-oj.jar'))) {
+            & python spikes/s1/java/build_boot.py --skip-verify
+            if ($LASTEXITCODE -ne 0) { throw 'spikes/s1/java/build_boot.py failed' }
+        }
+        $steps = @('sysroot', 'builtins', 'bionic', 'libcxx', 'aosp', 'art')
+        & python aosp/tools/build_guest.py --arch $A @steps
+        if ($LASTEXITCODE -ne 0) { throw "aosp/tools/build_guest.py --arch $A failed" }
+    }
+    finally { Pop-Location }
+}
+
+function Resolve-ArtRoot([string] $A) {
+    $given = if ($A -eq 'x64') { $ArtRootX64 } else { $ArtRootArm64 }
+    $envName = "ANDRUNA_ART_ROOT_$($A.ToUpperInvariant())"
+    $fromEnv = [Environment]::GetEnvironmentVariable($envName)
+    $dir = if ($given) { $given } elseif ($fromEnv) { $fromEnv } else { Join-Path $Repo "out\guest\$A\art-root" }
+    $dir = [IO.Path]::GetFullPath($dir)
+    $problem = Get-ArtRootProblem $dir $A
+    if ($problem -and $BuildRuntime -and -not $given -and -not $fromEnv) {
+        Write-Host "Building the ART root for $A ($problem)"
+        Invoke-ArtRootBuild $A
+        $problem = Get-ArtRootProblem $dir $A
+    }
+    if ($problem) {
+        throw "No usable ART root for ${A}: $problem. Build it (python aosp/tools/build_guest.py --arch $A sysroot builtins bionic libcxx aosp art, see crates/andruna-app/README.md), pass -BuildRuntime, point -ArtRoot$(if ($A -eq 'x64') { 'X64' } else { 'Arm64' }) or $envName at one, or pass -NoRuntime for an installer without the runtime."
+    }
+    $dir
+}
+
+# Stages the ART root as <stage>\art: everything except boot images (the
+# installer writes the boot image on the user's PC, ADR 0043), with the debug
+# sections of the ELF files stripped (.symtab stays for crash reports).
+function Copy-ArtRoot([string] $Src, [string] $Dst, [string] $LlvmMingw) {
+    New-Item -ItemType Directory -Force $Dst | Out-Null
+    foreach ($d in Get-ChildItem $Src -Directory) {
+        if ($d.Name -eq 'javalib') {
+            New-Item -ItemType Directory -Force (Join-Path $Dst 'javalib') | Out-Null
+            Get-ChildItem $d.FullName -File | Copy-Item -Destination (Join-Path $Dst 'javalib')
+        }
+        else {
+            Copy-Item -Recurse $d.FullName (Join-Path $Dst $d.Name)
+        }
+    }
+    $strip = Join-Path $LlvmMingw 'bin\llvm-strip.exe'
+    $elf = foreach ($f in Get-ChildItem (Join-Path $Dst 'lib64'), (Join-Path $Dst 'bin') -File) {
+        $b = [byte[]]::new(4)
+        $fs = [IO.File]::OpenRead($f.FullName)
+        try { [void]$fs.Read($b, 0, 4) } finally { $fs.Dispose() }
+        if ($b[0] -eq 0x7f -and $b[1] -eq 0x45 -and $b[2] -eq 0x4c -and $b[3] -eq 0x46) { $f.FullName }
+    }
+    & $strip --strip-debug @elf
+    if ($LASTEXITCODE -ne 0) { throw "llvm-strip failed in $Dst" }
+}
+
+$AngleDlls = @('libEGL.dll', 'libGLESv2.dll')
+$PeMachine = @{ x64 = 0x8664; arm64 = 0xAA64 }
+
+function Get-AngleProblem([string] $Dir, [string] $A) {
+    foreach ($d in $AngleDlls) {
+        $p = Join-Path $Dir $d
+        if (-not (Test-Path $p)) { return "$p does not exist" }
+        $b = [IO.File]::ReadAllBytes($p)
+        $pe = [BitConverter]::ToInt32($b, 0x3c)
+        $m = [BitConverter]::ToUInt16($b, $pe + 4)
+        if ($m -ne $PeMachine[$A]) { return "$p is not a $A DLL (machine 0x$('{0:X4}' -f $m))" }
+    }
+    $null
+}
+
+# ANGLE's DLLs (crates/andruna-gles/README.md: andruna-gles loads them from
+# the angle folder next to the executable).
+function Resolve-AngleDir([string] $A) {
+    $given = if ($A -eq 'x64') { $AngleDirX64 } else { $AngleDirArm64 }
+    $envName = "ANDRUNA_ANGLE_DIR_$($A.ToUpperInvariant())"
+    $fromEnv = [Environment]::GetEnvironmentVariable($envName)
+    $dir = if ($given) { $given } elseif ($fromEnv) { $fromEnv } else { Join-Path $Repo "out\angle\$A\bin" }
+    $dir = [IO.Path]::GetFullPath($dir)
+    $problem = Get-AngleProblem $dir $A
+    if ($problem -and $BuildRuntime -and -not $given -and -not $fromEnv) {
+        Write-Host "Building ANGLE for $A ($problem)"
+        Invoke-Cargo @('xtask', 'angle-build', '--arch', $A)
+        $problem = Get-AngleProblem $dir $A
+    }
+    if ($problem) {
+        throw "No usable ANGLE build for ${A}: $problem. Build it with cargo xtask angle-build --arch $A, pass -BuildRuntime, point -AngleDir$(if ($A -eq 'x64') { 'X64' } else { 'Arm64' }) or $envName at one, or pass -NoRuntime."
+    }
+    $dir
+}
+
+function Get-DirSize([string] $Dir) {
+    $s = (Get-ChildItem $Dir -Recurse -File | Measure-Object Length -Sum).Sum
+    if ($s) { [int64]$s } else { [int64]0 }
+}
+
+function Format-MiB([int64] $Bytes) { '{0:N1} MiB' -f ($Bytes / 1MB) }
+
 $version = Get-Version
 $thumbprint = $null
 $signTool = $null
@@ -176,6 +322,15 @@ $project = Join-Path $Repo 'ui\src\Andruna.Manager\Andruna.Manager.csproj'
 $defines = @("!define VERSION `"$version`"")
 $signedOwn = @()
 $llvmMingw = Get-LlvmMingw
+
+$artRoots = @{}
+if (-not $NoRuntime) {
+    # Checked first: a missing ART root fails before anything is built.
+    foreach ($a in $Arch) { $artRoots[$a] = Resolve-ArtRoot $a }
+    $angleDirs = @{}
+    foreach ($a in $Arch) { $angleDirs[$a] = Resolve-AngleDir $a }
+}
+$sizes = @()
 
 foreach ($a in $Arch) {
     $stage = Join-Path $stageRoot $a
@@ -212,6 +367,21 @@ foreach ($a in $Arch) {
         }
     }
 
+    if (-not $NoRuntime) {
+        $src = $artRoots[$a]
+        Write-Host "Staging the ART root ($a): $src"
+        $before = Get-DirSize $src
+        Copy-ArtRoot $src (Join-Path $stage 'art') $llvmMingw
+        $after = Get-DirSize (Join-Path $stage 'art')
+        Write-Host "  ART root ($a): $(Format-MiB $before) as built (with boot image if any), $(Format-MiB $after) staged"
+        $angleStage = Join-Path $stage 'angle'
+        New-Item -ItemType Directory -Force $angleStage | Out-Null
+        foreach ($d in $AngleDlls) { Copy-Item (Join-Path $angleDirs[$a] $d) $angleStage }
+        # Ours: signed below when they are not yet, and checked with the rest.
+        if (-not $Unsigned) { foreach ($d in $AngleDlls) { $signedOwn += Join-Path $angleStage $d } }
+        Write-Host "  ANGLE ($a): $($angleDirs[$a])"
+    }
+
     if (-not $Unsigned) {
         $toSign = Get-ChildItem $stage -Recurse -Include *.exe, *.dll |
             Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -eq 'NotSigned' } |
@@ -222,7 +392,13 @@ foreach ($a in $Arch) {
     }
 
     $defines += "!define STAGE_$($a.ToUpperInvariant()) `"$stage`""
+    $sizes += [pscustomobject]@{
+        Arch = $a
+        Staged = Format-MiB (Get-DirSize $stage)
+        Runtime = if ($NoRuntime) { '-' } else { Format-MiB (Get-DirSize (Join-Path $stage 'art')) }
+    }
 }
+if (-not $NoRuntime) { $defines += '!define RUNTIME' }
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $archTag = ($Arch | Sort-Object) -join '-'
@@ -246,4 +422,5 @@ if (-not $Unsigned) {
     $checked | Sort-Object File -Unique | Format-Table -AutoSize | Out-String | Write-Host
 }
 
-Write-Host "Installer: $installer"
+$sizes | Format-Table -AutoSize | Out-String | Write-Host
+Write-Host "Installer: $installer ($(Format-MiB (Get-Item $installer).Length))"

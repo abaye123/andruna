@@ -1,0 +1,288 @@
+# The installer with the runtime (installer/README.md, ADR 0043): the guest
+# ART root of each architecture (arm64 cross-built on x64, as in the ART
+# arm64 workflow, whose cache it shares), ANGLE's DLLs for each
+# architecture (as in the GLES workflow, same cache), then one unsigned
+# installer for x64 and arm64. Signing needs the maintainer's certificate and
+# is done on the release machine; the end-to-end test (tests/e2e) runs
+# there too, because it installs into the user's profile.
+
+name: Installer
+
+on:
+  push:
+    branches: [main, p4-ship-runtime]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  ANDRUNA_LLVM_MINGW: C:\tools\llvm-mingw
+
+jobs:
+  art-root:
+    name: ART root (${{ matrix.arch }}, built on x64)
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    runs-on: windows-latest
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: |
+          cargo xtask toolchain
+          "$env:ANDRUNA_LLVM_MINGW\x86_64-w64-mingw32\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: CMake, Ninja
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { python -m pip install ninja }
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { python -m pip install cmake }
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # Same keys as the ART arm64 and libcore workflows, so caches are shared.
+      - name: Cache guest and boot class path
+        id: guest-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            out/guest/${{ matrix.arch }}
+            out/s1/java
+            out/s1/tools
+          key: art-guest-${{ matrix.arch }}-${{ hashFiles('aosp/aosp.lock', 'aosp/**', 'patches/**', 'spikes/s1/java/**', 'xtask/src/toolchain.rs') }}
+
+      - name: Cache AOSP sources (all projects)
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-all-${{ hashFiles('aosp/aosp.lock') }}
+
+      - name: Fetch and patch AOSP
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        run: |
+          git config --global core.longpaths true
+          cargo xtask fetch
+          if ($LASTEXITCODE -ne 0) { throw "fetch failed" }
+          cargo xtask patch
+          if ($LASTEXITCODE -ne 0) { throw "patch failed" }
+
+      - name: Cache llvm-project
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: out/llvm-project
+          key: llvm-project-llvmorg-23.1.6-v1
+
+      - name: Fetch llvm-project
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        run: |
+          if (-not (Test-Path out/llvm-project/runtimes)) {
+            git clone --depth 1 --filter=blob:none --sparse --branch llvmorg-23.1.6 https://github.com/llvm/llvm-project out/llvm-project
+            if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+            git -C out/llvm-project sparse-checkout set libcxx libcxxabi libunwind runtimes cmake llvm/cmake llvm/utils/llvm-lit compiler-rt/lib/builtins libc
+            if ($LASTEXITCODE -ne 0) { throw "sparse checkout failed" }
+          }
+
+      - name: Boot class path
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        run: |
+          python spikes/s1/java/build_boot.py --skip-verify
+          if ($LASTEXITCODE -ne 0) { throw "boot class path build failed" }
+
+      - name: Guest userland and ART root
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        run: |
+          python aosp/tools/build_guest.py --arch ${{ matrix.arch }} sysroot builtins bionic libcxx aosp art
+          if ($LASTEXITCODE -ne 0) { throw "guest build failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: art-root-${{ matrix.arch }}
+          path: out/guest/${{ matrix.arch }}/art-root
+          if-no-files-found: error
+
+  angle:
+    name: ANGLE (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+            Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe" -OutFile rustup-init.exe
+            ./rustup-init.exe -y --default-toolchain none --profile minimal
+            Remove-Item rustup-init.exe
+            "$env:USERPROFILE\.cargo\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+          }
+          rustup show active-toolchain
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: cargo xtask toolchain
+
+      - name: CMake and Ninja
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { python -m pip install ninja }
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { python -m pip install cmake }
+
+      # Same keys as the GLES workflow.
+      - name: Cache ANGLE build
+        id: angle-cache
+        uses: actions/cache@v4
+        with:
+          path: out/angle/${{ matrix.arch }}
+          key: angle-build-${{ matrix.arch }}-${{ hashFiles('aosp/aosp.lock', 'aosp/angle/**', 'xtask/src/angle.rs', 'xtask/src/toolchain.rs') }}
+
+      - name: Restore ANGLE sources
+        if: steps.angle-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            third_party/aosp/external/angle
+            third_party/aosp/external/zlib
+          key: angle-src-${{ hashFiles('aosp/aosp.lock') }}
+
+      - name: Build ANGLE
+        if: steps.angle-cache.outputs.cache-hit != 'true'
+        run: |
+          cargo xtask fetch --project external/angle --project external/zlib
+          if ($LASTEXITCODE -ne 0) { throw "fetch failed" }
+          cargo xtask angle-build --arch ${{ matrix.arch }}
+          if ($LASTEXITCODE -ne 0) { throw "ANGLE build failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: angle-${{ matrix.arch }}
+          path: out/angle/${{ matrix.arch }}/bin/*.dll
+          if-no-files-found: error
+
+  installer:
+    name: installer with the runtime (x64 and arm64)
+    needs: [art-root, angle]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-installer-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-installer-
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: cargo xtask toolchain
+
+      - name: Cache NSIS
+        uses: actions/cache@v4
+        with:
+          path: .cache/nsis-3.11
+          key: nsis-3.11
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: art-root-x64
+          path: out/ci/art-root/x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: art-root-arm64
+          path: out/ci/art-root/arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: angle-x64
+          path: out/ci/angle/x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: angle-arm64
+          path: out/ci/angle/arm64
+
+      - name: Installer
+        run: >
+          ./installer/build.ps1 -Unsigned
+          -ArtRootX64 out/ci/art-root/x64 -ArtRootArm64 out/ci/art-root/arm64
+          -AngleDirX64 out/ci/angle/x64 -AngleDirArm64 out/ci/angle/arm64
+          *>&1 | Tee-Object out/installer-build.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          "## Installer" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          Get-ChildItem out/installer -Filter 'Andruna-*-setup-*.exe' -ErrorAction SilentlyContinue |
+            ForEach-Object { "- $($_.Name): $('{0:N1}' -f ($_.Length / 1MB)) MiB" } |
+            Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          if (Test-Path out/installer-build.txt) {
+            "`n``````text" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            Get-Content out/installer-build.txt | Select-String 'ART root|ANGLE|Staged|MiB|x64|arm64' | ForEach-Object Line |
+              Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            "``````" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-with-runtime-unsigned
+          path: out/installer/Andruna-*-setup-*.exe
+          if-no-files-found: error

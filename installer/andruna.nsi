@@ -8,6 +8,8 @@
 ;   STAGE_X64      folder with the x64 files (optional)
 ;   STAGE_ARM64    folder with the ARM64 files (optional)
 ;   SIGN_CMD       signing command with %1 for the file (optional; unsigned without it)
+;   RUNTIME        defined when the stages carry andruna-app.exe and the ART
+;                  root (art\); the installer then prepares the runtime
 ;
 ; Per-user install into %LOCALAPPDATA%\Programs\Andruna without administrator
 ; rights (P-1). The installer picks the files that match the PC's processor (P-2),
@@ -111,7 +113,7 @@ FunctionEnd
 ; manager, sysd and the apps it started), so their files can be replaced or
 ; removed. Processes of other users are not touched.
 !macro StopAndruna
-  nsExec::Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "Get-Process -Name Andruna.Manager,andruna-sysd,andruna-launch -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"$INSTDIR\*\" } | Stop-Process -Force"'
+  nsExec::Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "Get-Process -Name Andruna.Manager,andruna-sysd,andruna-launch,andruna-app -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like \"$INSTDIR\*\" } | Stop-Process -Force"'
   Pop $0
 !macroend
 
@@ -140,12 +142,16 @@ FunctionEnd
 Section "Andruna"
   SetShellVarContext current
   !insertmacro StopAndruna
+  ; The ART root is replaced as a whole, so that a boot image written for
+  ; the previous runtime never stays next to the new one.
+  RMDir /r "$INSTDIR\art"
   SetOutPath "$INSTDIR"
 
   ; Files of the matching architecture. Slots filled by build.ps1:
   ;   Andruna.Manager.exe and its runtime   (always)
-  ;   andruna-sysd.exe                      (when built)
-  ;   andruna-launch.exe                    (when built)
+  ;   andruna-sysd.exe, andruna-launch.exe
+  ;   andruna-app.exe and art\              (RUNTIME: the guest ART root,
+  ;                                          no boot image)
   ${If} ${IsNativeARM64}
     !ifdef STAGE_ARM64
       File /r "${STAGE_ARM64}\*.*"
@@ -156,6 +162,8 @@ Section "Andruna"
     !endif
   ${EndIf}
 
+  ; Run by the uninstaller before it removes this folder.
+  File "uninstall-cleanup.ps1"
   WriteUninstaller "$INSTDIR\${UNINSTALLER}"
   CreateShortcut "$SMPROGRAMS\${PRODUCT}.lnk" "$INSTDIR\${MANAGER_EXE}"
 
@@ -172,6 +180,18 @@ Section "Andruna"
   !insertmacro RegisterType ".apkm"
   ; SHCNE_ASSOCCHANGED: Explorer picks up the new file types.
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+
+  !ifdef RUNTIME
+    ; The andrunaRuntime capability on the install folder (ADR 0036) and the
+    ; boot image, written on this PC (ADR 0043). If this fails, sysd does it
+    ; again in the background when it starts.
+    DetailPrint "$(PreparingRuntime)"
+    nsExec::Exec '"$INSTDIR\andruna-sysd.exe" --prepare-runtime'
+    Pop $0
+    ${If} $0 != 0
+      DetailPrint "$(PrepareRuntimeFailed)"
+    ${EndIf}
+  !endif
 
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${PRODUCT}"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
@@ -202,6 +222,15 @@ Section "Uninstall"
     ExecWait '"$INSTDIR\${MANAGER_EXE}" --unregister'
   ${EndIf}
   Delete "$SMPROGRAMS\${PRODUCT}.lnk"
+  ; The Start menu shortcuts and "Installed apps" entries of Android apps
+  ; (ADR 0027) start andruna-launch.exe from this folder; without it they
+  ; would be broken, so they go with it (the apps' files and data stay
+  ; unless the user removes them below). The manager's notification
+  ; registration, which --unregister leaves, goes too.
+  ${If} ${FileExists} "$INSTDIR\uninstall-cleanup.ps1"
+    nsExec::Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\uninstall-cleanup.ps1" -InstallDir "$INSTDIR"'
+    Pop $0
+  ${EndIf}
   RMDir /r "$INSTDIR"
   DeleteRegKey HKCU "${UNINST_KEY}"
 
