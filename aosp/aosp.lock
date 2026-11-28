@@ -136,6 +136,18 @@ commit = "ff4977aa409384e7622a53230323981a785e621d"
 purpose = "LZMA decoder for mini debug info (libunwindstack)"
 
 [[project]]
+name = "platform/external/perfetto"
+path = "external/perfetto"
+commit = "ece66975738007dd0978b911d8a2077e49b8f31e"
+purpose = "perfetto trace protos for the framework's tracing code (Apache-2.0)"
+
+[[project]]
+name = "platform/external/protobuf"
+path = "external/protobuf"
+commit = "db06feae31e2a10ffc7ddaccd9e285ff7c13c0ab"
+purpose = "protobuf: descriptor.proto for the framework's generated proto constants, later aapt2 (BSD-3-Clause)"
+
+[[project]]
 name = "platform/external/scudo"
 path = "external/scudo"
 commit = "15715589eebe155c799ce6fe27005bc8775b86ad"
@@ -184,6 +196,12 @@ commit = "ae266dcb706d083868578cfedce381ef44488a07"
 purpose = "libbinder, servicemanager, and the native framework headers and AIDL interfaces the framework uses"
 
 [[project]]
+name = "platform/frameworks/proto_logging"
+path = "frameworks/proto_logging"
+commit = "a07b791ea1e2a4dae1c535c8423235fdc22aaf02"
+purpose = "statsd atom and enum protos the framework's generated proto constants include"
+
+[[project]]
 name = "platform/libcore"
 path = "libcore"
 commit = "4ebfb391ee0109d16abe6e2bc965724b940928c5"
@@ -227,6 +245,12 @@ name = "platform/system/logging"
 path = "system/logging"
 commit = "d35ba620451b28512f46ebb5421f783fd77968d5"
 purpose = "liblog"
+
+[[project]]
+name = "platform/system/server_configurable_flags"
+path = "system/server_configurable_flags"
+commit = "5069ba739faebf91ae72096577ae17e13061af72"
+purpose = "aconfigd protos and server-configurable flags"
 
 [[project]]
 name = "platform/system/timezone"

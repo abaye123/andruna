@@ -50,6 +50,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "aosp" / "tools"))
+sys.dont_write_bytecode = True
 import blueprint  # noqa: E402
 
 AOSP = Path(os.environ.get("ANDRUNA_AOSP_DIR", ROOT / "third_party" / "aosp"))
@@ -114,7 +115,7 @@ def universe():
     files = sorted(set(files))
     java = [Path(f) for f in files if f.endswith(".java")]
     aidl = [Path(f) for f in files if f.endswith(".aidl")]
-    return java, aidl, missing, generated
+    return java, aidl, missing, generated, tree
 
 
 PACKAGE = re.compile(r"^\s*package\s+([\w.]+)\s*;", re.M)
@@ -217,13 +218,137 @@ def fix_aidl_output(out):
             f.write_text(new, encoding="utf-8", newline="\n")
 
 
+PERFETTO = AOSP / "external" / "perfetto"
+# Projects whose aconfig declarations become flag classes in framework.jar.
+# libcore's and ART's flags are in the boot class path jars already.
+ACONFIG_PROJECTS = [FW, NATIVE, AOSP / "system" / "server_configurable_flags"]
+PROTOBUF_SRC = AOSP / "external" / "protobuf" / "src"
+
+
+def filegroup_files(tree, bp, name, report):
+    try:
+        tree.read(bp)
+        m = tree.module(name)
+        return [Path(f) for f in tree.sources(tree.select_blocks(m, None)) if not f.startswith(":")]
+    except (KeyError, FileNotFoundError, blueprint.ParseError) as e:
+        report.setdefault("protos_not_available", []).append(f"{name}: {e}")
+        return []
+
+
+def gen_javastream(gen, tree, report):
+    """framework-javastream-protos (ProtoLibraries.bp) and
+    perfetto_trace_javastream_protos_jarjar (frameworks/base/Android.bp):
+    protoc-gen-javastream's output, from gen_javastream.py."""
+    out = gen / "javastream"
+    if out.is_dir():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    srcs = sorted((FW / "core" / "proto").rglob("*.proto")) + sorted((FW / "libs" / "incident").rglob("*.proto"))
+    srcs += filegroup_files(tree, FW / "proto" / "Android.bp", "ipconnectivity-proto-src", report)
+    stats = AOSP / "frameworks" / "proto_logging" / "stats" / "Android.bp"
+    srcs += filegroup_files(tree, stats, "libstats_atom_enum_protos", report)
+    srcs += filegroup_files(tree, stats, "libstats_atom_message_protos", report)
+    srcs += filegroup_files(tree, AOSP / "system" / "core" / "debuggerd" / "proto" / "Android.bp",
+                            "libtombstone_proto-src", report)
+    report.setdefault("protos_not_available", []).append(
+        "aconfigd_protos: not defined in the fetched system/server_configurable_flags")
+    argfile = gen / "javastream.args"
+    argfile.write_text("\n".join(str(s) for s in srcs), encoding="utf-8")
+    run([sys.executable, "-I", HERE / "gen_javastream.py", "-I", AOSP, "-I", PROTOBUF_SRC,
+         out, f"@{argfile}"])
+    # Perfetto: only the messages the framework uses (include_filter of the
+    # genrule), renamed as framework-jarjar-rules.txt renames them.
+    bp = PERFETTO / "Android.bp"
+    psrcs = filegroup_files(tree, bp, "perfetto_javastream_filegroup_proto", report)
+    text = bp.read_text(encoding="utf-8")
+    i = text.index('name: "perfetto_trace_javastream_protos"')
+    j = text.index("--javastream_out", i)
+    flt = "".join(re.findall(r'"([^"]*)"', text[i:j]))
+    flt = flt.split("include_filter:", 1)[1].split()[0]
+    (gen / "perfetto.args").write_text("\n".join(str(s) for s in psrcs), encoding="utf-8")
+    run([sys.executable, "-I", HERE / "gen_javastream.py", "-I", PERFETTO, "-I", PROTOBUF_SRC,
+         "-I", AOSP, "--filter", flt, "--rename", "perfetto.protos=android.internal.perfetto.protos",
+         out, f"@{gen / 'perfetto.args'}"])
+    return out
+
+
 def gen_aconfig(gen):
     out = gen / "aconfig"
     if out.is_dir():
         shutil.rmtree(out)
-    decls = sorted(FW.rglob("*.aconfig"))
-    decls = [d for d in decls if "/tests/" not in d.as_posix()]
+    decls = []
+    for proj in ACONFIG_PROJECTS:
+        decls += [d for d in sorted(proj.rglob("*.aconfig")) if "/tests/" not in d.as_posix()]
     run([sys.executable, "-I", HERE / "gen_aconfig.py", out] + decls, stdout=subprocess.DEVNULL)
+    return out
+
+
+FLAG_USE = re.compile(r"\b((?:[a-z_][\w]*\.)+)Flags\.(\w+)")
+FLAG_IMPORT = re.compile(r"^\s*import\s+(static\s+)?((?:[a-z_][\w]*\.)+)Flags(?:\.(\w+))?\s*;", re.M)
+SIMPLE_USE = re.compile(r"(?<![\w.])Flags\.(\w+)")
+
+
+def snake(name):
+    if name.startswith("FLAG_"):
+        return name[5:].lower()
+    return re.sub(r"(?<=[a-z0-9])([A-Z])", r"_\1", name).lower()
+
+
+def gen_aconfig_from_uses(gen, java_files, report):
+    """Flag classes of aconfig packages declared in projects that are not
+    fetched (frameworks/av, packages/modules/*, ...), with the flags the
+    framework's sources name, all disabled like every other flag here. The
+    declarations are not available, so the flag set is what the sources use;
+    the values are the same as a declaration would give at its default."""
+    sys.path.insert(0, str(HERE))
+    import gen_aconfig as ga
+    out = gen / "aconfig-uses"
+    if out.is_dir():
+        shutil.rmtree(out)
+    known = set()
+    for f in (gen / "aconfig").rglob("Flags.java"):
+        known.add(f.parent.relative_to(gen / "aconfig").as_posix().replace("/", "."))
+    have_source = set()
+    for f in java_files:
+        if f.name == "Flags.java":
+            have_source.add(package_of(f))
+    uses = {}
+    for f in java_files:
+        text = f.read_text(encoding="utf-8", errors="replace")
+        if "Flags" not in text:
+            continue
+        imported = None
+        for m in FLAG_IMPORT.finditer(text):
+            pkg = m.group(2)[:-1]
+            uses.setdefault(pkg, set())
+            if m.group(1) and m.group(3):
+                uses[pkg].add(m.group(3))
+            elif not m.group(1):
+                imported = pkg
+        for m in FLAG_USE.finditer(text):
+            uses.setdefault(m.group(1)[:-1], set()).add(m.group(2))
+        if imported is None and package_of(f) not in known | have_source:
+            # Flags of the file's own package (no import needed).
+            if SIMPLE_USE.search(text) and not (f.parent / "Flags.java").exists():
+                imported = package_of(f)
+        if imported:
+            for m in SIMPLE_USE.finditer(text):
+                uses.setdefault(imported, set()).add(m.group(1))
+    made = {}
+    for pkg, names in sorted(uses.items()):
+        if pkg in known or pkg in have_source or not pkg:
+            continue
+        flags = set()
+        for n in names:
+            if n in ("FEATURE_FLAGS", "class") or n[0].isupper() and not n.startswith("FLAG_"):
+                continue
+            flags.add(snake(n))
+        if not flags:
+            continue
+        ga.emit(str(out), pkg, sorted(flags))
+        made[pkg] = len(flags)
+    report["aconfig_from_uses"] = made
+    log(f"aconfig from uses: {len(made)} packages of unfetched projects")
     return out
 
 
@@ -254,7 +379,7 @@ def aconfig_flag_values():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     vals = []
-    for d in sorted(FW.rglob("*.aconfig")):
+    for d in [d for proj in ACONFIG_PROJECTS for d in sorted(proj.rglob("*.aconfig"))]:
         if "/tests/" in d.as_posix():
             continue
         package, flags = mod.parse(d)
@@ -401,7 +526,7 @@ def javac(java_dirs, roots, classes):
     ] + boot_exports() + [
         "-XDstringConcat=inline",
         "-g",
-        "-nowarn", "-Xlint:none", "-Xmaxerrs", "2000",
+        "-nowarn", "-Xlint:none", "-Xmaxerrs", "100000",
         "-proc:none",
         "-implicit:class",
         "-sourcepath", os.pathsep.join(str(d) for d in java_dirs),
@@ -482,7 +607,7 @@ def main():
     report = {"aidl_skipped": []}
     t0 = time.time()
 
-    java, aidl, missing, generated = universe()
+    java, aidl, missing, generated, tree = universe()
     report["filegroups_not_fetched"] = missing
     report["generated_filegroups"] = generated
     log(f"universe: {len(java)} java, {len(aidl)} aidl; {len(missing)} filegroups of projects "
@@ -505,7 +630,10 @@ def main():
         r_java, apk = gen / "R", OUT / "framework-res.apk"
     else:
         r_java, apk = build_res(gen)
-    gen_dirs = [gen_messagequeue(gen), aidl_out, gen_aconfig(gen), gen_logtags(gen, java_dirs), r_java]
+    gen_dirs = [gen_messagequeue(gen), aidl_out, gen_aconfig(gen), gen_logtags(gen, java_dirs), r_java,
+                gen_javastream(gen, tree, report)]
+    gen_java = [f for d in gen_dirs if d.name != "aconfig" for f in d.rglob("*.java")]
+    gen_dirs.append(gen_aconfig_from_uses(gen, java + gen_java, report))
 
     # Generated sources first: messagequeue-gen replaces nothing on the
     # source path (the variants live in subdirectories).
