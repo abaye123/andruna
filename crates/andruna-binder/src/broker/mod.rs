@@ -566,6 +566,14 @@ impl Broker {
         }
     }
 
+    /// Whether a live context manager (handle 0) is registered.
+    pub fn has_context_manager(&self) -> bool {
+        let s = lock(&self.state);
+        s.ctx_mgr
+            .and_then(|n| s.nodes.get(&n))
+            .is_some_and(|n| n.owner.is_some())
+    }
+
     /// Strong and weak counts of reference `desc` of process `p`
     /// (`BINDER_GET_NODE_INFO_FOR_REF` reports the node's; tests use this).
     pub fn ref_counts(&self, p: ProcId, desc: u32) -> Option<(u32, u32)> {
@@ -765,13 +773,16 @@ fn enqueue_thread(s: &mut State, p: ProcId, tid: i32, w: Work) {
     }
 }
 
-/// Queues process work: to a thread waiting for it if there is one (the
-/// kernel's thread selection), else to the process queue.
+/// Queues process work: to a thread waiting for it if there is one, else
+/// to the process queue. The thread is the one that started waiting last,
+/// as the kernel's (`binder_select_thread_ilocked` takes the head of
+/// `waiting_threads`, where waiting threads are added): it is the one most
+/// likely still spinning, and the others stay asleep.
 fn enqueue_proc(s: &mut State, p: ProcId, w: Work) {
     let Some(proc) = s.procs.get_mut(&p) else {
         return;
     };
-    if let Some(tid) = proc.waiting.pop_front() {
+    if let Some(tid) = proc.waiting.pop_back() {
         let t = proc.threads.get_mut(&tid).unwrap();
         t.todo.push_back(w);
         t.wake.notify();

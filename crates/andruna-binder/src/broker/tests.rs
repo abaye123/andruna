@@ -743,6 +743,39 @@ fn blocking_and_nonblocking_reads() {
     assert!(matches!(r[0], Br::Tx { .. }));
 }
 
+/// Process work goes to the thread that started waiting last (the
+/// kernel's choice: the thread most likely still running or spinning).
+#[test]
+fn work_goes_to_the_last_waiting_thread() {
+    let b = Broker::new();
+    let sm = Arc::new(ctx_mgr(&b));
+    let a = proc(&b, 2, 1);
+    sm.looper(1);
+    sm.looper(2);
+    let first = {
+        let sm = sm.clone();
+        thread::spawn(move || sm.read(1))
+    };
+    thread::sleep(Duration::from_millis(50));
+    let second = {
+        let sm = sm.clone();
+        thread::spawn(move || sm.read(2))
+    };
+    thread::sleep(Duration::from_millis(50));
+    a.wr(5, W::new().tx(BC_TRANSACTION, 0, 4, TF_ONE_WAY, b"", &[]));
+    let r = second.join().unwrap();
+    let Br::Tx { tr, .. } = &r[0] else {
+        panic!("{r:?}")
+    };
+    thread::sleep(Duration::from_millis(50));
+    assert!(!first.is_finished(), "the earlier waiter got the work");
+    // Thread 2 is busy (it does not read again): the next call goes to 1.
+    sm.wr_cap(2, W::new().cmd(BC_FREE_BUFFER).u64(tr.buffer), 0);
+    a.wr(5, W::new().tx(BC_TRANSACTION, 0, 5, TF_ONE_WAY, b"", &[]));
+    let r = first.join().unwrap();
+    assert!(matches!(&r[0], Br::Tx { tr, .. } if tr.code == 5), "{r:?}");
+}
+
 /// Thread exit while serving a call fails the call; the process exit
 /// cleans up everything.
 #[test]

@@ -3,14 +3,18 @@
 //!
 //! sysd knows every process it starts: [`Binder::start_native`] records
 //! the child's pid with its uid before the child can open `/dev/binder`,
-//! and the broker refuses processes it does not know. servicemanager is
-//! started this way when `ANDRUNA_SERVICEMANAGER` names its ELF file (see
-//! [`Binder::start_servicemanager_from_env`]).
+//! and the broker refuses processes it does not know. servicemanager
+//! (frameworks/native, built by `aosp/tools/build_guest.py binder`) is
+//! started this way at start-up when its binary exists (see
+//! [`Binder::start_servicemanager_from_env`]); once it is the context
+//! manager, processes sysd starts see `servicemanager.ready=true`, the
+//! property libbinder waits for before it looks up services.
 
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,10 +28,71 @@ pub const AID_SYSTEM: u32 = 1000;
 /// right after it was created.
 const REGISTER_WAIT: Duration = Duration::from_secs(2);
 
+/// How long sysd waits for servicemanager to become the context manager.
+pub const SERVICEMANAGER_WAIT: Duration = Duration::from_secs(30);
+
+/// The property libbinder waits for before using servicemanager.
+pub const READY_PROPERTY: &str = "servicemanager.ready";
+
 /// The binder broker of this sysd.
 pub struct Binder {
     server: Arc<Server>,
     uids: Arc<Mutex<HashMap<u32, u32>>>,
+    servicemanager_ready: AtomicBool,
+}
+
+/// Where servicemanager and its libraries are.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceManagerConfig {
+    /// andruna-elf.
+    pub elf_runner: PathBuf,
+    /// The servicemanager ELF file.
+    pub exe: PathBuf,
+    /// Its library directories.
+    pub lib_dirs: Vec<PathBuf>,
+}
+
+impl ServiceManagerConfig {
+    /// `ANDRUNA_SERVICEMANAGER` (the ELF file; libraries from
+    /// `ANDRUNA_LIB_PATH`, `;`-separated) if set, else the system root
+    /// next to the executable (`exe_dir`): `system\bin\servicemanager`
+    /// with `system\lib64`, when that file exists (`ANDRUNA_SYSTEM_ROOT`
+    /// names another system root). andruna-elf is `ANDRUNA_ELF`, else
+    /// `andruna-elf.exe` in `exe_dir`. `None` when there is no
+    /// servicemanager.
+    pub fn locate(exe_dir: &Path) -> Option<Self> {
+        let elf_runner = std::env::var_os("ANDRUNA_ELF")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| exe_dir.join("andruna-elf.exe"));
+        if let Some(sm) = std::env::var_os("ANDRUNA_SERVICEMANAGER") {
+            let lib_dirs = std::env::var("ANDRUNA_LIB_PATH")
+                .unwrap_or_default()
+                .split(';')
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+                .collect();
+            return Some(Self {
+                elf_runner,
+                exe: sm.into(),
+                lib_dirs,
+            });
+        }
+        let system = std::env::var_os("ANDRUNA_SYSTEM_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| exe_dir.join("system"));
+        Self::in_system_root(elf_runner, &system)
+    }
+
+    /// servicemanager in a system root (`bin`, `lib64`), as staged by
+    /// `build_guest.py binder` in `out/guest/<arch>/system-root`.
+    pub fn in_system_root(elf_runner: PathBuf, system: &Path) -> Option<Self> {
+        let exe = system.join("bin").join("servicemanager");
+        exe.is_file().then(|| Self {
+            elf_runner,
+            exe,
+            lib_dirs: vec![system.join("lib64")],
+        })
+    }
 }
 
 impl std::fmt::Debug for Binder {
@@ -63,7 +128,17 @@ impl Binder {
                 }
             }),
         )?;
-        Ok(Self { server, uids })
+        Ok(Self {
+            server,
+            uids,
+            servicemanager_ready: AtomicBool::new(false),
+        })
+    }
+
+    /// Whether servicemanager is the context manager (processes started
+    /// from now on get `servicemanager.ready=true`).
+    pub fn servicemanager_ready(&self) -> bool {
+        self.servicemanager_ready.load(Ordering::Acquire)
     }
 
     pub fn pipe_name(&self) -> &str {
@@ -94,10 +169,31 @@ impl Binder {
         root: &Path,
         uid: u32,
     ) -> io::Result<Child> {
+        let child = self
+            .native_command(elf_runner, exe, args, lib_dirs, root)
+            .spawn()?;
+        self.allow(child.id(), uid);
+        Ok(child)
+    }
+
+    /// The command [`Binder::start_native`] runs, for callers that set up
+    /// the standard streams themselves; they [`Binder::allow`] the child's
+    /// pid right after spawning it.
+    pub fn native_command(
+        &self,
+        elf_runner: &Path,
+        exe: &Path,
+        args: &[String],
+        lib_dirs: &[PathBuf],
+        root: &Path,
+    ) -> Command {
         let mut cmd = Command::new(elf_runner);
         cmd.arg("run");
         for d in lib_dirs {
             cmd.arg("-L").arg(d);
+        }
+        if self.servicemanager_ready() {
+            cmd.arg("--prop").arg(format!("{READY_PROPERTY}=true"));
         }
         cmd.arg("--root")
             .arg(root)
@@ -105,36 +201,54 @@ impl Binder {
             .args(args)
             .env(PIPE_ENV, self.pipe_name())
             .stdin(Stdio::null());
-        let child = cmd.spawn()?;
-        self.allow(child.id(), uid);
+        cmd
+    }
+
+    /// Starts servicemanager as the `system` uid with guest root `root`
+    /// and waits until it is the context manager (up to
+    /// [`SERVICEMANAGER_WAIT`]); from then on processes this sysd starts
+    /// see `servicemanager.ready=true`.
+    pub fn start_servicemanager(
+        &self,
+        cfg: &ServiceManagerConfig,
+        root: &Path,
+    ) -> io::Result<Child> {
+        std::fs::create_dir_all(root)?;
+        let mut child = self.start_native(
+            &cfg.elf_runner,
+            &cfg.exe,
+            &[],
+            &cfg.lib_dirs,
+            root,
+            AID_SYSTEM,
+        )?;
+        let start = Instant::now();
+        while !self.server.broker().has_context_manager() {
+            if let Some(status) = child.try_wait()? {
+                return Err(io::Error::other(format!(
+                    "servicemanager exited before it became the context manager: {status}"
+                )));
+            }
+            if start.elapsed() > SERVICEMANAGER_WAIT {
+                let _ = child.kill();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "servicemanager did not become the context manager",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        self.servicemanager_ready.store(true, Ordering::Release);
         Ok(child)
     }
 
-    /// Starts servicemanager when `ANDRUNA_SERVICEMANAGER` names its ELF
-    /// file: `ANDRUNA_ELF` is andruna-elf (default: next to sysd),
-    /// `ANDRUNA_LIB_PATH` its library directories (`;`-separated), and the
-    /// guest root is `<root>\servicemanager-root`. `None` when it is not
-    /// configured.
+    /// Starts servicemanager when it is present
+    /// ([`ServiceManagerConfig::locate`] next to this executable), with
+    /// guest root `<root>\servicemanager-root`. `None` when there is none.
     pub fn start_servicemanager_from_env(&self, root: &Path) -> Option<io::Result<Child>> {
-        let sm = std::env::var_os("ANDRUNA_SERVICEMANAGER")?;
-        let runner = std::env::var_os("ANDRUNA_ELF")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::current_exe()
-                    .ok()
-                    .map(|e| e.with_file_name("andruna-elf.exe"))
-            })?;
-        let libs: Vec<PathBuf> = std::env::var("ANDRUNA_LIB_PATH")
-            .unwrap_or_default()
-            .split(';')
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-            .collect();
-        let groot = root.join("servicemanager-root");
-        if let Err(e) = std::fs::create_dir_all(&groot) {
-            return Some(Err(e));
-        }
-        Some(self.start_native(&runner, Path::new(&sm), &[], &libs, &groot, AID_SYSTEM))
+        let exe = std::env::current_exe().ok()?;
+        let cfg = ServiceManagerConfig::locate(exe.parent()?)?;
+        Some(self.start_servicemanager(&cfg, &root.join("servicemanager-root")))
     }
 }
 

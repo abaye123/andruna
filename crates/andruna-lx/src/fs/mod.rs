@@ -486,6 +486,11 @@ pub fn fstatat(dirfd: i32, path: &[u8], flags: u32) -> SysResult<StatData> {
         }
         return Ok(proc::stat(&node));
     }
+    if let Ok(linux) = linux_at(dirfd, path)
+        && let Some(st) = dev::registered_stat(&linux)
+    {
+        return Ok(st);
+    }
     let r = resolve_at(dirfd, path)?;
     let open = |access: u32| {
         open_handle(
@@ -1232,5 +1237,37 @@ Pid:	{pid}
         crate::mem::munmap(a, st.size as usize).unwrap();
         close(pfd).unwrap();
         assert_eq!(open("/dev/__properties__", O_RDWR), Err(Errno::EACCES));
+    }
+
+    /// A device the host registers has a status at its path, so `stat`
+    /// and `access` see it (libbinder checks `access("/dev/binder")`).
+    #[test]
+    fn registered_devices_have_a_status() {
+        fn open(_flags: u32) -> SysResult<Box<dyn crate::fd::FileOps>> {
+            Err(Errno::ENXIO)
+        }
+        test_dir("registered");
+        assert_eq!(
+            fstatat(AT_FDCWD, b"/dev/lx-test-dev", 0),
+            Err(Errno::ENOENT)
+        );
+        dev::register(b"lx-test-dev", open);
+        let st = fstatat(AT_FDCWD, b"/dev/lx-test-dev", 0).unwrap();
+        assert_eq!(st.mode, crate::linux::stat::S_IFCHR | 0o666);
+        assert_eq!(
+            faccessat(AT_FDCWD, b"/dev/lx-test-dev", R_OK | W_OK, 0),
+            Ok(())
+        );
+        let given = crate::linux::stat::StatData {
+            mode: crate::linux::stat::S_IFCHR | 0o600,
+            rdev: (10 << 8) | 7,
+            ..Default::default()
+        };
+        dev::register_with_stat(b"lx-test-dev", open, given);
+        assert_eq!(fstatat(AT_FDCWD, b"/dev/lx-test-dev", 0), Ok(given));
+        assert_eq!(
+            openat(AT_FDCWD, b"/dev/lx-test-dev", O_RDWR, 0),
+            Err(Errno::ENXIO)
+        );
     }
 }

@@ -27,28 +27,58 @@ use super::path::LinuxPath;
 /// `open` flags given.
 pub type DeviceOpen = fn(flags: u32) -> SysResult<Box<dyn FileOps>>;
 
+/// A device registered by the host process: its name, opener and the
+/// status `stat` reports for its path.
+type Registered = (&'static [u8], DeviceOpen, StatData);
+
 /// Devices the host process provides from outside lx (for example
 /// `/dev/binder` from andruna-binder), by name below `/dev`.
-static REGISTERED: std::sync::RwLock<Vec<(&'static [u8], DeviceOpen)>> =
-    std::sync::RwLock::new(Vec::new());
+static REGISTERED: std::sync::RwLock<Vec<Registered>> = std::sync::RwLock::new(Vec::new());
 
 /// Registers the device `/dev/<name>`, served by `open`. A later
-/// registration of the same name replaces the earlier one.
+/// registration of the same name replaces the earlier one. `stat` and
+/// `access` on the path see a character device, mode 0666, owned by root,
+/// with no device number; [`register_with_stat`] gives the status.
 pub fn register(name: &'static [u8], open: DeviceOpen) {
-    let mut r = crate::util::write(&REGISTERED);
-    r.retain(|(n, _)| *n != name);
-    r.push((name, open));
+    register_with_stat(
+        name,
+        open,
+        StatData {
+            dev: 5,
+            mode: S_IFCHR | 0o666,
+            nlink: 1,
+            blksize: 4096,
+            ..StatData::default()
+        },
+    );
 }
 
-/// The opener of the registered device at `p`, if `p` names one.
-pub fn registered(p: &LinuxPath) -> Option<DeviceOpen> {
+/// [`register`], with the status `stat` reports for the path (the same
+/// the open device reports from `fstat`).
+pub fn register_with_stat(name: &'static [u8], open: DeviceOpen, stat: StatData) {
+    let mut r = crate::util::write(&REGISTERED);
+    r.retain(|(n, _, _)| *n != name);
+    r.push((name, open, stat));
+}
+
+fn find_registered(p: &LinuxPath) -> Option<Registered> {
     if p.components.len() != 2 || p.components[0] != b"dev" {
         return None;
     }
     crate::util::read(&REGISTERED)
         .iter()
-        .find(|(n, _)| *n == p.components[1].as_slice())
-        .map(|(_, o)| *o)
+        .find(|(n, _, _)| *n == p.components[1].as_slice())
+        .cloned()
+}
+
+/// The opener of the registered device at `p`, if `p` names one.
+pub fn registered(p: &LinuxPath) -> Option<DeviceOpen> {
+    find_registered(p).map(|(_, o, _)| o)
+}
+
+/// The status of the registered device at `p`, if `p` names one.
+pub fn registered_stat(p: &LinuxPath) -> Option<StatData> {
+    find_registered(p).map(|(_, _, s)| s)
 }
 
 /// A memory device.

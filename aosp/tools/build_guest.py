@@ -17,6 +17,12 @@ Steps (all output in out/guest/<arch>/ of the repository):
                 object, anything else a PIE; `// LINK: -lfoo` on the first
                 line adds libraries)
   binder-tests  crates/andruna-binder-device/tests/guest/*, the same way
+  binder        libbinder.so, libbinder_ndk.so, servicemanager and the
+                libbinder test programs (aosp/guest/binder; needs the AIDL
+                compiler: ANDRUNA_AIDL, default out/host/<host arch>/bin/
+                aidl.exe from aosp/tools/build_host.py), staged with bionic
+                and libc++ in system-root/{bin,lib64}; not in the default
+                step list
   art           libart.so, the JNI libraries ART opens at start-up (ICU,
                 libcore), dalvikvm and dex2oat, collected in art/out
                 (aosp/guest/art.cmake; needs the art and libcore patches;
@@ -215,6 +221,37 @@ def step_binder_tests(arch, out):
           build_dir="binder-tests")
 
 
+def host_arch():
+    import platform
+    return "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
+
+
+BINDER_PROGRAMS = ("servicemanager",)
+
+
+def step_binder(arch, out):
+    """libbinder and servicemanager, then the system root sysd starts
+    servicemanager from (out/guest/<arch>/system-root): lib64 (bionic,
+    libc++, the binder libraries), bin (servicemanager and the test
+    programs)."""
+    aidl = Path(os.environ.get("ANDRUNA_AIDL", ROOT / "out" / "host" / host_arch() / "bin" / "aidl.exe"))
+    if not aidl.is_file():
+        sys.exit(f"{aidl} not found: run python aosp/tools/build_host.py aidl (or set ANDRUNA_AIDL)")
+    b = stage(arch, out, "binder", [f"-DANDRUNA_AIDL={aidl}"])
+    root = out / "system-root"
+    for d in ("lib64", "bin"):
+        (root / d).mkdir(parents=True, exist_ok=True)
+    for so in (out / "sysroot" / "usr" / "lib").glob("*.so*"):
+        if so.name != "libandruna_host.so" and so.is_file():
+            shutil.copy2(so, root / "lib64" / so.name)
+    for so in b.glob("*.so"):
+        shutil.copy2(so, root / "lib64" / so.name)
+    tests = {p.stem for p in (GUEST / "binder" / "tests").glob("*.cpp")}
+    for name in BINDER_PROGRAMS + tuple(sorted(tests)):
+        shutil.copy2(b / name, root / "bin" / name)
+    print(f"system root: {root}")
+
+
 # The order of andruna-app's boot class path (crates/andruna-app BOOT_JARS).
 BOOT_JARS = ("core-oj.jar", "core-libart.jar", "core-icu4j.jar", "bouncycastle.jar",
              "conscrypt.jar")
@@ -346,13 +383,13 @@ def step_builtins(arch, out):
 STEPS = {"sysroot": step_sysroot, "builtins": step_builtins, "bionic": step_bionic,
          "libcxx": step_libcxx, "aosp": step_aosp, "tests": step_tests,
          "linker-tests": step_linker_tests, "binder-tests": step_binder_tests,
-         "art": step_art}
+         "art": step_art, "binder": step_binder}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arch", default="x64", choices=ARCH)
-    ap.add_argument("steps", nargs="*", default=[s for s in STEPS if s != "art"])
+    ap.add_argument("steps", nargs="*", default=[s for s in STEPS if s not in ("art", "binder")])
     args = ap.parse_args()
     out = ROOT / "out" / "guest" / args.arch
     out.mkdir(parents=True, exist_ok=True)
