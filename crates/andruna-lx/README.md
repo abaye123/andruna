@@ -9,6 +9,9 @@ Each module's documentation lists its deviations from Linux.
 
 ## Process exit codes (for supervisors)
 
+Decided in [ADR 0040](../../docs/decisions/0040-lx-signal-exit-status.md)
+(proposed).
+
 A process that runs lx ends in one of three ways, and its Windows exit code
 tells them apart. `andruna_lx::signal::decode_exit_code` decodes it; a
 supervisor that does not link lx can apply the same rules:

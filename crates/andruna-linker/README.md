@@ -32,10 +32,12 @@ calling convention (see `src/lib.rs` and `aosp/bionic/host_symbols.txt`).
 - Threads: `__andruna_clone_thread` (bionic's `__bionic_clone`) on Windows
   threads running on bionic's stacks; `CLONE_*SETTID`/`CLEARTID` semantics.
 - System calls (`__andruna_syscall`) run on the thread's Windows stack and
-  go to andruna-lx; the few lx does not answer yet are in `interim.rs`
-  and `procfs.rs` (`/proc/self/stat`, `/sys` processor lists), and
+  go to andruna-lx, which answers all of them (the loader keeps only the
+  calls that are about its own state: threads, the thread pointer, exit);
   liblog's logd socket is a stand-in that writes the records to the
-  guest's stderr (`logd.rs`, `ANDRUNA_LOG_PRIORITY`). Faults go to
+  guest's stderr (`logd.rs`, `ANDRUNA_LOG_PRIORITY`). A fault whose
+  signal is at its default action ends the process with lx's signal exit
+  code after the loader's crash report (lx's fatal hook). Faults go to
   andruna-lx's signal delivery from the first vectored handler; on arm64
   that handler first emulates `mrs ctr_el0` (and `dc cvau`/`ic ivau`),
   which Windows does not allow at EL0 and the JIT's `__clear_cache` uses.
