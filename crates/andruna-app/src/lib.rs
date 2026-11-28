@@ -28,8 +28,16 @@ pub const ISA: &str = if cfg!(target_arch = "x86_64") {
     "arm64"
 };
 
-/// The boot class path jars (the ART module's), in order.
-pub const BOOT_JARS: [&str; 3] = ["core-oj.jar", "core-libart.jar", "core-icu4j.jar"];
+/// The boot class path jars, in order: the ART module's core libraries and
+/// Bouncy Castle, then Conscrypt (on Android in the com.android.conscrypt
+/// APEX; here in the ART root's javalib, ADR 0021).
+pub const BOOT_JARS: [&str; 5] = [
+    "core-oj.jar",
+    "core-libart.jar",
+    "core-icu4j.jar",
+    "bouncycastle.jar",
+    "conscrypt.jar",
+];
 
 /// Guest directory of the ART module.
 pub const ART_APEX: &str = "/apex/com.android.art";
@@ -37,6 +45,8 @@ pub const ART_APEX: &str = "/apex/com.android.art";
 pub const JAVALIB: &str = "/apex/com.android.art/javalib";
 /// Guest directory of ICU's data file.
 pub const ICU_DATA: &str = "/apex/com.android.i18n/etc/icu";
+/// Guest directory of the time zone data module.
+pub const TZDATA_APEX: &str = "/apex/com.android.tzdata";
 /// Guest path of the boot image (ART inserts the ISA directory).
 pub const BOOT_IMAGE: &str = "/apex/com.android.art/javalib/boot.art";
 /// ART_BASE_ADDRESS of the build (aosp/modules/libartbase.cmake, S2):
@@ -258,7 +268,7 @@ fn guest_env(layout: &Layout) -> Vec<String> {
         "ANDROID_DATA=/data".into(),
         format!("ANDROID_ART_ROOT={ART_APEX}"),
         "ANDROID_I18N_ROOT=/apex/com.android.i18n".into(),
-        "ANDROID_TZDATA_ROOT=/apex/com.android.tzdata".into(),
+        format!("ANDROID_TZDATA_ROOT={TZDATA_APEX}"),
         format!("BOOTCLASSPATH={}", boot_classpath()),
         "HOME=/data/local/tmp".into(),
         "TMPDIR=/data/local/tmp".into(),
@@ -492,7 +502,9 @@ mod tests {
             boot_classpath(),
             "/apex/com.android.art/javalib/core-oj.jar:\
              /apex/com.android.art/javalib/core-libart.jar:\
-             /apex/com.android.art/javalib/core-icu4j.jar"
+             /apex/com.android.art/javalib/core-icu4j.jar:\
+             /apex/com.android.art/javalib/bouncycastle.jar:\
+             /apex/com.android.art/javalib/conscrypt.jar"
         );
     }
 }

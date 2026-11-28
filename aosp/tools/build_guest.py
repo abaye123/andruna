@@ -215,15 +215,41 @@ def step_binder_tests(arch, out):
           build_dir="binder-tests")
 
 
-BOOT_JARS = ("core-oj.jar", "core-libart.jar", "core-icu4j.jar")
+# The order of andruna-app's boot class path (crates/andruna-app BOOT_JARS).
+BOOT_JARS = ("core-oj.jar", "core-libart.jar", "core-icu4j.jar", "bouncycastle.jar",
+             "conscrypt.jar")
+
+
+def stage_tzdata(root):
+    """The files of the com.android.tzdata APEX (system/timezone/output_data,
+    as its Android.bp installs them under etc/): the IANA data, the format
+    version, Android's lookup files and ICU's time zone overlay, in the
+    directory of the current format version (10) and, for tzdata and
+    tz_version, in the unversioned directory too."""
+    data = AOSP / "system" / "timezone" / "output_data"
+    if not data.is_dir():
+        print(f"warning: {data} missing (cargo xtask fetch); no time zone data")
+        return
+    tz = root / "tzdata" / "etc" / "tz"
+    ver = tz / "versioned" / "10"
+    (ver / "icu").mkdir(parents=True, exist_ok=True)
+    for d in (tz, ver):
+        shutil.copy2(data / "version" / "tz_version", d / "tz_version")
+        shutil.copy2(data / "iana" / "tzdata", d / "tzdata")
+    for f in ("tzlookup.xml", "telephonylookup.xml"):
+        shutil.copy2(data / "android" / f, ver / f)
+    for f in ("zoneinfo64.res", "metaZones.res", "timezoneTypes.res", "windowsZones.res"):
+        shutil.copy2(data / "icu_overlay" / f, ver / "icu" / f)
 
 
 def step_art(arch, out):
     """ART, then the ART root andruna-app runs (out/guest/<arch>/art-root):
     lib64 (bionic, libc++, ART's libraries), bin (dalvikvm, dex2oat),
     javalib (the boot class path jars from ANDRUNA_BOOT_JARS, default
-    out/s1/java, built by spikes/s1/java/build_boot.py) and icu (ICU's
-    data file)."""
+    out/s1/java, built by spikes/s1/java/build_boot.py), icu (ICU's data
+    file) and tzdata (the time zone module's files, mounted as
+    /apex/com.android.tzdata). Conscrypt's libraries are in lib64 and its
+    jar in javalib (ADR 0021)."""
     b = stage(arch, out, "art")
     if arch == "x64":
         check_no_gs_access(b / "out")
@@ -246,6 +272,7 @@ def step_art(arch, out):
     dat = next((AOSP / "external" / "icu" / "icu4c" / "source" / "stubdata").glob("icudt*l.dat"), None)
     if dat:
         shutil.copy2(dat, root / "icu" / dat.name)
+    stage_tzdata(root)
     print(f"ART root: {root}")
 
 

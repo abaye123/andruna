@@ -1,6 +1,7 @@
-"""Build a minimal ART boot classpath (core-oj, core-libart, core-icu4j) as
-dex jars from the AOSP sources fetched by `cargo xtask fetch`, plus the S1
-test programs Hello, Bench, Faults and Clock.
+"""Build a minimal ART boot classpath (core-oj, core-libart, core-icu4j, and
+with build_security.py bouncycastle and conscrypt) as dex jars from the AOSP
+sources fetched by `cargo xtask fetch`, plus the S1 test programs Hello,
+Bench, Faults and Clock.
 
 The build mirrors what Soong does for these modules at android-17.0.0_r1:
 
@@ -449,6 +450,10 @@ def main(argv):
                 for j in ("core-oj", "core-libart", "core-icu4j")}
     else:
         jars = build_boot()
+        # bouncycastle.jar and conscrypt.jar (the security providers).
+        sys.dont_write_bytecode = True
+        import build_security
+        build_security.main()
     build_tests(jars)
     if "--skip-verify" not in argv:
         run([sys.executable, "-I", os.path.join(HERE, "verify_boot.py")])

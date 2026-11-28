@@ -123,6 +123,20 @@ art_so(openjdk_so libopenjdk.so libopenjdk)
 target_link_libraries(openjdk_so PRIVATE libfdlibm libz
   openjdkjvm_so androidio_so icu_so nativehelper_so base_so log_so "${SYSLIB}/libdl_android.so")
 
+# --- Conscrypt (the com.android.conscrypt APEX's libraries) ------------------
+#
+#   libcrypto.so libssl.so   BoringSSL (boringssl.cmake)
+#   libjavacrypto.so         Conscrypt's JNI natives (conscrypt.cmake)
+
+art_so(crypto_so libcrypto.so libcrypto_static)
+target_link_options(crypto_so PRIVATE -Wl,-Bsymbolic)
+
+art_so(ssl_so libssl.so libssl)
+target_link_libraries(ssl_so PRIVATE crypto_so)
+
+art_so(javacrypto_so libjavacrypto.so libjavacrypto)
+target_link_libraries(javacrypto_so PRIVATE ssl_so crypto_so log_so)
+
 # Everything the stage produces, in one directory (what andruna-app mounts
 # as the ART module's library directory).
 set(ART_OUT "${CMAKE_BINARY_DIR}/out")
@@ -135,8 +149,9 @@ add_custom_target(art_install ALL
     $<TARGET_FILE:icu_so> $<TARGET_FILE:icu_jni_so> $<TARGET_FILE:expat_so>
     $<TARGET_FILE:androidio_so> $<TARGET_FILE:javacore_so>
     $<TARGET_FILE:openjdkjvm_so> $<TARGET_FILE:openjdk_so> $<TARGET_FILE:unwindstack_so>
+    $<TARGET_FILE:crypto_so> $<TARGET_FILE:ssl_so> $<TARGET_FILE:javacrypto_so>
     "${ART_OUT}"
   DEPENDS log_so base_so nativehelper_so sigchain_so art_so dalvikvm dex2oat
     icuuc_so icui18n_so icu_so icu_jni_so expat_so androidio_so javacore_so
-    openjdkjvm_so openjdk_so unwindstack_so
+    openjdkjvm_so openjdk_so unwindstack_so crypto_so ssl_so javacrypto_so
   VERBATIM)
