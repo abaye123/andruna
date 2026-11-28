@@ -14,6 +14,9 @@
 //!                   (default %TEMP%\andruna-elf-root)
 //!   --arch x64|arm64  machine of the objects (link only)
 //!   --stubs         bind undefined symbols to ENOSYS stubs (diagnostics)
+//!   --prop k=v      define system property k for the guest (repeatable;
+//!                   the host sets these up, as sysd sets
+//!                   servicemanager.ready for processes it starts)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -26,6 +29,7 @@ use andruna_linker::{Config, Linker};
 struct Opts {
     config: Config,
     root: Option<PathBuf>,
+    props: Vec<(String, String)>,
     rest: Vec<String>,
 }
 
@@ -37,6 +41,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             .extend(p.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
     }
     let mut root = None;
+    let mut props = vec![];
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -59,6 +64,12 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                 };
             }
             "--stubs" => config.unresolved_stubs = true,
+            "--prop" => {
+                i += 1;
+                let kv = args.get(i).ok_or("--prop needs name=value")?;
+                let (k, v) = kv.split_once('=').ok_or("--prop needs name=value")?;
+                props.push((k.to_string(), v.to_string()));
+            }
             _ => break,
         }
         i += 1;
@@ -66,6 +77,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     Ok(Opts {
         config,
         root,
+        props,
         rest: args[i..].to_vec(),
     })
 }
@@ -114,6 +126,12 @@ fn main() {
 fn cmd_run(args: &[String]) -> Result<i32, String> {
     let o = parse(args)?;
     let exe = o.rest.first().ok_or("run: missing executable")?.clone();
+    let props: Vec<(&str, &str)> = o
+        .props
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    andruna_lx::properties::define(&props);
     init_lx(o.root)?;
     let name = Path::new(&exe)
         .file_name()
