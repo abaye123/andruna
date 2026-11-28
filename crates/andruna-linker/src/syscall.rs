@@ -155,35 +155,28 @@ unsafe fn dispatch_inner(n: i64, a: [i64; 6]) -> i64 {
     }
 }
 
-/// Sends a call to lx, with the loader's interim answers
-/// ([`crate::interim`]) before it and where lx reports `ENOSYS`.
+/// Sends a call to lx.
 ///
 /// # Safety
 ///
 /// As for [`dispatch`].
 unsafe fn forward(n: i64, a: [i64; 6]) -> i64 {
     // SAFETY: forwarded from this function's contract.
-    if let Some(r) = unsafe { crate::interim::before(n, a) } {
-        return r;
-    }
-    // SAFETY: as above.
     let r = unsafe { lx_raw(n, a) };
-    if r < 0
-        // SAFETY: as above.
-        && let Some(v) = unsafe { crate::interim::after_error(n, a, r) }
-    {
-        return v;
+    if r == -i64::from(ENOSYS) {
+        report_enosys(n, a);
     }
-    if r != -i64::from(ENOSYS) {
-        return r;
-    }
-    // SAFETY: as above.
-    match unsafe { crate::interim::after_enosys(n, a) } {
-        Some(r) => r,
-        None => {
-            crate::interim::report_enosys(n, a);
-            r
-        }
+    r
+}
+
+/// `ANDRUNA_ENOSYS`: report every system call that ends with `ENOSYS`.
+fn report_enosys(n: i64, a: [i64; 6]) {
+    static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *T.get_or_init(|| std::env::var_os("ANDRUNA_ENOSYS").is_some()) {
+        crate::debug::report(format_args!(
+            "system call {n}({:#x}, {:#x}, {:#x}, {:#x}) = -ENOSYS",
+            a[0], a[1], a[2], a[3]
+        ));
     }
 }
 

@@ -101,7 +101,8 @@ pub fn set_exit_hook(f: fn(i32)) {
 /// `exit_group`: ends the process.
 pub fn exit_process(code: i32) -> ! {
     use std::io::Write as _;
-    crate::interim::flush_all();
+    // Shared file mappings that are copies go back to their files.
+    andruna_lx::mem::sync_all();
     if let Some(hook) = EXIT_HOOK.get() {
         hook(code & 0xff);
     }

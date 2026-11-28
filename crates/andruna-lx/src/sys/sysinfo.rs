@@ -5,17 +5,15 @@ use core::ffi::c_void;
 
 use windows::Wdk::System::SystemServices::VM_COUNTERS;
 use windows::Wdk::System::Threading::{NtQueryInformationProcess, ProcessVmCounters};
-use windows::Win32::Foundation::FILETIME;
 use windows::Win32::System::Kernel::PROCESSOR_NUMBER;
 use windows::Win32::System::ProcessStatus::{PSAPI_WORKING_SET_EX_INFORMATION, QueryWorkingSetEx};
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::{
-    FlushProcessWriteBuffers, GetCurrentProcess, GetCurrentProcessorNumberEx, GetSystemTimes,
-    OpenThread, SetThreadPriority, THREAD_PRIORITY, THREAD_SET_LIMITED_INFORMATION,
+    FlushProcessWriteBuffers, GetCurrentProcess, GetCurrentProcessorNumberEx, OpenThread,
+    SetThreadPriority, THREAD_PRIORITY, THREAD_SET_LIMITED_INFORMATION,
 };
 
 use super::OwnedHandle;
-use super::time::filetime_to_u64;
 use crate::errno::{Errno, SysResult};
 
 /// Physical memory and commit (page file) totals, bytes.
@@ -44,22 +42,35 @@ pub fn memory_status() -> MemoryStatus {
     }
 }
 
-/// System-wide processor times since boot, 100 ns units: (idle, busy).
-/// Windows counts idle time inside kernel time.
-pub fn system_times() -> Option<(u64, u64)> {
-    let (mut idle, mut kernel, mut user) = (
-        FILETIME::default(),
-        FILETIME::default(),
-        FILETIME::default(),
-    );
-    // SAFETY: three valid out pointers.
-    unsafe { GetSystemTimes(Some(&mut idle), Some(&mut kernel), Some(&mut user)) }.ok()?;
-    let (i, k, u) = (
-        filetime_to_u64(idle),
-        filetime_to_u64(kernel),
-        filetime_to_u64(user),
-    );
-    Some((i, (k + u).saturating_sub(i)))
+/// The idle time of all processors since boot (the idle process's time,
+/// 100 ns units) and the number of active processors in all groups.
+/// `SystemPerformanceInformation` costs microseconds; the per-processor
+/// queries (`GetSystemTimes`, `SystemProcessorPerformanceInformation`)
+/// took 4 to 25 ms on a loaded desktop.
+pub fn idle_time() -> Option<(u64, u32)> {
+    use windows::Wdk::System::SystemInformation::{
+        NtQuerySystemInformation, SYSTEM_INFORMATION_CLASS,
+    };
+    use windows::Win32::System::Threading::GetActiveProcessorCount;
+    // SYSTEM_PERFORMANCE_INFORMATION starts with IdleProcessTime; the
+    // structure is 376 bytes on 64-bit Windows 11.
+    let mut buf = [0u64; 64];
+    let mut len = 0u32;
+    // SAFETY: `buf` is writable for the size passed and 8-byte aligned.
+    let st = unsafe {
+        NtQuerySystemInformation(
+            SYSTEM_INFORMATION_CLASS(2), // SystemPerformanceInformation
+            buf.as_mut_ptr().cast::<c_void>(),
+            size_of_val(&buf) as u32,
+            &mut len,
+        )
+    };
+    if st.is_err() || len < 8 {
+        return None;
+    }
+    // SAFETY: no pointer arguments; ALL_PROCESSOR_GROUPS.
+    let cpus = unsafe { GetActiveProcessorCount(0xffff) }.max(1);
+    Some((buf[0], cpus))
 }
 
 /// The process's peak working set and page fault count.

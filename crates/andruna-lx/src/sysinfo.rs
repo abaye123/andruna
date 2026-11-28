@@ -18,9 +18,9 @@
 //!
 //! - Windows keeps no load average. The loads of `sysinfo` and
 //!   `/proc/loadavg` are an estimate: the number of busy processors
-//!   (system processor busy time over elapsed time, times the processor
-//!   count), averaged over 1, 5 and 15 minutes from the samples taken when
-//!   they are read (the first read starts from the average since boot).
+//!   (processor time not spent idle over elapsed time, all processors),
+//!   averaged over 1, 5 and 15 minutes from the samples taken when they are
+//!   read (the first read starts from the average since boot).
 //! - Counts of processes and threads describe this process only, as lx's
 //!   `/proc` does: `sysinfo.procs` and the totals in `/proc/loadavg` are its
 //!   thread count.
@@ -105,7 +105,8 @@ pub fn proc_version() -> Vec<u8> {
 // ---- load average -------------------------------------------------------------
 
 struct Load {
-    /// Last sample: (time since boot, busy time), 100 ns units.
+    /// Last sample: (time since boot without sleep, idle time of all
+    /// processors), 100 ns units.
     last: Option<(u64, u64)>,
     /// 1, 5 and 15 minute averages.
     avg: [f64; 3],
@@ -118,30 +119,30 @@ static LOAD: Mutex<Load> = Mutex::new(Load {
 
 /// The 1, 5 and 15 minute load estimates (see the module documentation).
 pub fn loadavg() -> [f64; 3] {
-    let now = crate::sys::time::interrupt_time();
-    let Some((_, busy)) = os::system_times() else {
+    // Time without sleep, as the idle time does not grow while asleep.
+    let now = crate::sys::time::unbiased_interrupt_time(false);
+    let Some((idle, cpus)) = os::idle_time() else {
         return [0.0; 3];
     };
-    let cpus = crate::sys::thread::processor_count() as f64;
+    let cpus = f64::from(cpus);
+    let busy_since = |t0: u64, i0: u64| {
+        let dt = now.saturating_sub(t0).max(1) as f64;
+        ((cpus * dt - idle.saturating_sub(i0) as f64) / dt).clamp(0.0, cpus)
+    };
     let mut l = lock(&LOAD);
     match l.last {
-        None => {
-            // Average since boot.
-            let busy_cpus = busy as f64 / now.max(1) as f64;
-            l.avg = [busy_cpus.min(cpus); 3];
-        }
-        Some((t0, b0)) if now > t0 => {
-            let dt = (now - t0) as f64;
-            let busy_cpus = (busy.saturating_sub(b0) as f64 / dt).min(cpus);
-            let secs = dt / 1e7;
+        None => l.avg = [busy_since(0, 0); 3],
+        Some((t0, i0)) if now > t0 => {
+            let busy = busy_since(t0, i0);
+            let secs = (now - t0) as f64 / 1e7;
             for (a, period) in l.avg.iter_mut().zip([60.0, 300.0, 900.0]) {
                 let k = (-secs / period).exp();
-                *a = *a * k + busy_cpus * (1.0 - k);
+                *a = *a * k + busy * (1.0 - k);
             }
         }
         Some(_) => {}
     }
-    l.last = Some((now, busy));
+    l.last = Some((now, idle));
     l.avg
 }
 
@@ -341,7 +342,7 @@ pub fn membarrier(cmd: i32, flags: u32) -> SysResult<i32> {
 /// `mincore`: one byte per page of `[addr, addr+len)`, bit 0 set when the
 /// page is resident. `ENOMEM` if part of the range is not mapped.
 pub fn mincore(addr: usize, len: usize) -> SysResult<Vec<u8>> {
-    if addr % 4096 != 0 {
+    if !addr.is_multiple_of(4096) {
         return Err(Errno::EINVAL);
     }
     let pages = len.div_ceil(4096);

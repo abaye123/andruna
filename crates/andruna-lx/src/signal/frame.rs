@@ -30,8 +30,8 @@ use windows::Win32::System::Diagnostics::Debug::{
     RtlRestoreContext,
 };
 use windows::Win32::System::Memory::{
-    MEM_COMMIT, MEM_IMAGE, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
-    PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
+    MEM_COMMIT, MEM_IMAGE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY,
+    PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
 };
 
 use super::{action, current, reset_action};
@@ -224,12 +224,26 @@ unsafe fn handle(ep: *mut EXCEPTION_POINTERS) -> bool {
             if code == STATUS_ACCESS_VIOLATION && retry(addr, write) {
                 return true;
             }
-            let present = mapped(addr);
-            Fault {
-                sig: SIGSEGV,
-                code: if present { SEGV_ACCERR } else { SEGV_MAPERR },
-                addr,
-                mem: Some((write, present)),
+            match crate::mem::fault_kind(addr as usize) {
+                // A page of a file mapping past the end of the file.
+                Some(crate::mem::FaultKind::PastEof) => Fault {
+                    sig: SIGBUS,
+                    code: BUS_ADRERR,
+                    addr,
+                    mem: None,
+                },
+                kind => {
+                    let present = match kind {
+                        Some(k) => k == crate::mem::FaultKind::Mapped,
+                        None => mapped(addr),
+                    };
+                    Fault {
+                        sig: SIGSEGV,
+                        code: if present { SEGV_ACCERR } else { SEGV_MAPERR },
+                        addr,
+                        mem: Some((write, present)),
+                    }
+                }
             }
         }
         STATUS_IN_PAGE_ERROR => Fault {
@@ -354,14 +368,10 @@ fn accessible(addr: u64, write: bool) -> bool {
     if write { writable } else { readable }
 }
 
-/// Whether `addr` is mapped (`SEGV_ACCERR`) rather than unmapped
-/// (`SEGV_MAPERR`). lx's `PROT_NONE` mappings are reserved, not committed.
+/// Whether `addr`, outside lx's table (or while the table is busy), is
+/// mapped (`SEGV_ACCERR`) rather than unmapped (`SEGV_MAPERR`).
 fn mapped(addr: u64) -> bool {
-    match crate::sys::mem::query(addr as usize) {
-        Some(r) if r.state == MEM_COMMIT => true,
-        Some(r) if r.state == MEM_RESERVE => crate::mem::is_mapped(addr as usize).unwrap_or(false),
-        _ => false,
-    }
+    matches!(crate::sys::mem::query(addr as usize), Some(r) if r.state == MEM_COMMIT)
 }
 
 // ---- queued signals ----------------------------------------------------------

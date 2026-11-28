@@ -1014,7 +1014,17 @@ pub(crate) mod tests {
         // SAFETY: a readable and writable mapping of `len` bytes.
         let m = unsafe { core::slice::from_raw_parts_mut(a as *mut u8, len) };
         assert_eq!(&m[..2 * PAGE_SIZE + 100], &data[PAGE_SIZE..]);
-        assert!(m[2 * PAGE_SIZE + 100..].iter().all(|&b| b == 0));
+        // The rest of the last page reads as zero; the page wholly past
+        // the end of the file raises SIGBUS.
+        assert!(
+            m[2 * PAGE_SIZE + 100..3 * PAGE_SIZE]
+                .iter()
+                .all(|&b| b == 0)
+        );
+        assert_eq!(
+            crate::mem::fault_kind(a + 3 * PAGE_SIZE),
+            Some(crate::mem::FaultKind::PastEof)
+        );
         // Private writes do not reach the file.
         m[0] = 0xee;
         assert_eq!(
@@ -1026,22 +1036,18 @@ pub(crate) mod tests {
         assert_eq!(one[0], data[PAGE_SIZE]);
         crate::mem::munmap(a, len).unwrap();
 
-        // Read-only shared: readable, and never writable.
+        // Shared of a read-write descriptor: readable, and writable later.
         let a = crate::mem::mmap(0, PAGE_SIZE, PROT_READ, MAP_SHARED, fd, 0).unwrap();
         // SAFETY: a readable mapping of one page.
         assert_eq!(unsafe { *(a as *const u8).add(7) }, data[7]);
         assert_eq!(
             crate::mem::mprotect(a, PAGE_SIZE, PROT_READ | PROT_WRITE),
-            Err(Errno::EACCES)
+            Ok(())
         );
         crate::mem::munmap(a, PAGE_SIZE).unwrap();
 
         // Errors.
         let rw = PROT_READ | PROT_WRITE;
-        assert_eq!(
-            crate::mem::mmap(0, PAGE_SIZE, rw, MAP_SHARED, fd, 0),
-            Err(Errno::ENODEV)
-        );
         assert_eq!(
             crate::mem::mmap(0, PAGE_SIZE, rw, MAP_PRIVATE, fd, 10),
             Err(Errno::EINVAL)
