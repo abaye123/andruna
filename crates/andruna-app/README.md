@@ -8,6 +8,7 @@ and runs a Java program, as `dalvikvm` does on Android:
 andruna-app [options] --classpath <dex|jar>[;...] <MainClass> [args...]
 andruna-app [options] --compile-boot          boot image (dex2oat)
 andruna-app [options] --compile <dex|jar>     AOT code for one entry (dex2oat)
+andruna-app [options] --exec <elf> [args...]  a native guest program
 
   --mode int|jit|aot   interpreter, JIT (default), or AOT code without JIT
   --no-boot-image      start without the boot image
@@ -15,8 +16,26 @@ andruna-app [options] --compile <dex|jar>     AOT code for one entry (dex2oat)
                        next to the executable)
   --data <dir>         Windows directory mounted as the guest / (default
                        %TEMP%\andruna-app)
+  --compositor <handles>       the window channel's inherited handles
+                       (section:capacity:to_app:to_compositor, hex)
   -X..., -D..., -verbose:...   passed to ART
 ```
+
+## OpenGL ES and windows
+
+The process registers andruna-gles's host symbols before the linker
+starts, and puts the guest GLES libraries (`libEGL.so`, `libGLESv1_CM.so`,
+`libGLESv2.so`, `libGLESv3.so`, `libandruna_window.so`) on the library
+search path: `ANDRUNA_GLES_GUEST`, else `gles\` next to the executable.
+ANGLE's DLLs come from `ANDRUNA_ANGLE_DIR`, else `angle\` next to the
+executable ([ADR 0048](../../docs/decisions/0048-gles-runtime-layout-and-native-programs.md)).
+
+With `--compositor`, the process opens its window channel
+(andruna-compositor's `producer` module, [ADR 0047](../../docs/decisions/0047-surface-handshake-on-the-window-channel.md))
+and the guest's `andruna_window_create` returns the surfaces the
+compositor hands over; an EGL window surface on it presents straight to
+the task window. `--exec` runs a native program (its directory is
+`/data/app/cp0`; the ART root is optional for it).
 
 The process mounts the guest tree with andruna-lx, then andruna-linker
 loads ART's `dalvikvm` (or `dex2oat`) from the ART root and starts it on a
@@ -43,6 +62,15 @@ target\release\andruna-app --art-root out\guest\x64\art-root ^
 ```
 
 ## Tests
+
+`tests/gl.rs` is a compositor host: it opens a task window, starts
+`andruna-app --compositor ... --exec gles_window` (and the Java program
+`GlMain` with its JNI library, `tools/build_gl_java.py`), hands the app a
+surface, checks screenshots for upright content, resizes the window and
+checks the producer's new buffers, and closes the window. It needs
+ANGLE's DLLs and the guest GLES build (skipped without them unless
+`ANDRUNA_REQUIRE_GLES=1`); the Java part also needs the ART root.
+
 
 `cargo test -p andruna-app`: unit tests for the command line and the
 layout; `tests/run.rs` runs Hello World in the interpreter, with the JIT

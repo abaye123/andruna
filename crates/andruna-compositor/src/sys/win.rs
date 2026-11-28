@@ -471,6 +471,14 @@ pub fn current_thread_id() -> u32 {
     unsafe { GetCurrentThreadId() }
 }
 
+/// Removes one queued thread message `msg` of this thread; true if there
+/// was one (tests of code that posts thread messages).
+pub fn take_thread_message(msg: u32) -> bool {
+    let mut m = MSG::default();
+    // SAFETY: `m` is a valid out pointer; only `msg` is removed.
+    unsafe { PeekMessageW(&mut m, Some(HWND(-1isize as *mut _)), msg, msg, PM_REMOVE).as_bool() }
+}
+
 pub fn post_thread(thread: u32, msg: u32) -> bool {
     // SAFETY: no pointers.
     unsafe { PostThreadMessageW(thread, msg, WPARAM(0), LPARAM(0)).is_ok() }

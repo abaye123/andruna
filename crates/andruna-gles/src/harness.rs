@@ -13,6 +13,13 @@
 //! int andruna_window_resize(ANativeWindow *w, int width, int height);
 //! int andruna_window_frame_stats(ANativeWindow *w, struct andruna_frame_stats *out);
 //! ```
+//!
+//! In an app process a compositor provides the windows instead
+//! ([`set_window_provider`]): `andruna_window_create` then returns the
+//! next surface the compositor hands to the process, at the size the
+//! compositor chose (`width` and `height` are ignored, as the system sizes
+//! a `NativeActivity`'s window), and `andruna_window_resize` returns -1
+//! (the user resizes the window).
 
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
@@ -325,13 +332,33 @@ fn ui_thread(
 // ---------------------------------------------------------------------------
 // The guest API.
 
-static WINDOWS: Mutex<Option<HashMap<usize, Arc<HarnessWindow>>>> = Mutex::new(None);
+/// Where guest windows come from in a process with a compositor: called
+/// with the guest's requested size and title, returns the target.
+pub type WindowProvider =
+    dyn Fn(u32, u32, Option<&str>) -> Result<Arc<dyn WindowTarget>, String> + Send + Sync;
 
-fn windows_map() -> std::sync::MutexGuard<'static, Option<HashMap<usize, Arc<HarnessWindow>>>> {
+static PROVIDER: Mutex<Option<Arc<WindowProvider>>> = Mutex::new(None);
+
+/// Makes `andruna_window_create` return windows from `p` (a compositor's
+/// surfaces) instead of harness windows; `None` restores the harness.
+pub fn set_window_provider(p: Option<Box<WindowProvider>>) {
+    *PROVIDER.lock().unwrap_or_else(|e| e.into_inner()) = p.map(Arc::from);
+}
+
+/// A guest window: a harness window, or a target from the provider.
+#[derive(Clone)]
+enum GuestWindow {
+    Harness(Arc<HarnessWindow>),
+    Provided(Arc<dyn WindowTarget>),
+}
+
+static WINDOWS: Mutex<Option<HashMap<usize, GuestWindow>>> = Mutex::new(None);
+
+fn windows_map() -> std::sync::MutexGuard<'static, Option<HashMap<usize, GuestWindow>>> {
     WINDOWS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn harness_of(p: usize) -> Option<Arc<HarnessWindow>> {
+fn window_of(p: usize) -> Option<GuestWindow> {
     windows_map().as_ref()?.get(&p).cloned()
 }
 
@@ -352,8 +379,18 @@ pub struct GuestFrameStats {
 const _: () = assert!(size_of::<GuestFrameStats>() == 56);
 
 /// Creates a harness window and its `ANativeWindow` (one reference, owned
-/// by the caller). `title == None` makes a headless target.
+/// by the caller). `title == None` makes a headless target. With a window
+/// provider, the window comes from it.
 pub fn create_window(width: u32, height: u32, title: Option<&str>) -> Result<usize, String> {
+    let provider = PROVIDER.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(prov) = provider {
+        let t = prov(width, height, title)?;
+        let p = native_window::create(t.clone()) as usize;
+        windows_map()
+            .get_or_insert_with(HashMap::new)
+            .insert(p, GuestWindow::Provided(t));
+        return Ok(p);
+    }
     let headless = title.is_none() || std::env::var_os("ANDRUNA_GLES_HEADLESS").is_some();
     let h = if headless {
         HarnessWindow::headless(width, height).map_err(|e| e.to_string())?
@@ -361,7 +398,9 @@ pub fn create_window(width: u32, height: u32, title: Option<&str>) -> Result<usi
         HarnessWindow::open(width, height, title.unwrap_or("Andruna"))?
     };
     let p = native_window::create(h.clone()) as usize;
-    windows_map().get_or_insert_with(HashMap::new).insert(p, h);
+    windows_map()
+        .get_or_insert_with(HashMap::new)
+        .insert(p, GuestWindow::Harness(h));
     Ok(p)
 }
 
@@ -390,7 +429,23 @@ gfn! {
         crate::guard((), || {
             let h = windows_map().as_mut().and_then(|m| m.remove(&win));
             if let Some(h) = h {
-                h.close();
+                if std::env::var_os("ANDRUNA_GLES_STATS").is_some()
+                    && let Some(st) = frame_stats(win)
+                {
+                    crate::log(format_args!(
+                        "window {win:#x}: {} frames, interval mean {:.2} ms p99 {:.2} ms, eglSwapBuffers mean {:.2} ms, wait mean {:.2} ms p99 {:.2} ms, {} frames in flight",
+                        st.frames,
+                        st.mean_interval_ms,
+                        st.p99_interval_ms,
+                        st.mean_swap_ms,
+                        st.mean_wait_ms,
+                        st.p99_wait_ms,
+                        st.max_frame_latency
+                    ));
+                }
+                if let GuestWindow::Harness(h) = h {
+                    h.close();
+                }
                 native_window::release(win);
             }
         })
@@ -399,14 +454,21 @@ gfn! {
 
 gfn! {
     unsafe fn window_is_open(win: usize) -> i32 {
-        crate::guard(0, || harness_of(win).map_or(0, |h| i32::from(h.is_open())))
+        crate::guard(0, || {
+            window_of(win).map_or(0, |w| {
+                i32::from(match w {
+                    GuestWindow::Harness(h) => h.is_open(),
+                    GuestWindow::Provided(t) => t.is_open(),
+                })
+            })
+        })
     }
 }
 
 gfn! {
     unsafe fn window_resize(win: usize, width: i32, height: i32) -> i32 {
-        crate::guard(-1, || match harness_of(win) {
-            Some(h) if width > 0 && height > 0 => {
+        crate::guard(-1, || match window_of(win) {
+            Some(GuestWindow::Harness(h)) if width > 0 && height > 0 => {
                 h.resize(width as u32, height as u32);
                 0
             }

@@ -56,6 +56,11 @@ features = [
 [dependencies]
 # Matrix types of DirectComposition transforms.
 windows-numerics = "0.3"
+# `producer::RemoteSurface` as an EGL window target (app processes).
+andruna-gles = { path = "../andruna-gles", optional = true }
+
+[features]
+gles = ["dep:andruna-gles"]
 
 [lints]
 workspace = true

@@ -31,6 +31,21 @@
 //!   i32 target_start, i32 target_end (-1 when none), u32 n, n bytes UTF-8
 //! - focus: u8 has_focus
 //! - finished: u8 handled, i64 consume_time
+//!
+//! Surface messages (seq 0) carry the surface handshake between the
+//! compositor and the producer of a surface (see
+//! [`producer`](crate::producer)):
+//!
+//! - attach (5, compositor to app): u64 surface, u64 handle (a composition
+//!   surface handle already duplicated into the app process, owned by the
+//!   app from now on), u32 width, u32 height, i32 z
+//! - resize (6, compositor to app): u64 surface, u32 width, u32 height
+//! - detach (7, compositor to app): u64 surface
+//! - configuration (8, compositor to app): u32 changes, i32 width_px,
+//!   i32 height_px (the content area), u32 density_dpi, i32 width_dp,
+//!   i32 height_dp, i32 orientation, i64 vsync_period_ns
+//! - presented (0x82, app to compositor): u64 surface, u32 width,
+//!   u32 height, u8 flags (bit 0: bottom-up content, as OpenGL renders)
 
 use crate::input::{
     ImeEvent, InputEvent, KeyEvent, MotionEvent, MotionSample, PointerCoords, PointerProperties,
@@ -48,6 +63,64 @@ const KIND_KEY: u16 = 2;
 const KIND_IME: u16 = 3;
 const KIND_FOCUS: u16 = 4;
 const KIND_FINISHED: u16 = 0x81;
+const KIND_ATTACH: u16 = 5;
+const KIND_RESIZE: u16 = 6;
+const KIND_DETACH: u16 = 7;
+const KIND_CONFIGURATION: u16 = 8;
+const KIND_PRESENTED: u16 = 0x82;
+
+/// The window configuration an app process gets with each change (a
+/// compact form of [`crate::config::WindowLayout`] until the framework's
+/// `Configuration` travels in a `ClientTransaction`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WireConfiguration {
+    /// `ActivityInfo.CONFIG_*` bits; 0 for the first configuration.
+    pub changes: u32,
+    /// The content area (where the app's surfaces go), in app pixels.
+    pub width_px: i32,
+    pub height_px: i32,
+    pub density_dpi: u32,
+    pub width_dp: i32,
+    pub height_dp: i32,
+    /// `Configuration.ORIENTATION_*`.
+    pub orientation: i32,
+    /// The refresh period of the window's display (the compositor clock).
+    pub vsync_period_ns: i64,
+}
+
+/// The surface handshake ([`crate::producer`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceMessage {
+    /// A new surface for the app. `handle` is a composition surface
+    /// handle valid in the app process; the app owns it.
+    Attach {
+        surface: u64,
+        handle: u64,
+        width: u32,
+        height: u32,
+        z: i32,
+    },
+    /// The size the compositor wants the surface's buffers to have.
+    Resize {
+        surface: u64,
+        width: u32,
+        height: u32,
+    },
+    /// The surface is gone (window closed or surface removed).
+    Detach {
+        surface: u64,
+    },
+    Configuration(WireConfiguration),
+    /// The producer presented a buffer of this size; `bottom_up` content
+    /// (OpenGL row order) is shown flipped. Sent on the first present and
+    /// whenever one of the values changes.
+    Presented {
+        surface: u64,
+        width: u32,
+        height: u32,
+        bottom_up: bool,
+    },
+}
 
 /// A message on the channel.
 #[derive(Clone, Debug, PartialEq)]
@@ -62,6 +135,8 @@ pub enum Message {
         handled: bool,
         consume_time_ns: i64,
     },
+    /// The surface handshake (sequence number 0).
+    Surface(SurfaceMessage),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,6 +176,9 @@ impl W {
     fn i64(&mut self, v: i64) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
+    fn u64(&mut self, v: u64) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
     fn f32(&mut self, v: f32) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
@@ -132,6 +210,9 @@ impl R<'_> {
     fn i64(&mut self) -> Result<i64, DecodeError> {
         Ok(i64::from_le_bytes(self.take()?))
     }
+    fn u64(&mut self) -> Result<u64, DecodeError> {
+        Ok(u64::from_le_bytes(self.take()?))
+    }
     fn f32(&mut self) -> Result<f32, DecodeError> {
         Ok(f32::from_le_bytes(self.take()?))
     }
@@ -162,6 +243,16 @@ pub fn encode(msg: &Message) -> Vec<u8> {
         Message::Finished { seq, .. } => {
             w.u16(KIND_FINISHED);
             *seq
+        }
+        Message::Surface(m) => {
+            w.u16(match m {
+                SurfaceMessage::Attach { .. } => KIND_ATTACH,
+                SurfaceMessage::Resize { .. } => KIND_RESIZE,
+                SurfaceMessage::Detach { .. } => KIND_DETACH,
+                SurfaceMessage::Configuration(_) => KIND_CONFIGURATION,
+                SurfaceMessage::Presented { .. } => KIND_PRESENTED,
+            });
+            0
         }
     };
     w.u16(VERSION);
@@ -209,10 +300,60 @@ pub fn encode(msg: &Message) -> Vec<u8> {
             w.u8(*handled as u8);
             w.i64(*consume_time_ns);
         }
+        Message::Surface(m) => encode_surface(&mut w, m),
     }
     let len = w.0.len() as u32;
     w.0[..4].copy_from_slice(&len.to_le_bytes());
     w.0
+}
+
+fn encode_surface(w: &mut W, m: &SurfaceMessage) {
+    match *m {
+        SurfaceMessage::Attach {
+            surface,
+            handle,
+            width,
+            height,
+            z,
+        } => {
+            w.u64(surface);
+            w.u64(handle);
+            w.u32(width);
+            w.u32(height);
+            w.i32(z);
+        }
+        SurfaceMessage::Resize {
+            surface,
+            width,
+            height,
+        } => {
+            w.u64(surface);
+            w.u32(width);
+            w.u32(height);
+        }
+        SurfaceMessage::Detach { surface } => w.u64(surface),
+        SurfaceMessage::Configuration(c) => {
+            w.u32(c.changes);
+            w.i32(c.width_px);
+            w.i32(c.height_px);
+            w.u32(c.density_dpi);
+            w.i32(c.width_dp);
+            w.i32(c.height_dp);
+            w.i32(c.orientation);
+            w.i64(c.vsync_period_ns);
+        }
+        SurfaceMessage::Presented {
+            surface,
+            width,
+            height,
+            bottom_up,
+        } => {
+            w.u64(surface);
+            w.u32(width);
+            w.u32(height);
+            w.u8(bottom_up as u8);
+        }
+    }
 }
 
 fn encode_motion(w: &mut W, m: &MotionEvent) {
@@ -324,6 +465,39 @@ pub fn decode(buf: &[u8]) -> Result<Message, DecodeError> {
             handled: r.u8()? != 0,
             consume_time_ns: r.i64()?,
         },
+        KIND_ATTACH => Message::Surface(SurfaceMessage::Attach {
+            surface: r.u64()?,
+            handle: r.u64()?,
+            width: r.u32()?,
+            height: r.u32()?,
+            z: r.i32()?,
+        }),
+        KIND_RESIZE => Message::Surface(SurfaceMessage::Resize {
+            surface: r.u64()?,
+            width: r.u32()?,
+            height: r.u32()?,
+        }),
+        KIND_DETACH => Message::Surface(SurfaceMessage::Detach { surface: r.u64()? }),
+        KIND_CONFIGURATION => Message::Surface(SurfaceMessage::Configuration(WireConfiguration {
+            changes: r.u32()?,
+            width_px: r.i32()?,
+            height_px: r.i32()?,
+            density_dpi: r.u32()?,
+            width_dp: r.i32()?,
+            height_dp: r.i32()?,
+            orientation: r.i32()?,
+            vsync_period_ns: r.i64()?,
+        })),
+        KIND_PRESENTED => Message::Surface(SurfaceMessage::Presented {
+            surface: r.u64()?,
+            width: r.u32()?,
+            height: r.u32()?,
+            bottom_up: match r.u8()? {
+                0 => false,
+                1 => true,
+                _ => return Err(DecodeError::BadValue),
+            },
+        }),
         k => return Err(DecodeError::UnknownKind(k)),
     };
     if !r.0.is_empty() {
@@ -471,6 +645,35 @@ mod tests {
                 handled: true,
                 consume_time_ns: 99,
             },
+            Message::Surface(SurfaceMessage::Attach {
+                surface: 7,
+                handle: 0x1234,
+                width: 640,
+                height: 480,
+                z: -1,
+            }),
+            Message::Surface(SurfaceMessage::Resize {
+                surface: 7,
+                width: 400,
+                height: 600,
+            }),
+            Message::Surface(SurfaceMessage::Detach { surface: 7 }),
+            Message::Surface(SurfaceMessage::Configuration(WireConfiguration {
+                changes: 0x480,
+                width_px: 400,
+                height_px: 600,
+                density_dpi: 240,
+                width_dp: 266,
+                height_dp: 400,
+                orientation: 1,
+                vsync_period_ns: 8_333_333,
+            })),
+            Message::Surface(SurfaceMessage::Presented {
+                surface: 7,
+                width: 400,
+                height: 600,
+                bottom_up: true,
+            }),
         ];
         for m in msgs {
             let b = encode(&m);

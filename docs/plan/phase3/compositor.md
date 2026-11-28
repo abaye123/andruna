@@ -156,6 +156,9 @@ test); `SendInput` and touch injection latency (the agent's test process
 cannot take the foreground on this machine; the test prints them where it
 can).
 
+GL producers in app processes over the window channel, the per-surface
+flip and vsync on the display grid: [gl-in-apps.md](gl-in-apps.md).
+
 ## Not done in this round
 
 - **sysd wiring.** The compositor is a library with a test host. sysd's

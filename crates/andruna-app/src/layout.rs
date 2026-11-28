@@ -44,6 +44,18 @@ impl ArtRoot {
         Ok(r)
     }
 
+    /// An empty ART directory in the data directory (default as in
+    /// [`Layout::new`]), for native programs when no ART root exists.
+    pub fn empty_in(data: Option<&Path>) -> Result<Self, String> {
+        let data = data
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| std::env::temp_dir().join("andruna-app"));
+        let dir = absolute(&data.join("apex-none"))?;
+        std::fs::create_dir_all(dir.join("icu"))
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+        Ok(ArtRoot { dir })
+    }
+
     /// Checks that the pieces every run needs are present.
     pub fn validate(&self) -> Result<(), String> {
         let mut missing = vec![];

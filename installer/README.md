@@ -64,6 +64,22 @@ needs Rust and llvm-mingw (`cargo xtask toolchain`). `-SkipRustBuild` uses
 the files already in `target\`; `-RustBinDir <dir>` takes them from
 `<dir>\x64\` and `<dir>\arm64\`. A missing file fails the build.
 
+### Graphics runtime
+
+OpenGL ES for app processes ([ADR 0048](../docs/decisions/0048-gles-runtime-layout-and-native-programs.md))
+goes next to `andruna-app.exe`:
+
+| Folder | Files | Taken from |
+| --- | --- | --- |
+| `angle\` | `libEGL.dll`, `libGLESv2.dll` (ANGLE on Direct3D 11) | `out\angle\<arch>\bin\` (`cargo xtask angle-build --arch <arch>`) |
+| `gles\` | `libEGL.so`, `libGLESv1_CM.so`, `libGLESv2.so`, `libGLESv3.so`, `libandruna_window.so` (guest stubs, Android ELF) | `out\gles\<arch>\guest\` (`python crates/andruna-gles/tools/build_guest.py --arch <arch>`) |
+
+andruna-app finds them there (`ANDRUNA_ANGLE_DIR` and `ANDRUNA_GLES_GUEST`
+override the folders). The ANGLE DLLs are signed like the other DLLs; the
+guest `.so` files are not Windows binaries and are not signed. The test
+programs in `out\gles\<arch>\guest\` (`gles_test`, `gles_window`,
+`gles_demo`) are not shipped.
+
 The build checks with llvm-objdump that the Rust executables import no DLL
 that llvm-mingw ships (libc++, libunwind, libwinpthread and the like): the
 installer does not carry them, so the executables use only Windows system

@@ -336,6 +336,7 @@ impl WindowSurface {
             crate::log(format_args!("Present: {hr:?}"));
             return Err(EglError::BadSurface);
         }
+        self.rebind_after_present();
         self.target.presented(self.width, self.height);
         let tp = qpc();
         let (w, h) = clamp_size(self.target.size());
@@ -355,6 +356,21 @@ impl WindowSurface {
         }
         s.last_return = t1;
         Ok(())
+    }
+
+    /// `Present` of a flip-model swap chain unbinds its back buffer from
+    /// the pipeline, but ANGLE still has it bound in its state cache: later
+    /// draws would go nowhere (clears, which need no binding, still land).
+    /// Making the context current without and again with the surface makes
+    /// ANGLE bind its render target again before the next draw.
+    fn rebind_after_present(&self) {
+        let cur = egl::Current::get();
+        let (draw, read) = (cur.draw == self.pbuffer, cur.read == self.pbuffer);
+        if cur.ctx == 0 || !(draw || read) {
+            return;
+        }
+        egl::make_current_raw(cur.dpy, 0, 0, cur.ctx);
+        egl::make_current_raw(cur.dpy, cur.draw, cur.read, cur.ctx);
     }
 
     /// Resizes the buffers to `w`x`h`: the pbuffer is replaced (keeping the
