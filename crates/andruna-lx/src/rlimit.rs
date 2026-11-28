@@ -7,7 +7,8 @@
 //! | `RLIMIT_STACK` | the main thread's stack size / unlimited | the host's main stack ([`crate::process::set_main_stack`]), else the executable's stack reserve |
 //! | `RLIMIT_NOFILE` | 32768, both | lx's descriptor table ([`crate::fd::NOFILE_MAX`]) |
 //! | `RLIMIT_CORE` | 0 / unlimited | no core files are written |
-//! | `RLIMIT_NICE`, `RLIMIT_RTPRIO` | 0, both | real-time and raised priorities are refused (`EPERM`) |
+//! | `RLIMIT_NICE` | 40, both | as Android's init sets for the zygote and its apps: any nice value down to -20 ([`crate::sysinfo::setpriority`], ADR 0039) |
+//! | `RLIMIT_RTPRIO` | 0, both | real-time priorities are refused (`EPERM`) |
 //! | everything else | unlimited | |
 //!
 //! `setrlimit` follows Linux's rules (soft at most hard; raising a hard
@@ -67,7 +68,7 @@ fn defaults() -> [Rlimit; RLIM_NLIMITS] {
         cur: 0,
         max: RLIM_INFINITY,
     };
-    l[RLIMIT_NICE as usize] = Rlimit { cur: 0, max: 0 };
+    l[RLIMIT_NICE as usize] = Rlimit { cur: 40, max: 40 };
     l[RLIMIT_RTPRIO as usize] = Rlimit { cur: 0, max: 0 };
     l
 }

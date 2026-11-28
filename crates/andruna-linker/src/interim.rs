@@ -8,10 +8,6 @@
 //! dex2oat, libcore's natives and bionic still need on the paths of
 //! docs/plan/phase1/art-on-linker.md:
 //!
-//! - `uname`, `getrusage`, `sysinfo`, `getpriority`/
-//!   `setpriority` (accepted without effect), `getcpu`, `membarrier`,
-//!   `mincore`, `msync` (shared file mappings already reach the file
-//!   through their section; nothing is forced to disk).
 //! - Writable `MAP_SHARED` file mappings (lx answers `ENODEV`; dex2oat
 //!   writes vdex and oat files through them): lx's private copy of the
 //!   file, written back with `pwrite` on `msync`, `munmap` and process
@@ -31,14 +27,6 @@ mod nr {
     pub const DUP: i64 = 32;
     pub const CLOSE: i64 = 3;
     pub const MSYNC: i64 = 26;
-    pub const MINCORE: i64 = 27;
-    pub const UNAME: i64 = 63;
-    pub const GETRUSAGE: i64 = 98;
-    pub const SYSINFO: i64 = 99;
-    pub const GETPRIORITY: i64 = 140;
-    pub const SETPRIORITY: i64 = 141;
-    pub const GETCPU: i64 = 309;
-    pub const MEMBARRIER: i64 = 324;
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -49,20 +37,6 @@ mod nr {
     pub const PWRITE64: i64 = 68;
     pub const DUP: i64 = 23;
     pub const MSYNC: i64 = 227;
-    pub const MINCORE: i64 = 232;
-    pub const UNAME: i64 = 160;
-    pub const GETRUSAGE: i64 = 165;
-    pub const SYSINFO: i64 = 179;
-    pub const GETPRIORITY: i64 = 141;
-    pub const SETPRIORITY: i64 = 140;
-    pub const GETCPU: i64 = 168;
-    pub const MEMBARRIER: i64 = 283;
-}
-
-const PAGE: u64 = 4096;
-
-fn err(e: i32) -> i64 {
-    -i64::from(e)
 }
 
 /// Calls the loader looks at before lx sees them. `None`: go on to lx.
@@ -73,6 +47,8 @@ fn err(e: i32) -> i64 {
 pub unsafe fn before(n: i64, a: [i64; 6]) -> Option<i64> {
     if n == nr::MUNMAP {
         write_back(a[0] as u64, a[1] as u64, true);
+    } else if n == nr::MSYNC {
+        write_back(a[0] as u64, a[1] as u64, false);
     }
     None
 }
@@ -91,28 +67,13 @@ pub unsafe fn after_error(n: i64, a: [i64; 6], r: i64) -> Option<i64> {
 }
 
 /// Handles a call lx answered with `ENOSYS`; `None` keeps `ENOSYS`.
+/// Nothing is left here: every call the loader answered is lx's now.
 ///
 /// # Safety
 ///
 /// As for [`before`].
-pub unsafe fn after_enosys(n: i64, a: [i64; 6]) -> Option<i64> {
-    let int = |i: usize| a[i] as i32;
-    let ptr = |i: usize| a[i] as u64;
-    Some(match n {
-        nr::MSYNC => {
-            write_back(ptr(0), ptr(1), false);
-            0
-        }
-        nr::UNAME => uname(ptr(0) as *mut u8),
-        nr::GETRUSAGE => getrusage(int(0), ptr(1) as *mut u8),
-        nr::SYSINFO => sysinfo(ptr(0) as *mut u8),
-        nr::GETPRIORITY => 20,
-        nr::SETPRIORITY => 0,
-        nr::GETCPU => getcpu(ptr(0) as *mut u32, ptr(1) as *mut u32),
-        nr::MEMBARRIER => membarrier(int(0)),
-        nr::MINCORE => mincore(ptr(0), ptr(1), ptr(2) as *mut u8),
-        _ => return None,
-    })
+pub unsafe fn after_enosys(_n: i64, _a: [i64; 6]) -> Option<i64> {
+    None
 }
 
 /// `ANDRUNA_ENOSYS`: report every system call that ends with `ENOSYS`.
@@ -241,331 +202,5 @@ pub fn flush_all() {
     let v = SHARED.lock().unwrap_or_else(|e| e.into_inner());
     for s in v.iter() {
         flush(s);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Sockets: only liblog's logd socket ([`crate::logd`])
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// System information
-// ---------------------------------------------------------------------------
-
-fn copy_field(dst: *mut u8, s: &str) {
-    let b = s.as_bytes();
-    let n = b.len().min(64);
-    // SAFETY: each utsname field has 65 bytes.
-    unsafe {
-        core::ptr::copy_nonoverlapping(b.as_ptr(), dst, n);
-        *dst.add(n) = 0;
-    }
-}
-
-fn uname(buf: *mut u8) -> i64 {
-    if buf.is_null() {
-        return err(EFAULT);
-    }
-    let machine = if cfg!(target_arch = "x86_64") {
-        "x86_64"
-    } else {
-        "aarch64"
-    };
-    // SAFETY: the caller's struct utsname (6 fields of 65 bytes).
-    unsafe { core::ptr::write_bytes(buf, 0, 6 * 65) };
-    for (i, s) in [
-        "Linux",
-        "localhost",
-        "6.6.0-andruna",
-        "#1 SMP PREEMPT",
-        machine,
-        "(none)",
-    ]
-    .iter()
-    .enumerate()
-    {
-        // SAFETY: inside the struct.
-        copy_field(unsafe { buf.add(i * 65) }, s);
-    }
-    0
-}
-
-fn filetime_us(f: windows::Win32::Foundation::FILETIME) -> u64 {
-    ((u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime)) / 10
-}
-
-fn getrusage(who: i32, buf: *mut u8) -> i64 {
-    use windows::Win32::Foundation::FILETIME;
-    use windows::Win32::System::Threading::{
-        GetCurrentProcess, GetCurrentThread, GetProcessTimes, GetThreadTimes,
-    };
-    if buf.is_null() {
-        return err(EFAULT);
-    }
-    let (mut c, mut e, mut k, mut u) = (
-        FILETIME::default(),
-        FILETIME::default(),
-        FILETIME::default(),
-        FILETIME::default(),
-    );
-    // SAFETY: the caller's struct rusage (144 bytes).
-    unsafe { core::ptr::write_bytes(buf, 0, 144) };
-    let ok = match who {
-        0 => {
-            // SAFETY: pseudo handle of the current process.
-            unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) }.is_ok()
-        }
-        // SAFETY: pseudo handle of the current thread.
-        1 => unsafe { GetThreadTimes(GetCurrentThread(), &mut c, &mut e, &mut k, &mut u) }.is_ok(),
-        -1 => return 0,
-        _ => return err(EINVAL),
-    };
-    if ok {
-        let (ut, st) = (filetime_us(u), filetime_us(k));
-        let words = [
-            ut / 1_000_000,
-            ut % 1_000_000,
-            st / 1_000_000,
-            st % 1_000_000,
-        ];
-        // SAFETY: ru_utime and ru_stime, the first 32 bytes.
-        unsafe { (buf as *mut [u64; 4]).write_unaligned(words) };
-    }
-    0
-}
-
-fn sysinfo(buf: *mut u8) -> i64 {
-    use windows::Win32::System::SystemInformation::{
-        GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX,
-    };
-    if buf.is_null() {
-        return err(EFAULT);
-    }
-    let mut m = MEMORYSTATUSEX {
-        dwLength: core::mem::size_of::<MEMORYSTATUSEX>() as u32,
-        ..Default::default()
-    };
-    // SAFETY: a correctly sized structure.
-    let _ = unsafe { GlobalMemoryStatusEx(&mut m) };
-    // struct sysinfo on LP64 (112 bytes): uptime, loads[3], totalram,
-    // freeram, sharedram, bufferram, totalswap, freeswap, procs (u16),
-    // pad, totalhigh, freehigh, mem_unit (u32).
-    let mut w = [0u64; 14];
-    // SAFETY: no arguments.
-    w[0] = unsafe { GetTickCount64() } / 1000;
-    w[4] = m.ullTotalPhys;
-    w[5] = m.ullAvailPhys;
-    w[8] = m.ullTotalPageFile.saturating_sub(m.ullTotalPhys);
-    w[9] = m.ullAvailPageFile.saturating_sub(m.ullAvailPhys);
-    w[10] = 1; // procs
-    w[13] = 1; // mem_unit
-    // SAFETY: the caller's struct sysinfo.
-    unsafe { (buf as *mut [u64; 14]).write_unaligned(w) };
-    0
-}
-
-fn getcpu(cpu: *mut u32, node: *mut u32) -> i64 {
-    use windows::Win32::System::Threading::GetCurrentProcessorNumber;
-    // SAFETY: no arguments.
-    let c = unsafe { GetCurrentProcessorNumber() };
-    // SAFETY: null or the caller's out-parameters.
-    unsafe {
-        if !cpu.is_null() {
-            *cpu = c;
-        }
-        if !node.is_null() {
-            *node = 0;
-        }
-    }
-    0
-}
-
-const MEMBARRIER_CMD_QUERY: i32 = 0;
-const MEMBARRIER_CMD_PRIVATE_EXPEDITED: i32 = 8;
-const MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED: i32 = 16;
-const MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE: i32 = 32;
-const MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE: i32 = 64;
-
-fn membarrier(cmd: i32) -> i64 {
-    use windows::Win32::System::Threading::FlushProcessWriteBuffers;
-    match cmd {
-        MEMBARRIER_CMD_QUERY => i64::from(
-            MEMBARRIER_CMD_PRIVATE_EXPEDITED
-                | MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED
-                | MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE
-                | MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE,
-        ),
-        MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED
-        | MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE => 0,
-        MEMBARRIER_CMD_PRIVATE_EXPEDITED | MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE => {
-            // An IPI to every processor running a thread of the process:
-            // the same guarantee as the expedited membarrier.
-            // SAFETY: no arguments.
-            unsafe { FlushProcessWriteBuffers() };
-            0
-        }
-        _ => err(EINVAL),
-    }
-}
-
-/// `mincore`: a page is resident when it is in the process's working set
-/// (a committed page that was never touched is not, as on Linux).
-///
-/// The range is checked one Windows region at a time and the residency
-/// read with one `QueryWorkingSetEx` per chunk of pages. A `VirtualQuery`
-/// per page was quadratic: Windows computes each answer's region size by
-/// walking the page tables to the end of the region, and ART's
-/// concurrent copying collector asks about tens of megabytes of its
-/// region space after every collection (`ZeroMemory`).
-fn mincore(addr: u64, len: u64, vec: *mut u8) -> i64 {
-    use windows::Win32::System::Memory::{MEM_FREE, MEMORY_BASIC_INFORMATION, VirtualQuery};
-    use windows::Win32::System::ProcessStatus::{
-        PSAPI_WORKING_SET_EX_INFORMATION, QueryWorkingSetEx,
-    };
-    use windows::Win32::System::Threading::GetCurrentProcess;
-    if !addr.is_multiple_of(PAGE) {
-        return err(EINVAL);
-    }
-    let pages = len.div_ceil(PAGE);
-    let Some(end) = pages.checked_mul(PAGE).and_then(|l| addr.checked_add(l)) else {
-        return err(ENOMEM);
-    };
-    let mut p = addr;
-    while p < end {
-        let mut m = MEMORY_BASIC_INFORMATION::default();
-        // SAFETY: queries the address space only.
-        let n = unsafe {
-            VirtualQuery(
-                Some(p as *const core::ffi::c_void),
-                &mut m,
-                core::mem::size_of_val(&m),
-            )
-        };
-        if n == 0 || m.State == MEM_FREE || m.RegionSize == 0 {
-            return err(ENOMEM);
-        }
-        p = m.BaseAddress as u64 + m.RegionSize as u64;
-    }
-    if vec.is_null() {
-        return 0;
-    }
-    const CHUNK: u64 = 4096;
-    let mut info = Vec::new();
-    let mut done = 0u64;
-    while done < pages {
-        let n = (pages - done).min(CHUNK);
-        info.clear();
-        info.extend((0..n).map(|i| PSAPI_WORKING_SET_EX_INFORMATION {
-            VirtualAddress: (addr + (done + i) * PAGE) as *mut core::ffi::c_void,
-            ..Default::default()
-        }));
-        // SAFETY: `info` is a writable array of the size passed; the call
-        // only queries the address space.
-        let ok = unsafe {
-            QueryWorkingSetEx(
-                GetCurrentProcess(),
-                info.as_mut_ptr().cast(),
-                (info.len() * core::mem::size_of::<PSAPI_WORKING_SET_EX_INFORMATION>()) as u32,
-            )
-        };
-        if ok.is_err() {
-            return err(ENOMEM);
-        }
-        for (i, e) in info.iter().enumerate() {
-            // SAFETY: the Flags view of the attribute union; bit 0 is
-            // `Valid` (in the working set).
-            let valid = unsafe { e.VirtualAttributes.Flags } & 1;
-            // SAFETY: the caller's vector of `pages` bytes.
-            unsafe { *vec.add((done as usize) + i) = valid as u8 };
-        }
-        done += n;
-    }
-    0
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn uname_reports_linux() {
-        let mut b = [0u8; 6 * 65];
-        assert_eq!(uname(b.as_mut_ptr()), 0);
-        assert!(b.starts_with(b"Linux\0"));
-        let m = &b[4 * 65..];
-        let machine = if cfg!(target_arch = "x86_64") {
-            &b"x86_64\0"[..]
-        } else {
-            &b"aarch64\0"[..]
-        };
-        assert!(m.starts_with(machine));
-    }
-
-    #[test]
-    fn membarrier_commands() {
-        assert!(
-            membarrier(MEMBARRIER_CMD_QUERY) & i64::from(MEMBARRIER_CMD_PRIVATE_EXPEDITED) != 0
-        );
-        assert_eq!(membarrier(MEMBARRIER_CMD_PRIVATE_EXPEDITED), 0);
-        assert_eq!(membarrier(1), err(EINVAL));
-    }
-
-    #[test]
-    fn mincore_of_mapped_and_free_memory() {
-        let v = vec![0u8; 3 * PAGE as usize];
-        let base = (v.as_ptr() as u64).next_multiple_of(PAGE);
-        let mut out = [0u8; 1];
-        // SAFETY: a page of `v`, which is alive.
-        unsafe { core::ptr::write_volatile(base as *mut u8, 1) };
-        assert_eq!(mincore(base, PAGE, out.as_mut_ptr()), 0);
-        assert_eq!(out[0], 1);
-        assert_eq!(mincore(base + 1, PAGE, out.as_mut_ptr()), err(EINVAL));
-        assert_eq!(mincore(0x1000, PAGE, out.as_mut_ptr()), err(ENOMEM));
-    }
-
-    #[test]
-    fn mincore_of_a_large_resident_range_is_fast_and_reports_untouched_pages() {
-        use windows::Win32::System::Memory::{
-            MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc, VirtualFree,
-        };
-        // 64 MiB committed in one allocation and touched, like ART's region
-        // space in lx. Windows' VirtualQuery walks the page tables to the
-        // end of the region for each answer, so one query per page took
-        // about 8 s here (0.5 ms each).
-        let len: u64 = 64 << 20;
-        // SAFETY: a new private allocation.
-        let base =
-            unsafe { VirtualAlloc(None, len as usize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) }
-                as u64;
-        assert_ne!(base, 0);
-        // The first three quarters are touched, the last quarter is not.
-        let touched = len / PAGE * 3 / 4;
-        for i in 0..touched {
-            // SAFETY: inside the new allocation.
-            unsafe { core::ptr::write_volatile((base + i * PAGE) as *mut u8, 1) };
-        }
-        let pages = (len / PAGE) as usize;
-        let mut out = vec![0xffu8; pages];
-        let t0 = std::time::Instant::now();
-        assert_eq!(mincore(base, len, out.as_mut_ptr()), 0);
-        let took = t0.elapsed();
-        assert!(
-            took < std::time::Duration::from_secs(2),
-            "mincore took {took:?}"
-        );
-        let touched = touched as usize;
-        assert!(out[..touched].iter().all(|&b| b == 1));
-        // Windows may bring in a few pages around a fault; most of the
-        // untouched ones are not resident.
-        let resident = out[touched..].iter().filter(|&&b| b != 0).count();
-        assert!(out[touched..].iter().all(|&b| b <= 1));
-        assert!(
-            resident < (pages - touched) / 10,
-            "{resident} untouched pages resident"
-        );
-        // SAFETY: the allocation made above.
-        unsafe { VirtualFree(base as *mut core::ffi::c_void, 0, MEM_RELEASE) }.unwrap();
-        // The range is free memory now.
-        assert_eq!(mincore(base, PAGE, out.as_mut_ptr()), err(ENOMEM));
     }
 }

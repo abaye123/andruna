@@ -144,6 +144,18 @@ pub enum Sysno {
     Chmod,
     Chown,
     Lchown,
+    // Round 3.
+    Uname,
+    Sethostname,
+    Setdomainname,
+    Getrusage,
+    Sysinfo,
+    Getpriority,
+    Setpriority,
+    Getcpu,
+    Membarrier,
+    Mincore,
+    Msync,
 }
 
 /// One architecture's numbering.
@@ -294,6 +306,17 @@ pub const X86_64: Table = Table(&[
     (302, Sysno::Prlimit64),
     (441, Sysno::EpollPwait2),
     (452, Sysno::Fchmodat2),
+    (63, Sysno::Uname),
+    (170, Sysno::Sethostname),
+    (171, Sysno::Setdomainname),
+    (98, Sysno::Getrusage),
+    (99, Sysno::Sysinfo),
+    (140, Sysno::Getpriority),
+    (141, Sysno::Setpriority),
+    (309, Sysno::Getcpu),
+    (324, Sysno::Membarrier),
+    (27, Sysno::Mincore),
+    (26, Sysno::Msync),
 ]);
 
 pub const AARCH64: Table = Table(&[
@@ -408,6 +431,17 @@ pub const AARCH64: Table = Table(&[
     (261, Sysno::Prlimit64),
     (441, Sysno::EpollPwait2),
     (452, Sysno::Fchmodat2),
+    (160, Sysno::Uname),
+    (161, Sysno::Sethostname),
+    (162, Sysno::Setdomainname),
+    (165, Sysno::Getrusage),
+    (179, Sysno::Sysinfo),
+    (141, Sysno::Getpriority),
+    (140, Sysno::Setpriority),
+    (168, Sysno::Getcpu),
+    (283, Sysno::Membarrier),
+    (232, Sysno::Mincore),
+    (227, Sysno::Msync),
 ]);
 
 #[cfg(target_arch = "x86_64")]

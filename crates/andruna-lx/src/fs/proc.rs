@@ -134,9 +134,63 @@ pub fn lookup(p: &LinuxPath) -> SysResult<Node> {
             entry("..", DT_DIR),
             entry("self", DT_LNK),
             entry("thread-self", DT_LNK),
+            entry("version", DT_REG),
+            entry("loadavg", DT_REG),
+            entry("sys", DT_DIR),
             entry(&pid.to_string(), DT_DIR),
         ]));
     };
+    let file = |content: Vec<u8>| {
+        Ok(Node::File {
+            content,
+            comm_of: None,
+        })
+    };
+    match (first, rest) {
+        (b"version", []) => return file(crate::sysinfo::proc_version()),
+        (b"loadavg", []) => return file(crate::sysinfo::proc_loadavg()),
+        (b"sys", []) => {
+            return Ok(Node::Dir(vec![
+                entry(".", DT_DIR),
+                entry("..", DT_DIR),
+                entry("kernel", DT_DIR),
+            ]));
+        }
+        (b"sys", [b"kernel"]) => {
+            return Ok(Node::Dir(
+                [
+                    ".",
+                    "..",
+                    "pid_max",
+                    "osrelease",
+                    "ostype",
+                    "version",
+                    "hostname",
+                ]
+                .iter()
+                .map(|n| entry(n, if n.starts_with('.') { DT_DIR } else { DT_REG }))
+                .collect(),
+            ));
+        }
+        (b"sys", [b"kernel", f]) => {
+            let u = crate::sysinfo::uname();
+            let line = |v: &[u8]| {
+                let n = v.iter().position(|&b| b == 0).unwrap_or(v.len());
+                let mut l = v[..n].to_vec();
+                l.push(b'\n');
+                l
+            };
+            return match *f {
+                b"pid_max" => file(format!("{}\n", crate::sysinfo::PID_MAX).into_bytes()),
+                b"osrelease" => file(line(&u.release)),
+                b"ostype" => file(line(&u.sysname)),
+                b"version" => file(line(&u.version)),
+                b"hostname" => file(line(&u.nodename)),
+                _ => Err(Errno::ENOENT),
+            };
+        }
+        _ => {}
+    }
     match first {
         b"self" if rest.is_empty() => Ok(Node::Link(pid.to_string().into_bytes())),
         b"thread-self" if rest.is_empty() => {

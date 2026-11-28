@@ -15,6 +15,7 @@ use super::{read_arg, write_arg};
 use crate::errno::{Errno, SysResult};
 use crate::fd::{FDS, OpenFile};
 use crate::linux::fcntl::{AT_FDCWD, AT_SYMLINK_NOFOLLOW};
+use crate::linux::info::{Rusage, Sysinfo, Utsname};
 use crate::linux::poll::*;
 use crate::linux::signal::SigSet;
 use crate::linux::syscall_nr::Sysno;
@@ -23,7 +24,7 @@ use crate::rlimit::Rlimit;
 use crate::socket::{self as sock, Addr, Name, SendAnc, Socket};
 use crate::timer::{self, ItimerSpec, ItimerVal, SigEvent};
 use crate::util::UserBuf;
-use crate::{eventfd, fs, pipe, poll};
+use crate::{eventfd, fs, pipe, poll, sysinfo};
 
 /// Dispatches one of the calls of this module.
 ///
@@ -302,6 +303,29 @@ pub(crate) unsafe fn dispatch(sysno: Sysno, a: [i64; 6]) -> SysResult<i64> {
                 pipe::copy_to_user(UserBuf::new(ptr(3) as *mut u8, n), 0, &v[..n])?;
                 write_arg(ptr(4) as *mut i32, n as i32).map(|()| 0)
             }
+            Sysno::Uname => write_arg(ptr(0) as *mut Utsname, sysinfo::uname()).map(|()| 0),
+            Sysno::Sethostname | Sysno::Setdomainname => zero(sysinfo::sethostname(ptr(1))),
+            Sysno::Getrusage => {
+                let r = sysinfo::getrusage(int(0))?;
+                write_arg(ptr(1) as *mut Rusage, r).map(|()| 0)
+            }
+            Sysno::Sysinfo => write_arg(ptr(0) as *mut Sysinfo, sysinfo::sysinfo()).map(|()| 0),
+            Sysno::Getpriority => sysinfo::getpriority(int(0), int(1)).map(i64::from),
+            Sysno::Setpriority => zero(sysinfo::setpriority(int(0), int(1), int(2))),
+            Sysno::Getcpu => {
+                let (cpu, node) = sysinfo::getcpu();
+                write_opt(ptr(0) as *mut u32, cpu)?;
+                write_opt(ptr(1) as *mut u32, node)
+            }
+            Sysno::Membarrier => sysinfo::membarrier(int(0), uint(1)).map(i64::from),
+            Sysno::Mincore => {
+                let v = sysinfo::mincore(ptr(0), ptr(1))?;
+                if !v.is_empty() {
+                    pipe::copy_to_user(UserBuf::new(ptr(2) as *mut u8, v.len()), 0, &v)?;
+                }
+                Ok(0)
+            }
+            Sysno::Msync => zero(crate::mem::msync(ptr(0), ptr(1), int(2))),
             // Calls `super::syscall::dispatch` handles itself.
             _ => Err(Errno::ENOSYS),
         }

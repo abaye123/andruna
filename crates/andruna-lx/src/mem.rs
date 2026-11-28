@@ -514,6 +514,29 @@ pub fn is_mapped(addr: usize) -> Option<bool> {
     ))
 }
 
+pub const MS_ASYNC: i32 = 1;
+pub const MS_INVALIDATE: i32 = 2;
+pub const MS_SYNC: i32 = 4;
+
+/// `msync`: checks the range and the flags. Private and anonymous memory
+/// has nothing to write back.
+pub fn msync(addr: usize, len: usize, flags: i32) -> SysResult<()> {
+    if flags & !(MS_ASYNC | MS_INVALIDATE | MS_SYNC) != 0
+        || flags & (MS_ASYNC | MS_SYNC) == MS_ASYNC | MS_SYNC
+    {
+        return Err(Errno::EINVAL);
+    }
+    let (start, end) = check_range(addr, len)?;
+    lock(&SPACE).require_mapped(start, end)?;
+    Ok(())
+}
+
+/// Whether every page of `[start, end)` is mapped (an lx mapping or
+/// committed memory lx does not own).
+pub fn is_range_mapped(start: usize, end: usize) -> bool {
+    lock(&SPACE).require_mapped(start, end).is_ok()
+}
+
 /// `madvise` on the process address space.
 pub fn madvise(addr: usize, len: usize, advice: i32) -> SysResult<()> {
     let discard = match advice {

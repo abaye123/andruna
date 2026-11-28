@@ -13,6 +13,7 @@ pub mod mem;
 pub mod procinfo;
 pub mod random;
 pub mod sync;
+pub mod sysinfo;
 pub mod thread;
 pub mod time;
 
