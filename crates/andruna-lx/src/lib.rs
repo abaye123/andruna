@@ -11,7 +11,8 @@
 //! - [`errno`]: per-thread `errno` and Windows error mapping.
 //! - [`fd`]: the descriptor table and open file descriptions.
 //! - [`fs`]: paths, the mount table, files and directories.
-//! - [`mem`]: anonymous memory on Windows placeholders.
+//! - [`mem`]: anonymous memory on Windows placeholders; [`image`]: the
+//!   boot image region mapped by sysd.
 //! - [`futex`], [`time`], [`process`], [`sched`]: synchronization,
 //!   clocks, identity, `prctl`, scheduling policy and affinity.
 //! - [`signal`]: actions, masks, alternate stacks, Linux signal frames for
@@ -32,6 +33,7 @@ mod ffi;
 pub use ffi::syscall_without_delivery;
 pub mod fs;
 pub mod futex;
+pub mod image;
 pub mod linux;
 pub mod mem;
 pub mod pipe;

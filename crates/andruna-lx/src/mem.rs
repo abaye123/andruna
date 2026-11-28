@@ -196,7 +196,9 @@ pub fn mmap(
     fd: i32,
     offset: i64,
 ) -> SysResult<usize> {
-    let a = if flags & MAP_ANONYMOUS == 0 {
+    let a = if let Some(r) = crate::image::mmap(addr, len, prot, flags, fd, offset) {
+        r?
+    } else if flags & MAP_ANONYMOUS == 0 {
         map_file(addr, len, prot, flags, fd, offset)?
     } else {
         lock(&SPACE).mmap(addr, len, prot, flags, fd, offset)?
@@ -281,9 +283,47 @@ fn map_file(
     Ok(start)
 }
 
+/// Anonymous memory outside the boot image region, for the parts of a
+/// request that straddle it ([`crate::image`]).
+pub(crate) fn mmap_plain(addr: usize, len: usize, prot: u32, flags: u32) -> SysResult<usize> {
+    lock(&SPACE).mmap(addr, len, prot, flags, -1, 0)
+}
+
+pub(crate) fn munmap_plain(addr: usize, len: usize) -> SysResult<()> {
+    lock(&SPACE).munmap(addr, len)
+}
+
+/// Runs `f` on the parts of `[addr, addr+len)` outside the boot image
+/// region after `image` handled the part inside it, or on the whole range
+/// when it does not touch the region.
+fn split_by_image(
+    addr: usize,
+    len: usize,
+    image: impl FnOnce(usize, usize) -> Option<SysResult<Vec<(usize, usize)>>>,
+    mut f: impl FnMut(usize, usize) -> SysResult<()>,
+) -> SysResult<()> {
+    let Ok((start, end)) = check_range(addr, len) else {
+        return f(addr, len);
+    };
+    if start == end {
+        return f(addr, len);
+    }
+    match image(start, end) {
+        None => f(addr, len),
+        Some(r) => {
+            for (s, e) in r? {
+                f(s, e - s)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// `munmap` on the process address space.
 pub fn munmap(addr: usize, len: usize) -> SysResult<()> {
-    lock(&SPACE).munmap(addr, len)?;
+    split_by_image(addr, len, crate::image::munmap, |a, l| {
+        lock(&SPACE).munmap(a, l)
+    })?;
     if let Some(l) = page_round_up(len) {
         clear_names(&mut lock(&NAMES), addr, addr.saturating_add(l));
     }
@@ -292,7 +332,12 @@ pub fn munmap(addr: usize, len: usize) -> SysResult<()> {
 
 /// `mprotect` on the process address space.
 pub fn mprotect(addr: usize, len: usize, prot: u32) -> SysResult<()> {
-    lock(&SPACE).mprotect(addr, len, prot)
+    split_by_image(
+        addr,
+        len,
+        |s, e| crate::image::mprotect(s, e, prot),
+        |a, l| lock(&SPACE).mprotect(a, l, prot),
+    )
 }
 
 /// `mremap` flags.
@@ -306,6 +351,10 @@ pub const MREMAP_FIXED: u32 = 2;
 /// `MREMAP_FIXED` and `MREMAP_DONTUNMAP` are not supported (`EINVAL`).
 pub fn mremap(addr: usize, old_len: usize, new_len: usize, flags: u32) -> SysResult<usize> {
     if flags & !MREMAP_MAYMOVE != 0 || !is_page_aligned(addr) {
+        return Err(Errno::EINVAL);
+    }
+    if crate::image::touches(addr, addr.saturating_add(old_len.max(1))) {
+        // The boot image region cannot be moved or grown.
         return Err(Errno::EINVAL);
     }
     let old = page_round_up(old_len).ok_or(Errno::EINVAL)?;
@@ -391,6 +440,8 @@ fn clear_names(n: &mut BTreeMap<usize, (usize, Vec<u8>)>, start: usize, end: usi
 /// `/proc/self/maps` for lx's mappings: one line per run of pages with
 /// the same protection and name.
 pub fn maps() -> Vec<u8> {
+    // The region lock is taken before (never while holding) the table lock.
+    let image = crate::image::mapped_runs();
     let s = lock(&SPACE);
     let names = lock(&NAMES);
     let name_at = |a: usize| {
@@ -403,15 +454,22 @@ pub fn maps() -> Vec<u8> {
     // (start, end, protection, shared, name)
     type Line = (usize, usize, u32, bool, Option<Vec<u8>>);
     let mut lines: Vec<Line> = Vec::new();
-    for (&start, span) in &s.spans {
-        let Kind::Mapped { prot, no_write, .. } = span.kind else {
-            continue;
-        };
+    let mut all: Vec<(usize, usize, u32, bool)> = s
+        .spans
+        .iter()
+        .filter_map(|(&start, span)| match span.kind {
+            Kind::Mapped { prot, no_write, .. } => Some((start, span.end, prot, no_write)),
+            Kind::Placeholder { .. } => None,
+        })
+        .chain(image.into_iter().map(|(a, b, p)| (a, b, p, false)))
+        .collect();
+    all.sort_unstable_by_key(|x| x.0);
+    for (start, span_end, prot, no_write) in all {
         // Split at name boundaries inside the span.
-        let mut cuts = vec![start, span.end];
-        for (&ns, (ne, _)) in names.range(start..span.end) {
+        let mut cuts = vec![start, span_end];
+        for (&ns, (ne, _)) in names.range(start..span_end) {
             cuts.push(ns);
-            cuts.push((*ne).min(span.end));
+            cuts.push((*ne).min(span_end));
         }
         cuts.sort_unstable();
         cuts.dedup();
@@ -458,7 +516,17 @@ pub fn is_mapped(addr: usize) -> Option<bool> {
 
 /// `madvise` on the process address space.
 pub fn madvise(addr: usize, len: usize, advice: i32) -> SysResult<()> {
-    lock(&SPACE).madvise(addr, len, advice)
+    let discard = match advice {
+        MADV_DONTNEED | MADV_FREE => true,
+        a if MADV_HINTS.contains(&a) => false,
+        _ => return Err(Errno::EINVAL),
+    };
+    split_by_image(
+        addr,
+        len,
+        |s, e| crate::image::madvise(s, e, discard),
+        |a, l| lock(&SPACE).madvise(a, l, advice),
+    )
 }
 
 impl AddressSpace {

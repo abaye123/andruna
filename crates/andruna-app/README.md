@@ -55,13 +55,22 @@ stubs), each in a child process. They skip
 when the ART root or the test dex files are missing, unless
 `ANDRUNA_REQUIRE_GUEST=1`.
 
+## Host mode
+
+`andruna-app --host` is what sysd starts for a package (ADRs 0035 to
+0038, [app lifecycle](../../docs/plan/phase2/app-lifecycle.md)): created
+suspended in the package's AppContainer with the boot image view mapped
+at the image base, it reads its assignment from the host channel
+(`ANDRUNA_HOST_CHANNEL`, `andruna_ipc::host`), registers the view with lx
+(`andruna_lx::image`, so ART's image mappings share the view's pages) and
+runs ART with `-Xnorelocate`. The guest's exit status goes back to sysd
+through the linker's exit hook; at exit the host prints how much of the
+image it adopted and copied.
+
 ## Not yet
 
-- The sysd assignment protocol, the shared boot image section, the
-  framework and the main Looper (phase 2). The intended wiring: sysd
-  starts `andruna-app` per package with a pipe handle and the package's
-  data directory; `andruna-app` mounts the tree as here, starts the
-  runtime through an `app_process`-like guest entry instead of `dalvikvm`,
-  and receives the package assignment over the pipe; the launcher keeps
-  talking to sysd only.
+- The framework and the main Looper: `--host` refuses the framework entry
+  until framework.jar is part of the runtime; adding it changes
+  `host::options_for` and the plan (an `app_process`-like guest entry
+  instead of `dalvikvm`).
 - arm64: runs (interpreter, JIT, AOT) in CI, `.github/workflows/art-arm64.yml`.

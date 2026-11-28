@@ -11,7 +11,11 @@ use andruna_ipc::{
 };
 use andruna_pkg::testkit::apk::{ActivitySpec, ApkSpec};
 use andruna_pkg::testkit::sign::{KeyKind, SignConfig, TestKey};
+use andruna_sysd::apps::HostConfig;
+use andruna_sysd::apps::store::{DatabaseStore, RecordStore};
 use andruna_sysd::{Activity, Context, Layout, Server, Supervisor};
+
+mod common;
 
 struct Fixture {
     endpoint: Endpoint,
@@ -31,15 +35,37 @@ impl Fixture {
             PipeListener::bind(&endpoint, &PipeSecurity::current_user_only(&endpoint)).unwrap();
         let layout = Layout::new(root.clone());
         let activity = Arc::new(Activity::new(Duration::from_secs(3600)));
+        let store = Arc::new(andruna_sysd::open_store(&layout, false).unwrap());
+        // The real app host when it is built (no ART root is needed: an
+        // APK's framework entry is refused before the runtime starts).
+        let config = match common::app_exe_quiet() {
+            Some(exe) => {
+                let install = root.join("install");
+                fs::create_dir_all(&install).unwrap();
+                let copy = install.join("andruna-app.exe");
+                fs::copy(&exe, &copy).unwrap();
+                HostConfig {
+                    exe: copy,
+                    art_root: root.join("no-art"),
+                    map_boot_image: false,
+                    runtime_options: vec![],
+                    environment: vec![],
+                }
+            }
+            None => HostConfig::beside(&root.join("missing")),
+        };
         let supervisor = Arc::new(
-            Supervisor::new(
-                PathBuf::from(env!("CARGO_BIN_EXE_andruna-sysd")),
+            Supervisor::with(
+                config,
                 layout.clone(),
+                Box::new(DatabaseStore::new(
+                    store.clone(),
+                    RecordStore::new(layout.clone()),
+                )),
                 activity.clone(),
             )
             .unwrap(),
         );
-        let store = Arc::new(andruna_sysd::open_store(&layout, false).unwrap());
         let ctx = Arc::new(Context {
             layout,
             activity,
@@ -183,27 +209,35 @@ fn install_list_start_uninstall() {
     // Named in the Windows UI language; one per launcher activity.
     assert_eq!(links(&f), 2);
 
-    // Start a launcher activity (the placeholder host runs the package).
+    // Start a launcher activity: the package comes from the database and
+    // its AppContainer from the install; an APK starts through the
+    // framework entry, which the host refuses honestly until the framework
+    // is part of the runtime (or the host is not built).
     let r = c
         .request(&Request::StartActivity {
             package: "org.example.sysd".into(),
             activity: "org.example.sysd.Second".into(),
         })
         .unwrap();
-    assert!(matches!(r, Response::Started { .. }), "{r:?}");
-
-    // A running package is not uninstalled.
-    let uninstall = Request::UninstallPackage {
-        package: "org.example.sysd".into(),
-        keep_data: false,
-    };
-    assert_eq!(code(c.request(&uninstall).unwrap()), ErrorCode::Busy);
-    f.ctx.supervisor.shutdown();
+    match r {
+        Response::Error {
+            code: ErrorCode::HostStartFailed,
+            message,
+        } => assert!(
+            message.contains("framework") || message.contains("andruna-app.exe"),
+            "{message}"
+        ),
+        r => panic!("{r:?}"),
+    }
     let t = Instant::now();
     while f.ctx.supervisor.host_pid("org.example.sysd").is_some() {
         assert!(t.elapsed() < Duration::from_secs(10));
         std::thread::sleep(Duration::from_millis(20));
     }
+    let uninstall = Request::UninstallPackage {
+        package: "org.example.sysd".into(),
+        keep_data: false,
+    };
     assert_eq!(c.request(&uninstall).unwrap(), Response::Uninstalled);
     assert_eq!(
         c.request(&Request::ListPackages).unwrap(),

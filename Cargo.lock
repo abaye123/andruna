@@ -13,6 +13,7 @@ name = "andruna-app"
 version = "0.1.0"
 dependencies = [
  "andruna-binder-device",
+ "andruna-ipc",
  "andruna-linker",
  "andruna-lx",
 ]
@@ -64,6 +65,7 @@ version = "0.1.0"
 dependencies = [
  "andruna-ipc",
  "andruna-pkg",
+ "andruna-sysd",
  "windows",
 ]
 

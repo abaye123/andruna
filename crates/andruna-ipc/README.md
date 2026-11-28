@@ -143,3 +143,23 @@ the golden payloads of this range.
 
 Launcher and sysd speak this pipe protocol; app processes and the manager
 will use Binder once it exists, as the architecture says.
+
+## Host channel
+
+`host.rs` is a separate protocol on a separate channel: sysd and one app
+host process (`andruna-app --host`), over two inherited anonymous pipes
+whose handle values are in `ANDRUNA_HOST_CHANNEL` (ADRs 0036, 0037). Frames
+have the layout above with their own version (`HOST_PROTOCOL_VERSION`, 1)
+and an id of 0.
+
+| Message | Kind | Direction | Body |
+| --- | --- | --- | --- |
+| Attach | 0x0101 | sysd to host | package, data dir, ART root, entry (`u8` 1: class path list, class, args; 2: `bool` + activity), mode, runtime options, `bool` + boot image (`u64` base, `u64` size, `u16` count, extents: path, `u64` offset, addr, len) |
+| Stop | 0x0102 | sysd to host | - |
+| Hello | 0x0181 | host to sysd | `u32` pid, version |
+| Running | 0x0182 | host to sysd | - |
+| Refused | 0x0183 | host to sysd | message |
+| MissingFunctions | 0x0184 | host to sysd | `u16` count, (name, `u64` calls) |
+| Exit | 0x0185 | host to sysd | `u32` status, `u8` crash kind (0 none, 1 uncaught exception, 2 native fault, 3 abort, 4 other) and summary when not 0 |
+
+Lists are a `u16` count and their items.

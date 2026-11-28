@@ -6,12 +6,15 @@
 //! halves of it so they cannot drift apart:
 //!
 //! - [`proto`]: versioned, length-prefixed messages and their encoding.
+//! - [`host`]: the channel between sysd and an app host process
+//!   (inherited anonymous pipes).
 //! - [`pipe`]: endpoint names, the pipe's security descriptor, the server
 //!   listener used by sysd and the client used by the launcher.
 //! - `sys`: the Windows API wrappers; all `unsafe` code of the crate.
 //!
 //! See README.md for the message list.
 
+pub mod host;
 pub mod pipe;
 pub mod proto;
 mod sys;

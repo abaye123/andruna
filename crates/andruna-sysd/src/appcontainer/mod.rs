@@ -23,7 +23,10 @@
 //! - **Launch.** [`launch`] starts a process in the container with
 //!   `STARTUPINFOEX`: `SECURITY_CAPABILITIES`, an explicit handle list (the
 //!   child inherits exactly the handles given), optionally a job it starts
-//!   in and suspended (to map the boot image first).
+//!   in and suspended (to map the boot image first). Every process sysd
+//!   creates goes through [`launch`] or holds [`spawn_lock`], so the
+//!   inheritable handle duplicates of one launch never leak into another
+//!   child.
 //! - **Identity.** [`process_sid`] and [`pid_sid`] read the AppContainer SID
 //!   from a process token, for the Binder broker's `getCallingUid`.
 //!
@@ -399,6 +402,9 @@ pub struct Launch<'a> {
     /// The environment block; `None` inherits sysd's. Use
     /// [`container_environment`].
     pub environment: Option<&'a [String]>,
+    /// A variable added to `environment` that tells the process the values
+    /// of its [`Launch::inherit`] handles (`;`-separated, in order).
+    pub handle_env: Option<&'a str>,
     pub current_dir: Option<&'a Path>,
     /// Created suspended: map the boot image, then [`ContainedProcess::resume`].
     pub suspended: bool,
@@ -444,6 +450,12 @@ impl ContainedProcess {
     }
 }
 
+/// Held while creating any process from sysd that inherits handles (see
+/// the module documentation); [`launch`] takes it itself.
+pub fn spawn_lock() -> std::sync::MutexGuard<'static, ()> {
+    win::SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Starts `l.exe` in the package's AppContainer with the given
 /// capabilities and handles.
 pub fn launch(l: &Launch<'_>) -> Result<ContainedProcess, SandboxError> {
@@ -466,6 +478,7 @@ pub fn launch(l: &Launch<'_>) -> Result<ContainedProcess, SandboxError> {
         inherit: l.inherit,
         job: l.job,
         environment: l.environment,
+        handle_env: l.handle_env,
         current_dir: l.current_dir,
         suspended: l.suspended,
     })

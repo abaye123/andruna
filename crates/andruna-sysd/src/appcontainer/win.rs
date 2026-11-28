@@ -417,9 +417,17 @@ pub struct Spawn<'a> {
     pub job: Option<BorrowedHandle<'a>>,
     /// The environment block (`NAME=value` entries); `None` inherits sysd's.
     pub environment: Option<&'a [String]>,
+    /// A variable added to `environment` with the child's values of the
+    /// `inherit` handles, `;`-separated.
+    pub handle_env: Option<&'a str>,
     pub current_dir: Option<&'a Path>,
     pub suspended: bool,
 }
+
+/// Serializes process creation in sysd. Inheritable handle duplicates exist
+/// only while it is held, so a process another thread creates with handle
+/// inheritance can never pick up the handles meant for this child.
+pub static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub struct Spawned {
     pub process: OwnedHandle,
@@ -454,6 +462,7 @@ fn inheritable(h: BorrowedHandle<'_>) -> io::Result<OwnedHandle> {
 /// the handles given (PROC_THREAD_ATTRIBUTE_HANDLE_LIST), as inheritable
 /// duplicates made for this call only.
 pub fn spawn(s: &Spawn<'_>) -> io::Result<Spawned> {
+    let _spawning = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let stdio: Vec<Option<OwnedHandle>> = s
         .stdio
         .iter()
@@ -495,14 +504,21 @@ pub fn spawn(s: &Spawn<'_>) -> io::Result<Spawned> {
         Reserved: 0,
     };
     let jobs: Vec<HANDLE> = s.job.iter().map(|j| HANDLE(j.as_raw_handle())).collect();
+    let handle_var = s.handle_env.map(|name| {
+        let values: Vec<String> = extra
+            .iter()
+            .map(|h| (h.as_raw_handle() as usize).to_string())
+            .collect();
+        format!("{name}={}", values.join(";"))
+    });
     let env: Option<Vec<u16>> = s.environment.map(|e| {
         let mut v: Vec<u16> = Vec::new();
-        for entry in e {
+        for entry in e.iter().chain(handle_var.iter()) {
             v.extend(OsStr::new(entry).encode_wide());
             v.push(0);
         }
         v.push(0);
-        if e.is_empty() {
+        if e.is_empty() && handle_var.is_none() {
             v.push(0);
         }
         v

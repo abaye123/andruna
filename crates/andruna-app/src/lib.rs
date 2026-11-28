@@ -12,11 +12,15 @@
 //! The process mounts the guest file tree with andruna-lx (see [`Layout`]),
 //! then andruna-linker loads ART's `dalvikvm` (or `dex2oat`) with the real
 //! guest bionic and starts it on a guest main thread; the guest ends the
-//! process with its exit status. The sysd assignment protocol, the shared
-//! boot image section and the framework come in later phases.
+//! process with its exit status.
+//!
+//! `andruna-app --host` is the same process started by sysd for a package:
+//! the assignment comes over the host channel and the boot image from the
+//! view sysd mapped ([`host`]). The framework comes in a later phase.
 
 use std::path::{Path, PathBuf};
 
+pub mod host;
 pub mod layout;
 
 pub use layout::{ArtRoot, Layout};
@@ -108,6 +112,7 @@ pub const USAGE: &str = "\
 usage: andruna-app [options] --classpath <dex|jar>[;...] <MainClass> [args...]
        andruna-app [options] --compile-boot
        andruna-app [options] --compile <dex|jar>[;...]
+       andruna-app --host   (started by sysd, assignment over the host channel)
 
 options:
   --mode int|jit|aot   interpreter, JIT (default) or AOT code from dex2oat

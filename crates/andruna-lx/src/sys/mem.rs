@@ -11,8 +11,8 @@ use core::ffi::c_void;
 use windows::Win32::System::Memory::{
     MEM_COMMIT, MEM_DECOMMIT, MEM_RELEASE, MEM_REPLACE_PLACEHOLDER, MEM_RESERVE,
     MEM_RESERVE_PLACEHOLDER, MEMORY_BASIC_INFORMATION, PAGE_NOACCESS, PAGE_PROTECTION_FLAGS,
-    VIRTUAL_ALLOCATION_TYPE, VIRTUAL_FREE_TYPE, VirtualAlloc2, VirtualFree, VirtualProtect,
-    VirtualQuery,
+    PAGE_TYPE, VIRTUAL_ALLOCATION_TYPE, VIRTUAL_FREE_TYPE, VirtualAlloc2, VirtualFree,
+    VirtualProtect, VirtualQuery,
 };
 
 use crate::errno::{Errno, SysResult};
@@ -102,6 +102,8 @@ pub struct Region {
     pub size: usize,
     pub state: VIRTUAL_ALLOCATION_TYPE,
     pub protect: PAGE_PROTECTION_FLAGS,
+    /// `MEM_PRIVATE`, `MEM_MAPPED` or `MEM_IMAGE`.
+    pub kind: PAGE_TYPE,
 }
 
 /// `VirtualQuery`, or `None` for an address outside the user address space.
@@ -120,6 +122,7 @@ pub fn query(addr: usize) -> Option<Region> {
         size: info.RegionSize,
         state: info.State,
         protect: info.Protect,
+        kind: info.Type,
     })
 }
 
