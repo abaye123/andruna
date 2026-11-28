@@ -370,7 +370,12 @@ fn injected_input_reaches_the_app_with_android_semantics() {
     // the foreground (an interactive desktop where the test owns input).
     std::thread::sleep(Duration::from_millis(200));
     let sent = clock::uptime_ns();
-    inject::key(0x1E, true).unwrap();
+    // SendInput is refused on a locked or non-interactive desktop: the
+    // posted-message part above already ran, so stop here honestly.
+    if let Err(e) = inject::key(0x1E, true) {
+        eprintln!("skipping injected input: SendInput refused ({e:?})");
+        return;
+    }
     inject::key(0x1E, false).unwrap();
     let keys: Vec<_> = input_events(&rx, 2)
         .into_iter()
