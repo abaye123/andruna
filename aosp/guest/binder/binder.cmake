@@ -262,3 +262,29 @@ foreach(s ${_tests})
   target_compile_options(${n} PRIVATE -UNDEBUG)
   guest_executable(${n})
 endforeach()
+
+# --- Java Binder JNI (compile check) -------------------------------------------
+# The Binder part of libandroid_runtime (frameworks/base/core/jni:
+# android.os.Binder, BinderProxy, Parcel, ServiceManager natives), compiled
+# against this libbinder to keep the two in step. Not shipped: the
+# framework build links these files into libandroid_runtime.so.
+# android_util_Binder.cpp includes binderthreadstate/CallerUtils.h, which
+# calls hwbinder's IPCThreadState::selfOrNull (system/libhwbinder headers;
+# libandroid_runtime needs libhwbinder or a replacement to link,
+# docs/plan/phase2/binder.md).
+set(_d "${_fb}/core/jni")
+binder_aconfig(binder_jni_flags_core "${_d}/flags.aconfig")
+binder_aconfig(binder_jni_flags_os "${_fb}/core/java/android/os/flags.aconfig")
+add_library(binder_jni_check STATIC)
+aosp_sources(binder_jni_check "${_d}"
+  android_util_Binder.cpp android_os_Parcel.cpp android_os_ServiceManager.cpp android_os_ServiceManagerNative.cpp)
+target_include_directories(binder_jni_check PRIVATE "${_d}" "${_d}/include"
+  "${AOSP}/libnativehelper/include" "${AOSP}/libnativehelper/include_platform"
+  "${AOSP}/libnativehelper/header_only_include"
+  "${AOSP}/libnativehelper/include_platform_header_only"
+  "${_fn}/libs/binderthreadstate/include" "${AOSP}/system/libhwbinder/include"
+  "${_b}/include_private")
+target_compile_definitions(binder_jni_check PRIVATE
+  ANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION)
+target_link_libraries(binder_jni_check PRIVATE binder_defaults binder_so binder_utils_so
+  binder_jni_flags_core binder_jni_flags_os liblog_headers_guest libbase)

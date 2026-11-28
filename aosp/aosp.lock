@@ -211,6 +211,12 @@ commit = "fef4173e19d97cd4b4fc09a06bccbf800d0d3937"
 purpose = "android-base utility library"
 
 [[project]]
+name = "platform/system/libhwbinder"
+path = "system/libhwbinder"
+commit = "2f5282448223b97c541181a5b94a05c2ac17ff17"
+purpose = "hwbinder headers that libandroid_runtime's Binder JNI includes (binderthreadstate/CallerUtils.h)"
+
+[[project]]
 name = "platform/system/libprocinfo"
 path = "system/libprocinfo"
 commit = "b58259e79c58deb1132e11d74ea90a2dc441d84f"

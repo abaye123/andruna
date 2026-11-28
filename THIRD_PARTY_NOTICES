@@ -54,8 +54,16 @@ in the fetched project (third_party/aosp/<path>).
   macros
 - liblog - platform/system/logging - Apache-2.0 - liblog/NOTICE
 - libbase - platform/system/libbase - Apache-2.0 and BSD - NOTICE
-- libcutils, libutils (parts) - platform/system/core - Apache-2.0 -
-  libutils/NOTICE, file headers
+- libcutils, libutils (all of libutils in the guest binder stage),
+  libvndksupport - platform/system/core - Apache-2.0 - libutils/NOTICE,
+  file headers
+- libbinder, libbinder_ndk, libandroid_runtime_lazy, servicemanager
+  (guest binder stage, aosp/guest/binder) - platform/frameworks/native -
+  Apache-2.0 - NOTICE, libs/binder/ndk/NOTICE; the C++ generated from
+  their .aidl files and from five .aidl files of platform/frameworks/base
+  (Apache-2.0)
+- hwbinder headers (compile check of the Binder JNI only) -
+  platform/system/libhwbinder - Apache-2.0 - file headers
 - libziparchive - platform/system/libziparchive - Apache-2.0 - file headers
 - libnativehelper headers - platform/libnativehelper - Apache-2.0 - NOTICE
 - modules-utils build headers - platform/frameworks/libs/modules-utils -
