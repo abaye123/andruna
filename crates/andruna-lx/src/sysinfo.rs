@@ -424,6 +424,45 @@ mod tests {
     }
 
     #[test]
+    fn mincore_of_a_large_resident_range_is_fast_and_reports_untouched_pages() {
+        use crate::linux::mman::*;
+        // 64 MiB in one mapping, like ART's region space. One VirtualQuery
+        // per page walked the page tables to the end of the region each
+        // time and took about 8 s.
+        let len = 64 << 20;
+        let anon = MAP_PRIVATE | MAP_ANONYMOUS;
+        let base = crate::mem::mmap(0, len, PROT_READ | PROT_WRITE, anon, -1, 0).unwrap();
+        // The first three quarters are touched, the last quarter is not.
+        let pages = len / 4096;
+        let touched = pages * 3 / 4;
+        for i in 0..touched {
+            // SAFETY: inside the new mapping.
+            unsafe { ((base + i * 4096) as *mut u8).write_volatile(1) };
+        }
+        let t0 = std::time::Instant::now();
+        let out = mincore(base, len).unwrap();
+        let took = t0.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(2),
+            "mincore took {took:?}"
+        );
+        assert_eq!(out.len(), pages);
+        assert!(out[..touched].iter().all(|&b| b == 1));
+        // Windows may bring in a few pages around a fault; most of the
+        // untouched ones are not resident.
+        let resident = out[touched..].iter().filter(|&&b| b != 0).count();
+        assert!(
+            resident < (pages - touched) / 10,
+            "{resident} untouched pages resident"
+        );
+        // Memory lx does not own counts when it is not free.
+        let v = vec![1u8; 3 * 4096];
+        let p = (v.as_ptr() as usize).next_multiple_of(4096);
+        assert_eq!(mincore(p, 4096), Ok(vec![1]));
+        crate::mem::munmap(base, len).unwrap();
+    }
+
+    #[test]
     fn cpu_barrier_and_residency() {
         let (cpu, node) = getcpu();
         assert!((cpu as usize) < 64 * 64 && node == 0);

@@ -648,10 +648,16 @@ pub fn is_mapped(addr: usize) -> Option<bool> {
     ))
 }
 
-/// Whether every page of `[start, end)` is mapped (an lx mapping or
-/// committed memory lx does not own).
+/// Whether every page of `[start, end)` is mapped (for `mincore`): an lx
+/// mapping, or memory lx does not own that is not free (one query per
+/// Windows region, not per page).
 pub fn is_range_mapped(start: usize, end: usize) -> bool {
-    lock(&SPACE).require_mapped(start, end).is_ok()
+    lock(&SPACE).pieces(start, end).iter().all(|p| match p {
+        Piece::Own { kind, .. } => kind.is_mapping(),
+        Piece::Foreign { start, end } => {
+            region_all(*start, *end, |r| r.state.0 != 0x10000 /* MEM_FREE */)
+        }
+    })
 }
 
 /// `madvise` on the process address space.

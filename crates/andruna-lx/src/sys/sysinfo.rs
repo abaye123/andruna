@@ -118,26 +118,35 @@ pub fn set_thread_priority(tid: u32, priority: i32) -> SysResult<()> {
     unsafe { SetThreadPriority(h.raw(), THREAD_PRIORITY(priority)) }.map_err(Errno::from)
 }
 
-/// Whether each page starting at `addr` is resident (in the working set).
+/// Whether each page starting at `addr` is resident (in the working set),
+/// asked in chunks of 4096 pages.
 pub fn resident(addr: usize, pages: usize) -> SysResult<Vec<bool>> {
-    let mut v: Vec<PSAPI_WORKING_SET_EX_INFORMATION> = (0..pages)
-        .map(|i| PSAPI_WORKING_SET_EX_INFORMATION {
-            VirtualAddress: (addr + i * 4096) as *mut c_void,
+    const CHUNK: usize = 4096;
+    let mut out = Vec::with_capacity(pages);
+    let mut v: Vec<PSAPI_WORKING_SET_EX_INFORMATION> = Vec::with_capacity(CHUNK.min(pages));
+    while out.len() < pages {
+        let done = out.len();
+        let n = (pages - done).min(CHUNK);
+        v.clear();
+        v.extend((0..n).map(|i| PSAPI_WORKING_SET_EX_INFORMATION {
+            VirtualAddress: (addr + (done + i) * 4096) as *mut c_void,
             ..Default::default()
-        })
-        .collect();
-    // SAFETY: `v` is a writable array of the size passed; the call only
-    // queries the address space.
-    unsafe {
-        QueryWorkingSetEx(
-            GetCurrentProcess(),
-            v.as_mut_ptr().cast::<c_void>(),
-            (v.len() * size_of::<PSAPI_WORKING_SET_EX_INFORMATION>()) as u32,
-        )
+        }));
+        // SAFETY: `v` is a writable array of the size passed; the call only
+        // queries the address space.
+        unsafe {
+            QueryWorkingSetEx(
+                GetCurrentProcess(),
+                v.as_mut_ptr().cast::<c_void>(),
+                (v.len() * size_of::<PSAPI_WORKING_SET_EX_INFORMATION>()) as u32,
+            )
+        }
+        .map_err(|_| Errno::ENOMEM)?;
+        // SAFETY: the Flags view of the attribute union; bit 0 is `Valid`.
+        out.extend(
+            v.iter()
+                .map(|e| unsafe { e.VirtualAttributes.Flags } & 1 != 0),
+        );
     }
-    .map_err(Errno::from)?;
-    // SAFETY: the Flags view of the attribute union; bit 0 is `Valid`.
-    Ok(v.iter()
-        .map(|e| unsafe { e.VirtualAttributes.Flags } & 1 != 0)
-        .collect())
+    Ok(out)
 }
