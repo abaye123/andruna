@@ -47,8 +47,10 @@ into `libhwui.so`. At our tag that configuration also needs:
   none of libgui, libui's buffer allocation, libbinder, protobuf or statsd;
   every other source is listed with what blocks it
   ([hwui.md](../plan/phase3/hwui.md)). `libhwui.so`, with the render thread
-  and `SkiaOpenGLPipeline`, follows when libbinder and the AIDL-generated
-  libgui headers are available; until then nothing presents through HWUI.
+  and `SkiaOpenGLPipeline`, follows when libbinder and the headers
+  generated from AIDL (libgui, graphics.common) and HIDL (graphics.common
+  types) are available; until then nothing presents through HWUI. At this
+  tag 65 of HWUI's 105 sources compile.
 - **Flags and properties.** aconfig flags are compile-time constants at
   their declared defaults (`aosp/tools/aconfig_cc.py`, as for ART);
   `HWUIProperties.sysprop` gets generated accessors over system properties

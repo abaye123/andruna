@@ -40,6 +40,8 @@ set(_fb "${AOSP}/frameworks/base")
 aconfig_cc_package(text_flags_aconfig
   "${_fb}/core/java/android/text/flags/flags.aconfig"
   "${_fb}/core/java/android/text/flags/24Q3.aconfig")
+aconfig_cc_package(view_accessibility_flags_aconfig
+  "${_fb}/core/java/android/view/accessibility/flags/accessibility_flags.aconfig")
 aconfig_cc_package(hwui_flags_aconfig "${_fb}/libs/hwui/aconfig/hwui_flags.aconfig")
 aconfig_cc_package(libgui_flags_aconfig "${AOSP}/frameworks/native/libs/gui/libgui_flags.aconfig")
 aconfig_cc_package(surfaceflinger_flags_aconfig
@@ -49,6 +51,7 @@ aconfig_cc_package(surfaceflinger_flags_aconfig
 # --- libvndksupport -----------------------------------------------------------
 add_library(libvndksupport STATIC "${_core}/libvndksupport/linker.cpp")
 target_include_directories(libvndksupport PUBLIC "${_core}/libvndksupport/include")
+target_include_directories(libvndksupport PRIVATE "${_core}/libvndksupport/include/vndksupport")
 target_link_libraries(libvndksupport PRIVATE aosp_android liblog)
 
 # --- libutils_full ------------------------------------------------------------
@@ -68,6 +71,7 @@ target_compile_definitions(libutils_full PRIVATE
   ANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION)
 target_compile_options(libutils_full PRIVATE -fvisibility=protected)
 set_target_properties(libutils_full PROPERTIES CXX_STANDARD 23)
+target_compile_options(libutils_full PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include new>")
 target_include_directories(libutils_full PUBLIC
   "${_u}/include" "${_u}/binder/include" "${_core}/libsystem/include")
 target_link_libraries(libutils_full PUBLIC aosp_android libcutils liblog libbase)
@@ -89,9 +93,14 @@ aosp_sources(libminikin "${_m}/libs/minikin"
 target_compile_definitions(libminikin PRIVATE ANDRUNA "LOG_TAG=\"Minikin\"")
 set_target_properties(libminikin PROPERTIES CXX_STANDARD 23)
 target_compile_options(libminikin PRIVATE
-  "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include andruna/libcxx_compat.h>")
+  "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include andruna/libcxx_compat.h>"
+  # <utils/StrongPointer.h> uses std::nothrow without including <new>.
+  "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include new>")
 target_include_directories(libminikin PUBLIC "${_m}/include")
-target_include_directories(libminikin PRIVATE "${_m}/libs/minikin"
+# Not libs/minikin itself: its Locale.h would shadow <locale.h> on a
+# case-insensitive file system; the sources find their own headers with
+# quoted includes anyway.
+target_include_directories(libminikin PRIVATE
   "${AOSP}/external/googletest/googletest/include")
 target_link_libraries(libminikin PUBLIC aosp_android libharfbuzz_ng libicuuc
   libicuuc_headers libicui18n_headers icu4c_defaults text_flags_aconfig

@@ -28,8 +28,11 @@ target_include_directories(libhwui_headers INTERFACE
   "${_sk}/src/image" "${_sk}/src/gpu" "${_sk}/src/shaders"
   "${_fn}/libs/gui/include" "${_fn}/libs/ui/include" "${_fn}/libs/ui/include_types"
   "${_fn}/libs/nativedisplay/include" "${_fn}/libs/nativedisplay/include-private"
-  "${_fn}/libs/math/include" "${_fn}/include"
+  "${_fn}/libs/math/include" "${_fn}/include" "${_fn}/include/private"
+  "${_fn}/libs/nativewindow/include-private" "${_fn}/libs/shaders/include"
+  "${_fn}/opengl/libs/EGL"
   "${AOSP}/frameworks/base/libs/androidfw/include"
+  "${AOSP}/system/incremental_delivery/incfs/util/include"
   "${AOSP}/frameworks/base/libs/hostgraphics"
   "${AOSP}/external/vulkan-headers/include"
   "${AOSP}/libnativehelper/include_jni" "${AOSP}/libnativehelper/header_only_include"
@@ -38,7 +41,8 @@ target_compile_definitions(libhwui_headers INTERFACE
   EGL_EGLEXT_PROTOTYPES GL_GLEXT_PROTOTYPES ATRACE_TAG=ATRACE_TAG_VIEW
   "LOG_TAG=\"HWUI\"")
 target_link_libraries(libhwui_headers INTERFACE libskia libminikin libutils_full
-  hwui_flags_aconfig libgui_flags_aconfig surfaceflinger_flags_aconfig text_flags_aconfig)
+  hwui_flags_aconfig libgui_flags_aconfig surfaceflinger_flags_aconfig text_flags_aconfig
+  view_accessibility_flags_aconfig)
 
 # libhwui_defaults: common sources, then the android target's.
 set(_hwui_common
@@ -99,10 +103,55 @@ function(hwui_target target)
   target_link_libraries(${target} PUBLIC aosp_android libhwui_headers)
   set_target_properties(${target} PROPERTIES CXX_STANDARD 23)
   target_compile_options(${target} PRIVATE -fvisibility=hidden
-    "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include andruna/libcxx_compat.h>")
+    "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include andruna/libcxx_compat.h>"
+    # <utils/StrongPointer.h> uses std::nothrow without including <new>.
+    "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include new>"
+    # <math/half.h> specializes std::is_floating_point, which the newer
+    # libc++ diagnoses as an error by default.
+    -Wno-invalid-specialization)
 endfunction()
 
 add_library(libhwui_probe OBJECT)
 aosp_sources(libhwui_probe "${_h}" ${_hwui_common} ${_hwui_android})
 target_sources(libhwui_probe PRIVATE "${_sysprop_out}/HWUIProperties.sysprop.cpp")
 hwui_target(libhwui_probe)
+
+# Sources that do not compile yet, by the first header they miss:
+#   aidl/android/hardware/graphics/common/*.h (AIDL NDK backend) and
+#   android/hardware/graphics/common/1.x/types.h (HIDL), through
+#   <ui/GraphicTypes.h>, mostly by way of renderthread/RenderProxy.h ->
+#   <gui/SurfaceComposerClient.h>: the render thread, the pipelines,
+#   RenderNode, the display list and recording canvas, and everything
+#   that includes them.
+#   hardware/hardware.h (hardware/libhardware): hwui/Bitmap.cpp
+#   android/gui/*.h (libgui's AIDL, cpp backend): SkiaIpcPipeline
+#   android/ipcrenderbuffer: OutOfProcessRendering
+#   statslog_hwui.h, stats_pull_atom_callback.h (statsd): StatsUtils,
+#   DeferredLayerUpdater, GraphicsStatsService
+#   tonemap/tonemap.h (libtonemap): LayerDrawable
+#   openssl/sha.h (BoringSSL): ShaderCache
+set(_hwui_blocked
+  effects/GainmapRenderer.cpp pipeline/skia/SkiaCpuPipeline.cpp
+  pipeline/skia/SkiaPipeline.cpp pipeline/skia/SkiaDisplayList.cpp
+  pipeline/skia/SkiaRecordingCanvas.cpp pipeline/skia/TransformCanvas.cpp
+  renderstate/RenderState.cpp renderthread/CanvasContext.cpp
+  renderthread/DrawFrameTask.cpp renderthread/RenderProxy.cpp hwui/Bitmap.cpp
+  hwui/OutOfProcessRendering.cpp thread/CommonPool.cpp utils/StatsUtils.cpp
+  RecordingCanvas.cpp RenderNode.cpp Tonemapper.cpp TreeInfo.cpp VectorDrawable.cpp
+  pipeline/skia/GLFunctorDrawable.cpp pipeline/skia/LayerDrawable.cpp
+  pipeline/skia/ShaderCache.cpp pipeline/skia/SkiaGpuPipeline.cpp
+  pipeline/skia/SkiaIpcPipeline.cpp pipeline/skia/SkiaOpenGLPipeline.cpp
+  pipeline/skia/SkiaVulkanPipeline.cpp pipeline/skia/VkFunctorDrawable.cpp
+  pipeline/skia/VkInteropFunctorDrawable.cpp renderthread/CacheManager.cpp
+  renderthread/EglManager.cpp renderthread/VulkanManager.cpp
+  renderthread/VulkanSurface.cpp renderthread/RenderThread.cpp
+  service/GraphicsStatsService.cpp renderthread/HintSessionWrapper.cpp
+  AutoBackendTextureRelease.cpp DeferredLayerUpdater.cpp
+  HardwareBitmapUploader.cpp WebViewFunctorManager.cpp Readback.cpp)
+
+set(_hwui_core ${_hwui_common} ${_hwui_android})
+list(REMOVE_ITEM _hwui_core ${_hwui_blocked})
+add_library(libhwui_core STATIC)
+aosp_sources(libhwui_core "${_h}" ${_hwui_core})
+target_sources(libhwui_core PRIVATE "${_sysprop_out}/HWUIProperties.sysprop.cpp")
+hwui_target(libhwui_core)

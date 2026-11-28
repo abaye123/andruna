@@ -360,7 +360,7 @@ def step_hwui(arch, out):
     b = stage(arch, out, "hwui", [f"-DANDRUNA_GLES_DIR={gles}"])
     dst = b / "out"
     dst.mkdir(exist_ok=True)
-    for name in ("skia_scene", "libhwui.so", "hwui_canvas_test"):
+    for name in ("skia_scene",):
         if (b / name).exists():
             shutil.copy2(b / name, dst / name)
 

@@ -33,3 +33,7 @@ if(_gles)
 endif()
 target_link_libraries(skia_scene PRIVATE liblog)
 guest_executable(skia_scene)
+
+# libhwui_core is built with the stage so that CI checks the HWUI sources
+# that compile today (aosp/modules/hwui.cmake); nothing links it yet.
+add_custom_target(hwui_core ALL DEPENDS libhwui_core)

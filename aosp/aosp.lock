@@ -259,6 +259,12 @@ commit = "545d2487e38192a2ce25040897ced877cf6b4f53"
 purpose = "libcutils and libutils"
 
 [[project]]
+name = "platform/system/incremental_delivery"
+path = "system/incremental_delivery"
+commit = "6b853f9e5703a8c90648f82850a3a01d9763e619"
+purpose = "incfs util headers (map_ptr.h) that libandroidfw's headers include, for libhwui"
+
+[[project]]
 name = "platform/system/libbase"
 path = "system/libbase"
 commit = "fef4173e19d97cd4b4fc09a06bccbf800d0d3937"
