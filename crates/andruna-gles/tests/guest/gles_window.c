@@ -6,10 +6,12 @@
 // (andruna_window_create returns the compositor's surface there), renders
 // with OpenGL ES 3 through ANGLE at swap interval 1 until the compositor
 // closes the window, and follows resizes: the top half of every frame is
-// red before the first resize and green after it, the bottom half blue, so
-// a screenshot shows whether the content is upright. Exit code 0 when the
-// window was resized at least once and closed by the compositor, otherwise
-// the number of the failed check.
+// red before the first resize and green after it, the bottom half blue with
+// a yellow quad drawn by a shader from an interleaved vertex buffer in its
+// middle, so a screenshot shows whether the content is upright and whether
+// draws (not only clears) reach the screen. Exit code 0 when the window was
+// resized at least once and closed by the compositor, otherwise the number
+// of the failed check.
 
 #define EGL_NO_PLATFORM_SPECIFIC_TYPES 1
 #include <EGL/egl.h>
@@ -28,6 +30,35 @@ int andruna_window_is_open(ANativeWindow *w);
 
 // About two minutes at 120 Hz: a cap in case the host never closes.
 #define MAX_FRAMES 15000
+
+static const char *const kVs =
+    "#version 300 es\n"
+    "in vec2 pos;\n"
+    "in vec3 col;\n"
+    "out vec3 v_col;\n"
+    "void main() { gl_Position = vec4(pos, 0.0, 1.0); v_col = col; }\n";
+static const char *const kFs =
+    "#version 300 es\n"
+    "precision mediump float;\n"
+    "in vec3 v_col;\n"
+    "out vec4 frag;\n"
+    "void main() { frag = vec4(v_col, 1.0); }\n";
+
+static GLuint shader(GLenum type, const char *src) {
+  GLuint s = glCreateShader(type);
+  glShaderSource(s, 1, &src, 0);
+  glCompileShader(s);
+  GLint ok = 0;
+  glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+  return ok ? s : 0;
+}
+
+// The quad: x -0.5..0.5, y -0.9..-0.3 (the middle of the bottom half),
+// position and color interleaved (stride 20, color at offset 8).
+static const float kQuad[] = {
+    -0.5f, -0.9f, 1.0f, 1.0f, 0.0f, 0.5f, -0.9f, 1.0f, 1.0f, 0.0f, -0.5f, -0.3f, 1.0f, 1.0f, 0.0f,
+    0.5f,  -0.9f, 1.0f, 1.0f, 0.0f, 0.5f, -0.3f, 1.0f, 1.0f, 0.0f, -0.5f, -0.3f, 1.0f, 1.0f, 0.0f,
+};
 
 int main(int argc, char **argv) {
   (void)argc;
@@ -51,6 +82,26 @@ int main(int argc, char **argv) {
   CHECK(7, ctx != EGL_NO_CONTEXT);
   CHECK(8, eglMakeCurrent(dpy, ws, ws, ctx));
   CHECK(9, eglSwapInterval(dpy, 1));
+
+  GLuint vs = shader(GL_VERTEX_SHADER, kVs), fs = shader(GL_FRAGMENT_SHADER, kFs);
+  CHECK(20, vs && fs);
+  GLuint prog = glCreateProgram();
+  glAttachShader(prog, vs);
+  glAttachShader(prog, fs);
+  glBindAttribLocation(prog, 0, "pos");
+  glBindAttribLocation(prog, 1, "col");
+  glLinkProgram(prog);
+  GLint linked = 0;
+  glGetProgramiv(prog, GL_LINK_STATUS, &linked);
+  CHECK(21, linked);
+  GLuint vbo = 0;
+  glGenBuffers(1, &vbo);
+  glBindBuffer(GL_ARRAY_BUFFER, vbo);
+  glBufferData(GL_ARRAY_BUFFER, sizeof kQuad, kQuad, GL_STATIC_DRAW);
+  glEnableVertexAttribArray(0);
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 20, (void *)0);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 20, (void *)8);
 
   EGLint lw = 0, lh = 0;
   CHECK(10, eglQuerySurface(dpy, ws, EGL_WIDTH, &lw) && eglQuerySurface(dpy, ws, EGL_HEIGHT, &lh));
@@ -78,7 +129,20 @@ int main(int argc, char **argv) {
     else
       glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+    glUseProgram(prog);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
     CHECK(12, glGetError() == GL_NO_ERROR);
+    if (frames < 2) {
+      // The draw is in the buffer: the quad's middle (y -0.6) is yellow,
+      // left of it blue. Frame 1 is the first after a present, which
+      // unbinds a flip-model back buffer from the pipeline.
+      unsigned char p[4] = {0, 0, 0, 0};
+      glReadPixels(w / 2, h / 5, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+      CHECK(22, p[0] > 240 && p[1] > 240 && p[2] < 16);
+      glReadPixels(w / 10, h / 5, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+      CHECK(23, p[0] < 16 && p[1] < 16 && p[2] > 240);
+    }
     CHECK(13, eglSwapBuffers(dpy, ws));
     frames++;
   }
