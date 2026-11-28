@@ -124,6 +124,7 @@ pub fn options_for(a: &Attach) -> Result<Options, String> {
         mode: Mode::parse(&a.mode)?,
         no_boot_image: false,
         art_options,
+        framework: false,
         action: Action::Run {
             classpath: classpath.iter().map(PathBuf::from).collect(),
             class: class.clone(),

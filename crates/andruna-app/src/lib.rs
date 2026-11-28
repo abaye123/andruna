@@ -43,6 +43,17 @@ pub const BOOT_JARS: [&str; 5] = [
     "conscrypt.jar",
 ];
 
+/// The framework's boot class path jars after BOOT_JARS (in
+/// `/system/framework`, from the ART root's `framework` directory; built by
+/// aosp/framework/build.py, docs/plan/phase2/framework-build.md).
+pub const FRAMEWORK_JARS: [&str; 3] = [
+    "framework.jar",
+    "framework-location.jar",
+    "framework-telecom.jar",
+];
+/// Guest directory of the framework's jars and framework-res.apk.
+pub const SYSTEM_FRAMEWORK: &str = "/system/framework";
+
 /// Guest directory of the ART module.
 pub const ART_APEX: &str = "/apex/com.android.art";
 /// Guest directory of the boot class path jars and the boot image.
@@ -105,6 +116,10 @@ pub struct Options {
     pub no_boot_image: bool,
     /// Extra runtime options for ART (`-X...`), in order.
     pub art_options: Vec<String>,
+    /// Run with the framework: the framework jars on the boot class path,
+    /// the framework's natives registered (andruna_app_process,
+    /// AndroidRuntime::start).
+    pub framework: bool,
     pub action: Action,
 }
 
@@ -117,6 +132,9 @@ usage: andruna-app [options] --classpath <dex|jar>[;...] <MainClass> [args...]
 options:
   --mode int|jit|aot   interpreter, JIT (default) or AOT code from dex2oat
   --no-boot-image      start without the boot image
+  --framework          run with the Android framework (framework.jar and its
+                       natives, framework-res.apk); main() gets the class
+                       name as its first argument, as under app_process
   --art-root <dir>     the ART module (lib64, bin, javalib, icu); default:
                        ANDRUNA_ART_ROOT, else the art directory next to
                        this executable
@@ -138,6 +156,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     let mut data = None;
     let mut mode = Mode::Jit;
     let mut no_boot_image = false;
+    let mut framework = false;
     let mut art_options = Vec::new();
     let mut i = 0;
     let value = |i: usize, name: &str| -> Result<String, String> {
@@ -161,6 +180,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                 mode = Mode::parse(&value(i, a)?)?;
             }
             "--no-boot-image" => no_boot_image = true,
+            "--framework" => framework = true,
             "--compile-boot" => {
                 return finish(
                     art_root,
@@ -201,6 +221,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                     mode,
                     no_boot_image,
                     art_options,
+                    framework,
                     action: Action::Run {
                         classpath,
                         class,
@@ -242,6 +263,7 @@ fn finish(
         mode,
         no_boot_image,
         art_options,
+        framework: false,
         action,
     })
 }
@@ -265,6 +287,17 @@ pub fn boot_classpath() -> String {
         .map(|j| format!("{JAVALIB}/{j}"))
         .collect::<Vec<_>>()
         .join(":")
+}
+
+/// The guest boot class path with the framework's jars after the ART
+/// module's (the order of Android's BOOTCLASSPATH).
+pub fn framework_boot_classpath() -> String {
+    let mut bcp = boot_classpath();
+    for j in FRAMEWORK_JARS {
+        bcp.push(':');
+        bcp.push_str(&format!("{SYSTEM_FRAMEWORK}/{j}"));
+    }
+    bcp
 }
 
 fn guest_env(layout: &Layout) -> Vec<String> {
@@ -294,6 +327,61 @@ pub fn plan(opts: &Options, layout: &Layout) -> Result<Plan, String> {
             .collect()
     };
     match &opts.action {
+        Action::Run {
+            classpath,
+            class,
+            args,
+        } if opts.framework => {
+            // AndroidRuntime::start: the VM options, then the class; the
+            // boot class path and class path come from the environment, as
+            // on Android (BOOTCLASSPATH, CLASSPATH).
+            art.validate_framework()?;
+            let fbcp = framework_boot_classpath();
+            let mut argv = vec![format!("{ART_APEX}/bin/andruna_app_process")];
+            argv.push(format!("-Xbootclasspath:{fbcp}"));
+            argv.push(format!("-Xbootclasspath-locations:{fbcp}"));
+            let image = !opts.no_boot_image && art.boot_image().is_file();
+            if opts.mode == Mode::Aot && !image {
+                return Err(format!(
+                    "--mode aot needs the boot image ({}); run andruna-app --compile-boot",
+                    art.boot_image().display()
+                ));
+            }
+            // The boot image covers the ART module's jars; the framework's
+            // jars after them are opened without one.
+            argv.push(if image {
+                format!("-Ximage:{BOOT_IMAGE}")
+            } else {
+                format!("-Ximage:{JAVALIB}/none.art")
+            });
+            argv.push("-Xnoimage-dex2oat".into());
+            argv.push(
+                match opts.mode {
+                    Mode::Int => "-Xint",
+                    Mode::Jit => "-Xusejit:true",
+                    Mode::Aot => "-Xusejit:false",
+                }
+                .into(),
+            );
+            argv.extend(opts.art_options.iter().cloned());
+            argv.push(class.clone());
+            argv.extend(args.iter().cloned());
+            let mut env: Vec<String> = env
+                .into_iter()
+                .filter(|e| !e.starts_with("BOOTCLASSPATH="))
+                .collect();
+            env.push(format!("BOOTCLASSPATH={fbcp}"));
+            env.push(format!(
+                "CLASSPATH={}",
+                layout.guest_classpath(classpath)?.join(":")
+            ));
+            Ok(Plan {
+                exe: art.bin().join("andruna_app_process"),
+                argv,
+                env,
+                search,
+            })
+        }
         Action::Run {
             classpath,
             class,

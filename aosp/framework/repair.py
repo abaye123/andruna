@@ -293,14 +293,24 @@ def repair(text, errors):
     edits = {}  # member start -> (start, end, replacement, description, reason)
     finals = set()
     done_unhandled = []
+    drop_file = []
     for line, col, msg in errors:
         m_init = re.search(r"variable (\w+) (?:might not have been|not) initialized", msg)
         if m_init:
-            finals.add(m_init.group(1))
+            p0 = line_start[line - 1] + col if line - 1 < len(line_start) else 0
+            fm = innermost(members, p0)
+            if fm is not None and fm.kind == "field":
+                # The declaration itself: its `final` goes.
+                for k in re.finditer(r"\bfinal\b", text[fm.start:fm.end]):
+                    s = fm.start + k.start()
+                    edits[s] = (s, s + 5, "", f"final modifier of {m_init.group(1)}",
+                                "its initialization is not built")
+            else:
+                finals.add(m_init.group(1))
             continue
         pos = line_start[line - 1] + col if line - 1 < len(line_start) else len(text) - 1
-        if "must be a constant expression" in msg or "constant expression required" in msg \
-                or "constant string expression required" in msg:
+        if True:
+            # Any error inside an annotation's arguments: the annotation goes.
             span = annotation_at(text, pos)
             if span:
                 edits[span[0]] = (span[0], span[1], "", "annotation " + text[span[0]:span[0] + 60].split("(")[0],
@@ -308,6 +318,14 @@ def repair(text, errors):
                 continue
         m = innermost(members, pos)
         if m is None:
+            continue
+        if m.kind == "type" and pos >= m.header_end:
+            # In a type's body outside every member: an enum constant's
+            # arguments. The type goes.
+            if any(m is top for top in members):
+                drop_file.append((f"type {m.name}", reason))
+            else:
+                edits[m.start] = (m.start, m.end, "", f"type {m.name}", reason)
             continue
         reason = msg[:200]
         if m.kind == "import":
@@ -329,9 +347,14 @@ def repair(text, errors):
         elif m.kind == "field" and m.eq and m.eq[0] <= pos:
             edits[m.start] = (m.eq[0], m.eq[1], "", f"initializer of {m.name}", reason)
             finals.add(m.name)
+        elif m.kind == "type" and pos < m.header_end:
+            # In a type's declaration (a supertype that is not built): the
+            # type goes; a top-level type is left out of the build.
+            if any(m is top for top in members):
+                drop_file.append((f"type {m.name}", reason))
+            else:
+                edits[m.start] = (m.start, m.end, "", f"type {m.name}", reason)
         elif m.kind == "type":
-            # In a type's header (extends, implements, annotations): not
-            # handled here; the build reports it.
             done_unhandled.append((f"type {m.name}", reason))
         else:
             edits[m.start] = (m.start, m.end, "", f"{m.kind} {m.name}", reason)
@@ -349,8 +372,10 @@ def repair(text, errors):
     new = "".join(out)
     if finals:
         for name in finals:
-            new2 = re.sub(r"\bfinal(\s+[\w<>\[\], .?]+\s+" + re.escape(name) + r"\s*[;=])", r"\1", new, count=1)
+            new2 = re.sub(r"\bfinal\b(?=[^;{}=]*\b" + re.escape(name) + r"\s*[;=])", "", new)
             if new2 != new:
                 done.append((f"final modifier of {name}", "its initialization is not built"))
                 new = new2
+    if drop_file:
+        return None, drop_file, done_unhandled
     return new, done, done_unhandled

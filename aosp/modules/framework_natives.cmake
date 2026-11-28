@@ -32,7 +32,6 @@ target_include_directories(libutils_framework PUBLIC
   "${_cu}/include" "${_cu}/binder/include"
   "${AOSP}/system/core/libsystem/include"
   "${AOSP}/system/core/libvndksupport/include")
-target_include_directories(libutils_framework PRIVATE "${AOSP}/bionic/libc/include")
 target_compile_definitions(libutils_framework PUBLIC ANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION)
 target_compile_options(libutils_framework PRIVATE -fvisibility=protected)
 target_link_libraries(libutils_framework PUBLIC aosp_android libcutils liblog libbase)

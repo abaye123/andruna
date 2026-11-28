@@ -91,6 +91,40 @@ impl ArtRoot {
         self.dir.join("tzdata")
     }
 
+    /// The framework's jars and framework-res.apk (the guest's
+    /// `/system/framework`), staged by `build_guest.py framework`.
+    pub fn framework(&self) -> PathBuf {
+        self.dir.join("framework")
+    }
+
+    /// Checks the pieces a run with the framework needs.
+    pub fn validate_framework(&self) -> Result<(), String> {
+        let mut missing = vec![];
+        for p in crate::FRAMEWORK_JARS
+            .iter()
+            .chain(["framework-res.apk"].iter())
+            .map(|j| self.framework().join(j))
+            .chain([
+                self.bin().join("andruna_app_process"),
+                self.lib().join("libandroid_runtime.so"),
+            ])
+        {
+            if !p.is_file() {
+                missing.push(p.display().to_string());
+            }
+        }
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "the ART root {} has no framework; missing: {} (aosp/framework/build.py, \
+                 build_guest.py framework)",
+                self.dir.display(),
+                missing.join(", ")
+            ))
+        }
+    }
+
     /// The primary boot image file for this architecture.
     pub fn boot_image(&self) -> PathBuf {
         self.javalib().join(ISA).join("boot.art")
@@ -154,6 +188,9 @@ impl Layout {
             (ICU_DATA.to_string(), self.art.icu()),
             (TZDATA_APEX.to_string(), self.art.tzdata()),
         ];
+        if self.art.framework().is_dir() {
+            m.push((crate::SYSTEM_FRAMEWORK.to_string(), self.art.framework()));
+        }
         for (i, p) in classpath.iter().enumerate() {
             if !p.is_file() {
                 return Err(format!("class path entry {} not found", p.display()));

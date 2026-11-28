@@ -311,3 +311,70 @@ fn wall_clock_is_the_system_time() {
     assert!(s >= before.as_secs() as i64 && s <= after.as_secs() as i64);
     assert!(o.stdout.contains("nanoTime advances: true"));
 }
+
+/// The framework test program (`tests/framework/build.py`) and an ART root
+/// with the framework staged (`build_guest.py framework`), or None
+/// (skipped) when either is missing, unless `ANDRUNA_REQUIRE_FRAMEWORK=1`.
+fn framework_inputs() -> Option<(PathBuf, PathBuf)> {
+    let root = art_root();
+    let dex = std::env::var_os("ANDRUNA_FRAMEWORK_TEST_DEX")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo().join("out/framework-tests/frameworkbasics.dex"));
+    let staged = root.join("bin/andruna_app_process").is_file()
+        && root.join("framework/framework.jar").is_file();
+    if staged && dex.is_file() {
+        return Some((root, dex));
+    }
+    if std::env::var_os("ANDRUNA_REQUIRE_FRAMEWORK").is_some() {
+        panic!(
+            "{} (framework) or {} is missing; run aosp/framework/build.py, \
+             build_guest.py framework and tests/framework/build.py",
+            root.display(),
+            dex.display()
+        );
+    }
+    eprintln!("skipped: the framework or {} is not built", dex.display());
+    None
+}
+
+fn framework_basics(mode: &str, extra: &[&str]) {
+    let Some((root, dex)) = framework_inputs() else {
+        return;
+    };
+    let data = scratch(&format!("framework-{mode}"));
+    let d = dex.display().to_string();
+    let mut args = vec!["--framework", "--mode", mode];
+    args.extend_from_slice(extra);
+    args.extend(["--classpath", &d, "FrameworkBasics"]);
+    let o = app(&root, &data, &args);
+    for check in [
+        "SystemClock.uptimeMillis",
+        "SystemProperties.get ro.build.version.sdk",
+        "Log.println",
+        "Handler.sendMessage",
+        "Handler.postDelayed",
+        "Resources.getString(android.R.string.ok)",
+    ] {
+        assert!(
+            o.stdout.contains(&format!("PASS {check}")),
+            "{check} passes"
+        );
+    }
+    assert!(o.stdout.contains("ALL PASSED"));
+    assert_eq!(o.code, 0);
+    // android.util.Log reaches the logd stand-in (W and above on stderr).
+    assert!(
+        o.stderr
+            .contains("framework log line from FrameworkBasics")
+    );
+}
+
+#[test]
+fn framework_basics_in_the_interpreter() {
+    framework_basics("int", &["--no-boot-image"]);
+}
+
+#[test]
+fn framework_basics_with_the_jit_and_the_boot_image() {
+    framework_basics("jit", &[]);
+}

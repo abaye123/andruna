@@ -713,6 +713,18 @@ def repair_round(log_text, explicit, sourcepath, report):
                                         "reason": reason})
         for desc, reason in unhandled:
             report["not_built_unhandled"].append({"class": key, "member": desc, "reason": reason})
+        if new is None:
+            # The file's top-level type cannot be built: it is left out.
+            changed += 1
+            if path in explicit_idx:
+                explicit[explicit_idx[path]] = None
+            else:
+                dest = REPAIRED_SP / key
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                # An empty compilation unit hides the source path copy.
+                pkg = key.rsplit("/", 1)[0].replace("/", ".") if "/" in key else ""
+                dest.write_text(f"package {pkg};\n" if pkg else "", encoding="utf-8", newline="\n")
+            continue
         if new == text:
             continue
         changed += 1
@@ -725,6 +737,7 @@ def repair_round(log_text, explicit, sourcepath, report):
             dest = REPAIRED_SP / key
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(new, encoding="utf-8", newline="\n")
+    explicit[:] = [f for f in explicit if f is not None]
     log(f"repair: {changed} files changed")
     return changed
 
