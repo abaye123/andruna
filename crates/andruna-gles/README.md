@@ -29,6 +29,12 @@ Direct3D 11 (ADR 0029), window surfaces on DirectComposition (ADR 0030).
 A binary that runs guest code calls `andruna_gles::register()` before it
 creates its `andruna_linker::Linker`.
 
+In an app process, `harness::set_window_provider` makes the guest's
+`andruna_window_create` return the compositor's surfaces
+(andruna-compositor's `producer::RemoteSurface` implements
+`WindowTarget` with its `gles` feature); andruna-app does this when it
+runs with `--compositor`.
+
 ## Implementing `WindowTarget` in a compositor
 
 1. `DCompositionCreateSurfaceHandle` (duplicate the handle into the app
@@ -52,6 +58,7 @@ creates its `andruna_linker::Linker`.
 | `ANDRUNA_GLES_LATENCY` | Frames in flight before `eglSwapBuffers` waits (1 to 3, default 2) |
 | `ANDRUNA_GLES_HEADLESS` | Harness windows are headless |
 | `ANDRUNA_GLES_TRACE` | Report unavailable functions and surface events |
+| `ANDRUNA_GLES_STATS` | Print a window's frame statistics when the guest destroys it (`andruna_window_destroy`) |
 
 ## Building and testing
 

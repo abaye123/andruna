@@ -8,6 +8,9 @@ Output in out/gles/<arch>/guest of the repository:
   gles_test
       crates/andruna-gles/tests/guest/gles_test.c, freestanding (no libc):
       the loader calls its main and the exit code names the failed check
+  gles_window
+      crates/andruna-gles/tests/guest/gles_window.c, freestanding: renders
+      into the window a compositor hands to an app process (andruna-app)
   gles_demo
       crates/andruna-gles/tests/guest/gles_demo.c, linked against the guest
       bionic and libc++ sysroot (out/guest/<arch>/sysroot, from
@@ -68,6 +71,11 @@ def main():
     run(base + inc + ["-fPIE", "-pie", "-nostdlib", "-Wl,--export-dynamic-symbol=main", "-Wl,--entry=main",
                       "-Wl,--dynamic-linker=/system/bin/linker64", "-Wl,--allow-shlib-undefined",
                       tests / "gles_test.c", "-o", out / "gles_test", f"-L{out}",
+                      "-lEGL", "-lGLESv2", "-landruna_window"])
+    # GL in an app process (andruna-app's tests/gl.rs), freestanding too.
+    run(base + inc + ["-fPIE", "-pie", "-nostdlib", "-Wl,--export-dynamic-symbol=main", "-Wl,--entry=main",
+                      "-Wl,--dynamic-linker=/system/bin/linker64", "-Wl,--allow-shlib-undefined",
+                      tests / "gles_window.c", "-o", out / "gles_window", f"-L{out}",
                       "-lEGL", "-lGLESv2", "-landruna_window"])
     sysroot = Path(os.environ.get("ANDRUNA_GUEST_SYSROOT", ROOT / "out" / "guest" / a.arch / "sysroot"))
     lib = sysroot / "usr" / "lib"

@@ -124,6 +124,8 @@ pub fn options_for(a: &Attach) -> Result<Options, String> {
         mode: Mode::parse(&a.mode)?,
         no_boot_image: false,
         art_options,
+        // The window channel comes with the activity manager (sysd).
+        compositor: None,
         action: Action::Run {
             classpath: classpath.iter().map(PathBuf::from).collect(),
             class: class.clone(),

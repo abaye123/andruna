@@ -7,7 +7,15 @@
 //! andruna-app [options] --classpath <dex|jar>[;...] <MainClass> [args...]
 //! andruna-app [options] --compile-boot        boot image with dex2oat
 //! andruna-app [options] --compile <dex|jar>   app code with dex2oat (AOT)
+//! andruna-app [options] --exec <elf> [args...] a native guest program
 //! ```
+//!
+//! Guest code gets OpenGL ES and EGL from andruna-gles (ANGLE on Direct3D
+//! 11): [`gles_guest_dir`] holds the guest's `libEGL.so` and friends and is
+//! on the library search path, and the process registers andruna-gles's
+//! host symbols before the linker starts. With `--compositor <handles>`
+//! (inherited handles of a window channel, see andruna-compositor's
+//! `producer` module) the guest's windows are the compositor's surfaces.
 //!
 //! The process mounts the guest file tree with andruna-lx (see [`Layout`]),
 //! then andruna-linker loads ART's `dalvikvm` (or `dex2oat`) with the real
@@ -92,6 +100,9 @@ pub enum Action {
     CompileBoot,
     /// Compiles the class path entries against the boot image.
     Compile { classpath: Vec<PathBuf> },
+    /// Runs a native guest program (Android ELF) in the app process's
+    /// tree: the program's directory is `/data/app/cp0`.
+    Exec { exe: PathBuf, args: Vec<String> },
 }
 
 /// Parsed command line.
@@ -105,6 +116,8 @@ pub struct Options {
     pub no_boot_image: bool,
     /// Extra runtime options for ART (`-X...`), in order.
     pub art_options: Vec<String>,
+    /// The window channel's inherited handles (`--compositor`).
+    pub compositor: Option<String>,
     pub action: Action,
 }
 
@@ -112,6 +125,7 @@ pub const USAGE: &str = "\
 usage: andruna-app [options] --classpath <dex|jar>[;...] <MainClass> [args...]
        andruna-app [options] --compile-boot
        andruna-app [options] --compile <dex|jar>[;...]
+       andruna-app [options] --exec <elf> [args...]
        andruna-app --host   (started by sysd, assignment over the host channel)
 
 options:
@@ -122,6 +136,10 @@ options:
                        this executable
   --data <dir>         Windows directory mounted as the guest /; default
                        %TEMP%\\andruna-app
+  --compositor <handles>
+                       the window channel's inherited handles
+                       (section:capacity:to_app:to_compositor, hex); the
+                       guest's windows are then the compositor's surfaces
   -X<option>, -D<name>=<value>, -verbose:<what>
                        passed to ART";
 
@@ -139,6 +157,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     let mut mode = Mode::Jit;
     let mut no_boot_image = false;
     let mut art_options = Vec::new();
+    let mut compositor = None;
     let mut i = 0;
     let value = |i: usize, name: &str| -> Result<String, String> {
         args.get(i)
@@ -161,6 +180,26 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                 mode = Mode::parse(&value(i, a)?)?;
             }
             "--no-boot-image" => no_boot_image = true,
+            "--compositor" => {
+                i += 1;
+                compositor = Some(value(i, a)?);
+            }
+            "--exec" => {
+                i += 1;
+                let exe = PathBuf::from(value(i, a)?);
+                return Ok(Options {
+                    art_root,
+                    data,
+                    mode,
+                    no_boot_image,
+                    art_options,
+                    compositor,
+                    action: Action::Exec {
+                        exe,
+                        args: args[i + 1..].to_vec(),
+                    },
+                });
+            }
             "--compile-boot" => {
                 return finish(
                     art_root,
@@ -168,6 +207,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                     mode,
                     no_boot_image,
                     art_options,
+                    compositor,
                     Action::CompileBoot,
                     &args[i + 1..],
                 );
@@ -181,6 +221,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                     mode,
                     no_boot_image,
                     art_options,
+                    compositor,
                     Action::Compile { classpath },
                     &args[i + 1..],
                 );
@@ -201,6 +242,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                     mode,
                     no_boot_image,
                     art_options,
+                    compositor,
                     action: Action::Run {
                         classpath,
                         class,
@@ -215,7 +257,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         }
         i += 1;
     }
-    Err("nothing to do: give --classpath, --compile or --compile-boot".into())
+    Err("nothing to do: give --classpath, --exec, --compile or --compile-boot".into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -225,6 +267,7 @@ fn finish(
     mode: Mode,
     no_boot_image: bool,
     art_options: Vec<String>,
+    compositor: Option<String>,
     action: Action,
     rest: &[String],
 ) -> Result<Options, String> {
@@ -242,8 +285,34 @@ fn finish(
         mode,
         no_boot_image,
         art_options,
+        compositor,
         action,
     })
+}
+
+/// The class path of an action: what [`Layout::install`] mounts under
+/// `/data/app` (for `--exec`, the program).
+pub fn mounted_entries(action: &Action) -> Vec<PathBuf> {
+    match action {
+        Action::Run { classpath, .. } | Action::Compile { classpath } => classpath.clone(),
+        Action::Exec { exe, .. } => vec![exe.clone()],
+        Action::CompileBoot => vec![],
+    }
+}
+
+/// Environment variable naming the directory of the guest GLES libraries
+/// (`libEGL.so`, `libGLESv1_CM.so`, `libGLESv2.so`, `libGLESv3.so`,
+/// `libandruna_window.so`, built by andruna-gles's `tools/build_guest.py`).
+pub const GLES_GUEST_VAR: &str = "ANDRUNA_GLES_GUEST";
+
+/// The guest GLES libraries: `ANDRUNA_GLES_GUEST`, else `gles` next to the
+/// executable (the runtime layout; ANGLE's DLLs are in `angle` there, see
+/// andruna-gles's `angle` module). `None` when neither has `libEGL.so`.
+pub fn gles_guest_dir(exe_dir: Option<&Path>) -> Option<PathBuf> {
+    std::env::var_os(GLES_GUEST_VAR)
+        .map(PathBuf::from)
+        .or_else(|| exe_dir.map(|d| d.join("gles")))
+        .filter(|d| d.join("libEGL.so").is_file())
 }
 
 /// A guest program run: what andruna-linker starts.
@@ -286,7 +355,9 @@ fn guest_env(layout: &Layout) -> Vec<String> {
 pub fn plan(opts: &Options, layout: &Layout) -> Result<Plan, String> {
     let bcp = boot_classpath();
     let art = &layout.art;
-    let search = vec![art.lib()];
+    let mut search = vec![art.lib()];
+    // Guest libraries link against libEGL.so and libGLESv*.so from here.
+    search.extend(gles_guest_dir(exe_dir().as_deref()));
     let env = guest_env(layout);
     let runtime = |xs: &[&str]| -> Vec<String> {
         xs.iter()
@@ -332,6 +403,22 @@ pub fn plan(opts: &Options, layout: &Layout) -> Result<Plan, String> {
             argv.extend(args.iter().cloned());
             Ok(Plan {
                 exe: art.bin().join("dalvikvm"),
+                argv,
+                env,
+                search,
+            })
+        }
+        Action::Exec { exe, args } => {
+            let mut argv = layout.guest_classpath(std::slice::from_ref(exe))?;
+            argv.extend(args.iter().cloned());
+            if let Some(d) = std::path::absolute(exe)
+                .ok()
+                .and_then(|p| p.parent().map(Path::to_path_buf))
+            {
+                search.push(d);
+            }
+            Ok(Plan {
+                exe: exe.clone(),
                 argv,
                 env,
                 search,
@@ -422,6 +509,9 @@ pub fn execute(plan: Plan) -> Result<std::convert::Infallible, String> {
     if !plan.exe.is_file() {
         return Err(format!("{} not found", plan.exe.display()));
     }
+    // `__andruna_gles_resolve` for the guest GLES stubs, before the linker
+    // binds any guest library.
+    andruna_gles::register();
     let _ = andruna_lx::fs::set_cwd("/data/local/tmp");
     let config = andruna_linker::Config {
         search: plan.search,
@@ -434,6 +524,36 @@ pub fn execute(plan: Plan) -> Result<std::convert::Infallible, String> {
         env: plan.env,
     })
     .map_err(|e| e.to_string())
+}
+
+/// How long the guest's `andruna_window_create` waits for the compositor
+/// to hand over a surface.
+const SURFACE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+static COMPOSITOR: std::sync::OnceLock<andruna_compositor::producer::Connection> =
+    std::sync::OnceLock::new();
+
+/// Opens the window channel given with `--compositor` (inherited handles)
+/// and makes the compositor's surfaces the guest's windows.
+pub fn connect_compositor(handles: &str) -> Result<(), String> {
+    use andruna_compositor::channel::ChannelHandles;
+    use andruna_compositor::producer::Connection;
+    let h = ChannelHandles::parse(handles)
+        .ok_or_else(|| format!("--compositor: bad handles '{handles}'"))?;
+    // SAFETY: sysd (or the test host) started this process with these
+    // handles inherited; nothing else in the process owns them.
+    let c = unsafe { Connection::open(h) }.map_err(|e| format!("--compositor: {e}"))?;
+    if COMPOSITOR.set(c).is_err() {
+        return Err("--compositor given twice".into());
+    }
+    andruna_gles::harness::set_window_provider(Some(Box::new(|_, _, _| {
+        let c = COMPOSITOR.get().ok_or("no compositor connection")?;
+        let s = c
+            .next_surface(SURFACE_WAIT)
+            .ok_or("the compositor handed over no surface")?;
+        Ok(s as std::sync::Arc<dyn andruna_gles::window::WindowTarget>)
+    })));
+    Ok(())
 }
 
 /// The directory of the running executable.
@@ -499,6 +619,52 @@ mod tests {
                 classpath: vec!["a.dex".into()]
             }
         );
+    }
+
+    #[test]
+    fn parses_exec_and_the_compositor_channel() {
+        let o = parse(&s(&[
+            "--compositor",
+            "1a4:10000:1b0:1b4",
+            "--exec",
+            r"C:\g\gles_window",
+            "-x",
+            "--y",
+        ]))
+        .unwrap();
+        assert_eq!(o.compositor.as_deref(), Some("1a4:10000:1b0:1b4"));
+        assert_eq!(
+            o.action,
+            Action::Exec {
+                exe: r"C:\g\gles_window".into(),
+                args: s(&["-x", "--y"]),
+            }
+        );
+        assert_eq!(
+            mounted_entries(&o.action),
+            vec![PathBuf::from(r"C:\g\gles_window")]
+        );
+        assert!(parse(&s(&["--exec"])).is_err());
+        assert!(parse(&s(&["--compositor"])).is_err());
+        // Bad handles are reported when connecting, not here.
+        assert!(connect_compositor("nope").is_err());
+    }
+
+    #[test]
+    fn exec_runs_the_program_from_cp0_with_the_gles_libraries() {
+        let d = std::env::temp_dir().join(format!("andruna-app-exec-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("gles")).unwrap();
+        std::fs::write(d.join("gles").join("libEGL.so"), b"elf").unwrap();
+        std::fs::write(d.join("prog"), b"elf").unwrap();
+        // SAFETY: tests of this crate do not read this variable concurrently.
+        unsafe { std::env::set_var(GLES_GUEST_VAR, d.join("gles")) };
+        let o = parse(&s(&["--exec", d.join("prog").to_str().unwrap(), "a"])).unwrap();
+        let l = Layout::new(ArtRoot { dir: d.join("art") }, Some(&d.join("data")));
+        let p = plan(&o, &l).unwrap();
+        assert_eq!(p.argv, s(&["/data/app/cp0/prog", "a"]));
+        assert!(p.search.contains(&d.join("gles")), "{:?}", p.search);
+        assert_eq!(gles_guest_dir(None), Some(d.join("gles")));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
