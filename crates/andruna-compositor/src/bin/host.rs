@@ -332,6 +332,18 @@ fn main() {
                 println!("event=destroyed");
                 break;
             }
+            Event::SurfacePresented {
+                surface,
+                width,
+                height,
+                bottom_up,
+                ..
+            } => {
+                println!(
+                    "event=surface_presented surface={} size={width}x{height} bottom_up={bottom_up}",
+                    surface.0
+                )
+            }
         }
     }
     if !latencies.is_empty() {

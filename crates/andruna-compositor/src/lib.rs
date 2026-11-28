@@ -13,6 +13,9 @@
 //! - [`vsync`]: vsync events from the compositor clock.
 //! - [`wire`] and [`channel`]: the input message format and transport to
 //!   app processes until Binder's `InputChannel`.
+//! - [`producer`]: the app process's end of a window channel (surfaces
+//!   handed over by the compositor, configuration, input); with the
+//!   `gles` feature its surfaces are EGL window targets.
 //!
 //! All `unsafe` code is in [`sys`].
 
@@ -23,6 +26,7 @@ pub mod compositor;
 pub mod config;
 pub mod geom;
 pub mod input;
+pub mod producer;
 pub mod surface;
 pub mod sys;
 pub mod vsync;

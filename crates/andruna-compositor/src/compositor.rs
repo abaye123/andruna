@@ -31,8 +31,10 @@ use crate::input::keys::{self, KeyTracker, SCAN_PAUSE, system_back};
 use crate::input::pointer::{PointerFrame, PointerKind, PointerSample, PointerTracker};
 use crate::input::{ImeEvent, InputEvent};
 use crate::sys::gfx::{Caption, Gfx, Image, Rgb, SurfaceVisual, WindowTree};
+use crate::sys::shm::EventWatch;
 use crate::sys::win::{self, Hwnd, Msg};
 use crate::sys::{capture, ime, pointer, vsync};
+use crate::wire::{SurfaceMessage, WireConfiguration};
 
 pub use crate::sys::vsync::TargetId;
 
@@ -103,6 +105,18 @@ pub enum Event {
     Destroyed {
         window: WindowId,
     },
+    /// The producer of a surface (through the window's channel) presented
+    /// a buffer of a new size or orientation; the first one of a surface
+    /// is its first frame. `at_ns` is when the compositor applied it, on
+    /// the uptime clock.
+    SurfacePresented {
+        window: WindowId,
+        surface: SurfaceId,
+        width: u32,
+        height: u32,
+        bottom_up: bool,
+        at_ns: i64,
+    },
 }
 
 enum Cmd {
@@ -115,6 +129,14 @@ enum Cmd {
     },
     MoveSurface(WindowId, SurfaceId, i32, i32),
     RemoveSurface(WindowId, SurfaceId),
+    OfferSurface {
+        window: WindowId,
+        surface: SurfaceId,
+        process: Option<usize>,
+        reply: Sender<io::Result<()>>,
+    },
+    ResizeSurface(WindowId, SurfaceId, u32, u32),
+    SetSurfaceOrientation(WindowId, SurfaceId, Option<u32>),
     SetCaptionColor(WindowId, Option<u32>),
     SetTitle(WindowId, String),
     FirstFrame(WindowId),
@@ -132,6 +154,8 @@ enum Cmd {
 
 const WM_APP_CMD: u32 = 0x8000 + 1;
 const WM_APP_RELAYOUT: u32 = 0x8000 + 2;
+/// A window's app sent something on its channel.
+const WM_APP_CHANNEL: u32 = 0x8000 + 3;
 const SPLASH_TIMER: usize = 1;
 const SPLASH_FADE_MS: u32 = 200;
 
@@ -215,6 +239,52 @@ impl Compositor {
         self.send(Cmd::RemoveSurface(w, s))
     }
 
+    /// Hands a surface to the app on the window's channel (attached with
+    /// [`Compositor::attach_input`]): duplicates its composition surface
+    /// handle into `process` (a process handle with `PROCESS_DUP_HANDLE`,
+    /// valid until this returns; `None`: this process) and sends
+    /// [`SurfaceMessage::Attach`] with the handle value there and the
+    /// surface's size. The app owns that handle from then on.
+    pub fn offer_surface(
+        &self,
+        window: WindowId,
+        surface: SurfaceId,
+        process: Option<usize>,
+    ) -> io::Result<()> {
+        self.call(|reply| Cmd::OfferSurface {
+            window,
+            surface,
+            process,
+            reply,
+        })?
+    }
+
+    /// The buffer size the window wants for a surface (after a
+    /// configuration change): sent to its producer as
+    /// [`SurfaceMessage::Resize`]; the producer resizes its swap chain at
+    /// its next frame.
+    pub fn resize_surface(
+        &self,
+        w: WindowId,
+        s: SurfaceId,
+        width: u32,
+        height: u32,
+    ) -> io::Result<()> {
+        self.send(Cmd::ResizeSurface(w, s, width, height))
+    }
+
+    /// How an in-process producer stores its buffers: `Some(height)` for
+    /// bottom-up content (OpenGL), `None` for top-down. Producers on the
+    /// window's channel report it with [`SurfaceMessage::Presented`].
+    pub fn set_surface_orientation(
+        &self,
+        w: WindowId,
+        s: SurfaceId,
+        bottom_up_height: Option<u32>,
+    ) -> io::Result<()> {
+        self.send(Cmd::SetSurfaceOrientation(w, s, bottom_up_height))
+    }
+
     /// The title bar color (the app's status bar color), or the backdrop.
     pub fn set_caption_color(&self, w: WindowId, rgb: Option<u32>) -> io::Result<()> {
         self.send(Cmd::SetCaptionColor(w, rgb))
@@ -241,7 +311,9 @@ impl Compositor {
     }
 
     /// Delivers the window's input through a channel instead of
-    /// [`Event::Input`].
+    /// [`Event::Input`]. The channel also carries the window's
+    /// configuration and the surface handshake ([`crate::producer`]): the
+    /// current configuration is sent at once.
     pub fn attach_input(&self, w: WindowId, p: InputPublisher) -> io::Result<()> {
         self.send(Cmd::AttachInput(w, Box::new(p)))
     }
@@ -293,7 +365,8 @@ struct Win {
     dpi: u32,
     monitor: isize,
     origin: (i32, i32),
-    surfaces: Vec<(SurfaceId, i32, SurfaceVisual)>,
+    /// Id, z order, visual, and the buffer size the window wants.
+    surfaces: Vec<(SurfaceId, i32, SurfaceVisual, (u32, u32))>,
     mouse: PointerTracker,
     touch: PointerTracker,
     pen: PointerTracker,
@@ -308,6 +381,10 @@ struct Win {
     high_surrogate: Option<u16>,
     composing: bool,
     publisher: Option<Box<InputPublisher>>,
+    /// Wakes the compositor thread when the app sends on the channel.
+    watch: Option<EventWatch>,
+    /// Surfaces whose producer presented at least once.
+    presented: Vec<SurfaceId>,
     caption: Option<Caption>,
 }
 
@@ -371,7 +448,9 @@ fn run(rx: Receiver<Cmd>, events: Sender<Event>, ready: Sender<io::Result<(u32, 
     let mut quit = false;
     while !quit
         && win::pump_one(&mut |m| {
-            if m == WM_APP_CMD {
+            if m == WM_APP_CHANNEL {
+                drain_channels();
+            } else if m == WM_APP_CMD {
                 while let Ok(c) = rx.try_recv() {
                     if matches!(c, Cmd::Quit) {
                         quit = true;
@@ -418,7 +497,7 @@ fn command(c: Cmd) {
                     width: rect.width().max(1) as u32,
                     height: rect.height().max(1) as u32,
                 };
-                w.surfaces.push((id, z, v));
+                w.surfaces.push((id, z, v, (handle.width, handle.height)));
                 w.surfaces.sort_by_key(|x| x.1);
                 let list: Vec<&SurfaceVisual> = w.surfaces.iter().map(|x| &x.2).collect();
                 w.tree.set_surfaces(&list)?;
@@ -439,9 +518,46 @@ fn command(c: Cmd) {
         Cmd::RemoveSurface(w, sid) => {
             with_window(w, |s, win| {
                 win.surfaces.retain(|v| v.0 != sid);
+                win.presented.retain(|v| *v != sid);
                 let list: Vec<&SurfaceVisual> = win.surfaces.iter().map(|x| &x.2).collect();
                 let _ = win.tree.set_surfaces(&list);
                 let _ = s.gfx.commit();
+                if let Some(p) = win.publisher.as_ref() {
+                    let _ = p.send_surface(SurfaceMessage::Detach { surface: sid.0 });
+                }
+            });
+        }
+        Cmd::OfferSurface {
+            window,
+            surface,
+            process,
+            reply,
+        } => {
+            let r = with_window(window, |_, win| offer_surface(win, surface, process))
+                .unwrap_or_else(|| Err(io::Error::other("no such window")));
+            let _ = reply.send(r);
+        }
+        Cmd::ResizeSurface(w, sid, width, height) => {
+            with_window(w, |_, win| {
+                if let Some(v) = win.surfaces.iter_mut().find(|v| v.0 == sid) {
+                    v.3 = (width.max(1), height.max(1));
+                    if let Some(p) = win.publisher.as_ref() {
+                        let _ = p.send_surface(SurfaceMessage::Resize {
+                            surface: sid.0,
+                            width: v.3.0,
+                            height: v.3.1,
+                        });
+                    }
+                }
+            });
+        }
+        Cmd::SetSurfaceOrientation(w, sid, flip) => {
+            with_window(w, |s, win| {
+                if let Some(v) = win.surfaces.iter().find(|v| v.0 == sid)
+                    && v.2.set_orientation(flip.map(clamp_rows)).unwrap_or(false)
+                {
+                    let _ = s.gfx.commit();
+                }
             });
         }
         Cmd::SetCaptionColor(w, c) => {
@@ -498,7 +614,20 @@ fn command(c: Cmd) {
             }
         }
         Cmd::AttachInput(w, p) => {
-            with_window(w, |_, win| win.publisher = Some(p));
+            with_window(w, |s, win| {
+                win.watch = p
+                    .channel()
+                    .watch(win::current_thread_id(), WM_APP_CHANNEL)
+                    .ok();
+                if let Some(l) = win.layout {
+                    let _ = p.send_surface(SurfaceMessage::Configuration(wire_configuration(
+                        &s.gfx, &l, 0,
+                    )));
+                }
+                win.publisher = Some(p);
+            });
+            // Anything the app sent before the watch existed.
+            drain_channels();
         }
         Cmd::SetClientSize(w, size) => {
             if let Some(h) = with_window(w, |_, win| win.hwnd) {
@@ -643,6 +772,8 @@ fn create_window(spec: WindowSpec) -> io::Result<WindowId> {
                 high_surrogate: None,
                 composing: false,
                 publisher: None,
+                watch: None,
+                presented: Vec::new(),
                 caption: None,
             },
         );
@@ -793,6 +924,10 @@ fn relayout(h: Hwnd) {
             _ => None,
         };
         if let Some(changes) = changes {
+            if let Some(p) = w.publisher.as_ref() {
+                let c = wire_configuration(&s.gfx, &layout, changes);
+                let _ = p.send_surface(SurfaceMessage::Configuration(c));
+            }
             let _ = s.events.send(Event::Configuration {
                 window: w.id,
                 layout,
@@ -806,12 +941,140 @@ fn relayout(h: Hwnd) {
     }
 }
 
+fn clamp_rows(h: u32) -> u32 {
+    h.clamp(1, 16384)
+}
+
+/// The compact configuration of a layout for the app's channel.
+fn wire_configuration(gfx: &Gfx, l: &WindowLayout, changes: u32) -> WireConfiguration {
+    let period = gfx
+        .frame_statistics()
+        .filter(|f| f.2 > 0)
+        .map_or(0, |f| clock::qpc_duration_ns(f.2));
+    let app = l.config.window.app_bounds;
+    WireConfiguration {
+        changes,
+        width_px: app.width(),
+        height_px: app.height(),
+        density_dpi: l.config.density_dpi,
+        width_dp: l.config.screen_width_dp,
+        height_dp: l.config.screen_height_dp,
+        orientation: l.config.orientation,
+        vsync_period_ns: period,
+    }
+}
+
+/// Duplicates a surface's handle into the app and sends it.
+fn offer_surface(win: &mut Win, sid: SurfaceId, process: Option<usize>) -> io::Result<()> {
+    let p = win
+        .publisher
+        .as_ref()
+        .ok_or_else(|| io::Error::other("the window has no app channel"))?;
+    let v = win
+        .surfaces
+        .iter()
+        .find(|v| v.0 == sid)
+        .ok_or_else(|| io::Error::other("no such surface"))?;
+    let value = v.2.handle().duplicate_into(process)?;
+    let msg = SurfaceMessage::Attach {
+        surface: sid.0,
+        handle: value as u64,
+        width: v.3.0,
+        height: v.3.1,
+        z: v.1,
+    };
+    if let Err(e) = p.send_surface(msg) {
+        // Not handed over: close the copy where it is.
+        match process {
+            Some(proc_) => crate::sys::shm::close_in(proc_, value),
+            // SAFETY: the value was just duplicated into this process.
+            None => drop(unsafe { crate::sys::shm::Handle::from_raw(value) }),
+        }
+        return Err(io::Error::other(e.to_string()));
+    }
+    Ok(())
+}
+
+/// Reads what every window's app sent.
+fn drain_channels() {
+    with_state(|s| {
+        let hs: Vec<isize> = s.wins.keys().copied().collect();
+        for h in hs {
+            if let Some(mut w) = s.wins.remove(&h) {
+                drain_channel(s, &mut w);
+                s.wins.insert(h, w);
+            }
+        }
+    });
+}
+
+/// Reads finished replies and surface messages from the window's app.
+fn drain_channel(s: &State, w: &mut Win) {
+    let now = clock::uptime_ns();
+    let Some(p) = w.publisher.as_mut() else {
+        return;
+    };
+    let msgs = match p.poll(now) {
+        Ok((_, m)) => m,
+        // A corrupted channel: the app's input and surface messages stop,
+        // other windows are not affected.
+        Err(_) => return,
+    };
+    for m in msgs {
+        if let SurfaceMessage::Presented {
+            surface,
+            width,
+            height,
+            bottom_up,
+        } = m
+        {
+            presented(s, w, SurfaceId(surface), width, height, bottom_up);
+        }
+        // Other surface messages go to the app, not from it.
+    }
+}
+
+/// A producer presented: the visual follows its orientation, and the
+/// first frame of the window ends the splash.
+fn presented(s: &State, w: &mut Win, sid: SurfaceId, width: u32, height: u32, bottom_up: bool) {
+    // Only this window's surfaces: the app cannot reach others.
+    let Some(v) = w.surfaces.iter().find(|v| v.0 == sid) else {
+        return;
+    };
+    let mut commit =
+        v.2.set_orientation(bottom_up.then_some(clamp_rows(height)))
+            .unwrap_or(false);
+    let first = !w.presented.contains(&sid);
+    if first {
+        w.presented.push(sid);
+        if w.tree.has_splash() {
+            let _ = s.gfx.fade_splash(&mut w.tree, SPLASH_FADE_MS);
+            win::set_timer(w.hwnd, SPLASH_TIMER, SPLASH_FADE_MS + 50);
+            commit = true;
+        }
+    }
+    if commit {
+        let _ = s.gfx.commit();
+    }
+    emit(
+        s,
+        Event::SurfacePresented {
+            window: w.id,
+            surface: sid,
+            width,
+            height,
+            bottom_up,
+            at_ns: clock::uptime_ns(),
+        },
+    );
+}
+
 /// Delivers an input event to the window's app.
 fn deliver(s: &State, w: &mut Win, event: InputEvent) {
     let now = clock::uptime_ns();
     if let Some(p) = w.publisher.as_mut() {
         if p.publish(event, now).is_ok() {
-            let _ = p.poll_finished(now);
+            drain_channel(s, w);
             return;
         }
         // A full or broken channel drops the event, as Android's
@@ -920,6 +1183,11 @@ fn handle_message(m: Msg) -> Option<isize> {
             with_state(|s| {
                 if let Some(w) = s.wins.remove(&m.hwnd.0) {
                     s.ids.remove(&w.id);
+                    if let Some(p) = w.publisher.as_ref() {
+                        for v in &w.surfaces {
+                            let _ = p.send_surface(SurfaceMessage::Detach { surface: v.0.0 });
+                        }
+                    }
                     emit(s, Event::Destroyed { window: w.id });
                 }
             });

@@ -428,6 +428,7 @@ impl Gfx {
                 visual,
                 handle,
                 _content: content,
+                place: std::cell::Cell::new((0, 0, None)),
             })
         }
     }
@@ -549,6 +550,26 @@ pub struct SurfaceVisual {
     visual: IDCompositionVisual2,
     handle: Handle,
     _content: IUnknown,
+    /// Position (app pixels) and, for bottom-up content, the buffer
+    /// height it is flipped over.
+    place: std::cell::Cell<(i32, i32, Option<u32>)>,
+}
+
+/// The transform that places a surface at (`x`, `y`) and, for bottom-up
+/// content of `flip` rows (OpenGL row order), shows it upright: row 0 of
+/// the buffer lands at `y + flip - 1`.
+pub fn surface_transform(x: i32, y: i32, flip: Option<u32>) -> Matrix3x2 {
+    match flip {
+        None => Matrix3x2::translation(x as f32, y as f32),
+        Some(h) => Matrix3x2 {
+            M11: 1.0,
+            M12: 0.0,
+            M21: 0.0,
+            M22: -1.0,
+            M31: x as f32,
+            M32: (y as i64 + h as i64) as f32,
+        },
+    }
 }
 
 impl SurfaceVisual {
@@ -557,13 +578,42 @@ impl SurfaceVisual {
         &self.handle
     }
 
+    fn apply(&self) -> io::Result<()> {
+        let (x, y, flip) = self.place.get();
+        // The position is part of the transform (the offsets stay 0), so
+        // the flip never depends on the order DirectComposition applies
+        // offsets and transforms in.
+        // SAFETY: a COM call with a plain matrix.
+        unsafe {
+            self.visual
+                .SetTransform2(&surface_transform(x, y, flip))
+                .map_err(to_io)
+        }
+    }
+
     /// Position in app pixels inside the content area.
     pub fn set_position(&self, x: i32, y: i32) -> io::Result<()> {
-        // SAFETY: COM calls with plain values.
-        unsafe {
-            self.visual.SetOffsetX2(x as f32).map_err(to_io)?;
-            self.visual.SetOffsetY2(y as f32).map_err(to_io)
+        let (_, _, flip) = self.place.get();
+        self.place.set((x, y, flip));
+        self.apply()
+    }
+
+    /// How the producer's buffers are stored: `Some(height)` for bottom-up
+    /// content of that many rows (GL producers), `None` for top-down
+    /// content (CPU, video). Returns whether anything changed.
+    pub fn set_orientation(&self, flip: Option<u32>) -> io::Result<bool> {
+        let (x, y, old) = self.place.get();
+        if old == flip {
+            return Ok(false);
         }
+        self.place.set((x, y, flip));
+        self.apply()?;
+        Ok(true)
+    }
+
+    /// The current flip (see [`SurfaceVisual::set_orientation`]).
+    pub fn orientation(&self) -> Option<u32> {
+        self.place.get().2
     }
 }
 

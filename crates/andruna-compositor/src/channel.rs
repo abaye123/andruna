@@ -24,8 +24,8 @@ use std::io;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use crate::sys::shm::{Event, Handle, Section};
-use crate::wire::{self, DecodeError, Message};
+use crate::sys::shm::{Event, EventWatch, Handle, Section};
+use crate::wire::{self, DecodeError, Message, SurfaceMessage};
 
 const DATA_OFFSET: usize = 4096;
 const MAGIC: u64 = 0x414e_4452_494e_5031; // "ANDRINP1"
@@ -81,6 +81,38 @@ pub struct ChannelHandles {
     pub to_app: usize,
     /// Signalled when ring 1 (app to compositor) has data.
     pub to_compositor: usize,
+}
+
+impl ChannelHandles {
+    /// The command line form, `section:capacity:to_app:to_compositor`
+    /// (hexadecimal handle values), as an app process receives it.
+    pub fn to_arg(&self) -> String {
+        format!(
+            "{:x}:{:x}:{:x}:{:x}",
+            self.section, self.capacity, self.to_app, self.to_compositor
+        )
+    }
+
+    /// Parses [`ChannelHandles::to_arg`].
+    pub fn parse(s: &str) -> Option<ChannelHandles> {
+        let mut it = s.split(':').map(|p| usize::from_str_radix(p, 16).ok());
+        let h = ChannelHandles {
+            section: it.next()??,
+            capacity: it.next()??,
+            to_app: it.next()??,
+            to_compositor: it.next()??,
+        };
+        it.next().is_none().then_some(h)
+    }
+}
+
+/// Inheritable copies of a channel's handles for a child process started
+/// with them in its launch handle list (handle values are the same in the
+/// child). Closed in this process on drop, after the child has started.
+#[derive(Debug)]
+pub struct InheritedChannel {
+    _handles: [Handle; 3],
+    pub values: ChannelHandles,
 }
 
 /// One end of an input channel.
@@ -190,6 +222,29 @@ impl InputChannel {
             to_app: self.to_app.handle().duplicate_into(Some(process))?,
             to_compositor: self.to_compositor.handle().duplicate_into(Some(process))?,
         })
+    }
+
+    /// Inheritable copies of the handles, for an app process that this
+    /// process starts (the app opens them with [`InputChannel::open`]).
+    pub fn export_inheritable(&self) -> io::Result<InheritedChannel> {
+        let section = self.section.handle().duplicate_inheritable()?;
+        let to_app = self.to_app.handle().duplicate_inheritable()?;
+        let to_compositor = self.to_compositor.handle().duplicate_inheritable()?;
+        let values = ChannelHandles {
+            section: section.raw(),
+            capacity: self.capacity,
+            to_app: to_app.raw(),
+            to_compositor: to_compositor.raw(),
+        };
+        Ok(InheritedChannel {
+            _handles: [section, to_app, to_compositor],
+            values,
+        })
+    }
+
+    /// Posts `msg` to `thread` whenever the peer sends something.
+    pub fn watch(&self, thread: u32, msg: u32) -> io::Result<EventWatch> {
+        EventWatch::new(self.rx().1, thread, msg)
     }
 
     /// Opens the app's end from handles duplicated into this process.
@@ -333,22 +388,44 @@ impl InputPublisher {
         Ok(seq)
     }
 
-    /// Reads the app's finished replies.
+    /// Reads the app's finished replies (surface messages are dropped; the
+    /// compositor reads both with [`InputPublisher::poll`]).
     pub fn poll_finished(&mut self, now_ns: i64) -> Result<Vec<Finished>, ChannelError> {
+        Ok(self.poll(now_ns)?.0)
+    }
+
+    /// Reads everything the app sent: finished replies and surface
+    /// messages, in order.
+    pub fn poll(
+        &mut self,
+        now_ns: i64,
+    ) -> Result<(Vec<Finished>, Vec<SurfaceMessage>), ChannelError> {
         let mut out = Vec::new();
+        let mut surface = Vec::new();
         while let Some(m) = self.channel.try_recv()? {
-            if let Message::Finished { seq, handled, .. } = m
-                && let Some(i) = self.pending.iter().position(|p| p.0 == seq)
-            {
-                let (_, sent) = self.pending.remove(i).unwrap();
-                out.push(Finished {
-                    seq,
-                    handled,
-                    latency_ns: now_ns - sent,
-                });
+            match m {
+                Message::Finished { seq, handled, .. } => {
+                    if let Some(i) = self.pending.iter().position(|p| p.0 == seq) {
+                        let (_, sent) = self.pending.remove(i).unwrap();
+                        out.push(Finished {
+                            seq,
+                            handled,
+                            latency_ns: now_ns - sent,
+                        });
+                    }
+                }
+                Message::Surface(s) => surface.push(s),
+                // Events go the other way; an app that sends them is
+                // ignored.
+                Message::Event { .. } => {}
             }
         }
-        Ok(out)
+        Ok((out, surface))
+    }
+
+    /// Sends a surface message to the app.
+    pub fn send_surface(&self, msg: SurfaceMessage) -> Result<(), ChannelError> {
+        self.channel.send(&Message::Surface(msg))
     }
 
     /// How long the oldest unfinished event has waited (Android declares
@@ -401,6 +478,72 @@ mod tests {
         assert_eq!(f.len(), 10);
         assert!(f.iter().all(|f| f.latency_ns == 250));
         assert_eq!(p.oldest_pending_ns(400), None);
+    }
+
+    #[test]
+    fn surface_messages_flow_with_input() {
+        let (c, a) = InputChannel::pair(4096).unwrap();
+        let mut p = InputPublisher::new(c);
+        p.send_surface(SurfaceMessage::Resize {
+            surface: 3,
+            width: 10,
+            height: 20,
+        })
+        .unwrap();
+        let seq = p.publish(key(1), 0).unwrap();
+        assert!(matches!(
+            a.try_recv().unwrap(),
+            Some(Message::Surface(SurfaceMessage::Resize { surface: 3, .. }))
+        ));
+        assert!(matches!(a.try_recv().unwrap(), Some(Message::Event { .. })));
+        let presented = SurfaceMessage::Presented {
+            surface: 3,
+            width: 10,
+            height: 20,
+            bottom_up: true,
+        };
+        a.send(&Message::Surface(presented)).unwrap();
+        a.send(&Message::Finished {
+            seq,
+            handled: true,
+            consume_time_ns: 0,
+        })
+        .unwrap();
+        let (f, s) = p.poll(5).unwrap();
+        assert_eq!(f.len(), 1);
+        assert_eq!(s, vec![presented]);
+    }
+
+    #[test]
+    fn handles_have_a_command_line_form() {
+        let h = ChannelHandles {
+            section: 0x1a4,
+            capacity: 65536,
+            to_app: 0x1b0,
+            to_compositor: 0x1b4,
+        };
+        assert_eq!(h.to_arg(), "1a4:10000:1b0:1b4");
+        assert_eq!(ChannelHandles::parse(&h.to_arg()), Some(h));
+        for bad in ["", "1:2:3", "1:2:3:4:5", "x:1:2:3", "1::2:3"] {
+            assert_eq!(ChannelHandles::parse(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn watch_posts_when_the_peer_sends() {
+        crate::sys::win::ensure_queue();
+        let (c, a) = InputChannel::pair(4096).unwrap();
+        let me = crate::sys::win::current_thread_id();
+        let _w = c.watch(me, 0x8000 + 0x55).unwrap();
+        a.send(&Message::Surface(SurfaceMessage::Detach { surface: 1 }))
+            .unwrap();
+        let end = std::time::Instant::now() + Duration::from_secs(5);
+        let mut got = false;
+        while !got && std::time::Instant::now() < end {
+            got = crate::sys::win::take_thread_message(0x8000 + 0x55);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(got, "no thread message after the peer sent");
     }
 
     #[test]
