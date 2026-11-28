@@ -149,9 +149,23 @@ function Get-ShortcutInfo([string] $Path) {
     [pscustomobject]@{ Target = $s.TargetPath; Arguments = $s.Arguments; Icon = $s.IconLocation }
 }
 
+Add-Type -Namespace AndrunaE2E -Name UserEnv -MemberDefinition @'
+[DllImport("userenv.dll", CharSet = CharSet.Unicode)]
+public static extern int DeleteAppContainerProfile(string name);
+'@
+
+$Mappings = 'HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings'
+
+# AppContainer profiles of Andruna packages (sysd names them "Andruna: <package>").
+function Get-PackageProfiles {
+    @(Get-ChildItem $Mappings -ErrorAction SilentlyContinue | Where-Object { [string]$_.GetValue('DisplayName') -like 'Andruna: *' } |
+            ForEach-Object { [string]$_.GetValue('Moniker') } | Sort-Object)
+}
+
 # What the comparison after the restore looks at.
 function Get-ProfileSnapshot {
     [ordered]@{
+        appcontainers = Get-PackageProfiles
         uninstall = @(Get-ChildItem $UninstallRoot | Where-Object { $_.PSChildName -like 'Andruna*' } | ForEach-Object {
                 $k = $_; "$($k.PSChildName)=" + (($k.GetValueNames() | Sort-Object | ForEach-Object { "${_}:$($k.GetValue($_))" }) -join '|')
             })
@@ -580,6 +594,12 @@ finally {
     Get-ChildItem $Programs -Filter *.lnk | Where-Object { (Get-ShortcutInfo $_.FullName).Target -like "$InstallDir\*" } | Remove-Item -Force
     if ($snapshotExeDir -and -not $snapshotExeRegistered) {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Repo 'installer\uninstall-cleanup.ps1') -InstallDir $snapshotExeDir
+    }
+    # A package the Andruna uninstaller kept (a silent uninstall keeps app
+    # data) still has its AppContainer profile; the restore drops its files,
+    # so the profile goes too.
+    foreach ($p in Get-PackageProfiles) {
+        if ($snapshot.appcontainers -notcontains $p) { [void][AndrunaE2E.UserEnv]::DeleteAppContainerProfile($p) }
     }
     try { Restore-Profile $state }
     catch { Add-Step 'restore' $false "$($_.Exception.Message); the backup is in $Backup" }

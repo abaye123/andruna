@@ -419,6 +419,11 @@ mod tests {
             }
             m => panic!("{m:?}"),
         }
+        match parse_args(&args(&["--prepare-runtime", "--root", "C:\\x"])).unwrap() {
+            Mode::PrepareRuntime { root } => assert_eq!(root, Some(PathBuf::from("C:\\x"))),
+            m => panic!("{m:?}"),
+        }
+        assert!(parse_args(&args(&["--prepare-runtime", "--host", "com.example.app"])).is_err());
         match parse_args(&args(&["--host", "com.example.app"])).unwrap() {
             Mode::Host { package, .. } => assert_eq!(package, "com.example.app"),
             m => panic!("{m:?}"),

@@ -76,9 +76,12 @@ $RustBinaries = @('andruna-sysd.exe', 'andruna-launch.exe')
 if (-not $NoRuntime) { $RustBinaries += 'andruna-app.exe' }
 # ELF e_machine of each architecture's guest code.
 $ElfMachine = @{ x64 = 62; arm64 = 183 }
-# What andruna-app needs in the ART root (crates/andruna-app/src/layout.rs).
+# What andruna-app needs in the ART root (crates/andruna-app/src/layout.rs:
+# BOOT_JARS, libart, bionic, dalvikvm, dex2oat, Conscrypt's JNI library and
+# the time zone data).
 $ArtRequired = @('lib64\libart.so', 'lib64\libc.so', 'bin\dalvikvm', 'bin\dex2oat',
-    'javalib\core-oj.jar', 'javalib\core-libart.jar', 'javalib\core-icu4j.jar')
+    'javalib\core-oj.jar', 'javalib\core-libart.jar', 'javalib\core-icu4j.jar', 'javalib\bouncycastle.jar',
+    'javalib\conscrypt.jar', 'lib64\libjavacrypto.so', 'tzdata\etc\tz\tzdata')
 
 function Invoke-Cargo([string[]] $CargoArgs) {
     Push-Location $Repo
