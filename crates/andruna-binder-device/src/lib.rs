@@ -33,7 +33,22 @@ use andruna_binder::{pack, uapi};
 
 /// Registers `/dev/binder` with andruna-lx.
 pub fn register() {
-    andruna_lx::fs::dev::register(b"binder", open);
+    andruna_lx::fs::dev::register_with_stat(b"binder", open, device_stat());
+}
+
+/// The status of `/dev/binder`, from `stat` and `fstat` (libbinder checks
+/// that the path is accessible before it opens it).
+fn device_stat() -> StatData {
+    StatData {
+        dev: 5,
+        ino: 0x4000,
+        mode: S_IFCHR | 0o666,
+        nlink: 1,
+        // A misc device: major 10.
+        rdev: (10 << 8) | 50,
+        blksize: 4096,
+        ..StatData::default()
+    }
 }
 
 /// The inherited channel of [`HANDLE_ENV`] serves one open.
@@ -335,16 +350,7 @@ pub struct BinderFile {
 
 impl FileOps for BinderFile {
     fn stat(&self) -> SysResult<StatData> {
-        Ok(StatData {
-            dev: 5,
-            ino: 0x4000,
-            mode: S_IFCHR | 0o666,
-            nlink: 1,
-            // A misc device: major 10.
-            rdev: (10 << 8) | 50,
-            blksize: 4096,
-            ..StatData::default()
-        })
+        Ok(device_stat())
     }
 
     fn path(&self) -> Option<Vec<u8>> {
