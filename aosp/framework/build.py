@@ -150,7 +150,7 @@ def gen_messagequeue(gen):
     return gen / "messagequeue"
 
 
-def gen_aidl(gen, aidl_files, report):
+def gen_aidl(gen, aidl_files, report, include_roots=(), per_file_args=None):
     """Java for every AIDL file of the universe. Files whose imports are not
     available (types of projects that are not fetched) are reported."""
     out = gen / "aidl"
@@ -170,24 +170,19 @@ def gen_aidl(gen, aidl_files, report):
     # Extra import roots Soong passes (framework-minus-apex-defaults aidl
     # include_dirs that exist in the fetched projects).
     for extra in (FW / "media" / "aidl", FW / "telecomm" / "framework" / "aidl-export",
-                  NATIVE / "libs" / "permission" / "aidl", NATIVE / "aidl" / "binder"):
+                  NATIVE / "libs" / "permission" / "aidl", NATIVE / "aidl" / "binder",
+                  *include_roots):
         if extra.is_dir() and extra not in roots:
             roots.append(extra)
     inc = [f"-I{r}" for r in roots]
     base = [AIDL, "--lang=java", "--transaction_names", "-o", out] + inc
 
-    def run_batch(files):
-        # aidl matches files to import roots textually: Windows separators.
-        args = base + [str(f) for f in files]
-        argfile = gen / "aidl.args"
-        argfile.write_text("\n".join(f'"{a}"' for a in map(str, args[1:])), encoding="utf-8")
-        return subprocess.run([str(AIDL), f"@{argfile}"], capture_output=True, text=True)
-
     ok = 0
     todo = [f for r in roots for f in by_root.get(r, [])]
     # One process per file: aidl stops at the first file that fails.
     for i, f in enumerate(todo):
-        r = subprocess.run([str(a) for a in base] + [str(f)], capture_output=True, text=True)
+        extra = (per_file_args or {}).get(f, [])
+        r = subprocess.run([str(a) for a in base] + extra + [str(f)], capture_output=True, text=True)
         if r.returncode == 0:
             ok += 1
         else:
@@ -272,6 +267,37 @@ def gen_javastream(gen, tree, report):
     return out
 
 
+def gen_statslog(gen, tree, generated, report):
+    """The statslog-*-java-gen genrules of the source universe
+    (FrameworkStatsLog, TelephonyStatsLog, ...): stats-log-api-gen's Java
+    output, from gen_statslog.py with the genrule's arguments."""
+    out = gen / "statslog"
+    if out.is_dir():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    done = []
+    for g in generated:
+        name = g[1:]
+        if not name.startswith("statslog-"):
+            continue
+        m = tree.module(name)
+        cmd = m.get("cmd", "")
+        args = cmd.split()
+        def val(flag):
+            return args[args.index(flag) + 1] if flag in args else None
+        module, pkg, cls = val("--module"), val("--javaPackage"), val("--javaClass")
+        if not (module and pkg and cls):
+            report.setdefault("statslog_skipped", []).append(name)
+            continue
+        dest = out / Path(*pkg.split(".")) / f"{cls}.java"
+        extra = ["--worksource"] if "--worksource" in args else []
+        run([sys.executable, "-I", HERE / "gen_statslog.py", dest, AOSP, "--module", module,
+             "--javaPackage", pkg, "--javaClass", cls] + extra)
+        done.append(cls)
+    report["statslog"] = done
+    return out
+
+
 def gen_aconfig(gen):
     out = gen / "aconfig"
     if out.is_dir():
@@ -335,14 +361,19 @@ def gen_aconfig_from_uses(gen, java_files, report):
             for m in SIMPLE_USE.finditer(text):
                 uses.setdefault(imported, set()).add(m.group(1))
     made = {}
+    boot = boot_module()
     for pkg, names in sorted(uses.items()):
         if pkg in known or pkg in have_source or not pkg:
             continue
-        flags = set()
-        for n in names:
+        if (boot / Path(*pkg.split("."))).is_dir():
+            continue  # flags of the boot class path (libcore, ART)
+        by_method = {}
+        for n in sorted(names, key=lambda x: not x.startswith("FLAG_")):
             if n in ("FEATURE_FLAGS", "class") or n[0].isupper() and not n.startswith("FLAG_"):
                 continue
-            flags.add(snake(n))
+            s = snake(n)
+            by_method.setdefault(ga.camel(s), s)
+        flags = set(by_method.values())
         if not flags:
             continue
         ga.emit(str(out), pkg, sorted(flags))
@@ -352,7 +383,7 @@ def gen_aconfig_from_uses(gen, java_files, report):
     return out
 
 
-def gen_logtags(gen, java_roots):
+def gen_logtags(gen):
     out = gen / "logtags"
     if out.is_dir():
         shutil.rmtree(out)
@@ -461,20 +492,6 @@ def write_argfile(path, args):
             f.write('"' + str(a).replace("\\", "/") + '"\n')
 
 
-def roots_from_file(java_dirs):
-    roots = []
-    for line in (HERE / "roots.txt").read_text(encoding="utf-8").splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        relpath = line.replace(".", "/") + ".java"
-        hits = [d / relpath for d in java_dirs if (d / relpath).is_file()]
-        if not hits:
-            raise SystemExit(f"roots.txt: no source for {line}")
-        roots.append(hits[0])
-    return roots
-
-
 def boot_module():
     """java.base as javac sees it: the classes of core-oj, core-libart and
     core-icu4j and libcore's module-info, without the compile-only
@@ -512,11 +529,140 @@ def boot_exports():
     return out
 
 
-def javac(java_dirs, roots, classes):
+
+
+# --- sources of other projects (sources.toml) -------------------------------------
+
+GITILES = "https://android.googlesource.com/platform"
+DEPS = OUT / "deps"
+
+
+def load_sources():
+    import tomllib
+    with open(HERE / "sources.toml", "rb") as f:
+        return tomllib.load(f)["source"]
+
+
+def fetch_sources(entries):
+    """Each entry's directories, from gitiles archives at the pinned commit,
+    into out/framework/deps/<project>/<dir>. A directory is fetched again when
+    its commit changes."""
+    import io
+    import tarfile
+    import urllib.request
+    for e in entries:
+        if e.get("local"):
+            continue  # a project of aosp.lock, fetched by cargo xtask fetch
+        dirs = (e.get("java", []) + e.get("aidl", []) + e.get("aidl_include", [])
+                + e.get("aconfig", []) + e.get("implicit", []) + e.get("sysprop", [])
+                + e.get("nano", [])
+                + [v["dir"] for v in e.get("aidl_versioned", [])])
+        for d in sorted(set(dirs)):
+            dest = DEPS / e["project"] / d
+            stamp = dest / ".commit"
+            if stamp.is_file() and stamp.read_text().strip() == e["commit"]:
+                continue
+            url = f"{GITILES}/{e['project']}/+archive/{e['commit']}/{d}.tar.gz"
+            log(f"fetching {url}")
+            data = urllib.request.urlopen(url, timeout=300).read()
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            dest.mkdir(parents=True)
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+                for m in tf.getmembers():
+                    target = (dest / m.name).resolve()
+                    if not str(target).startswith(str(dest.resolve())):
+                        raise SystemExit(f"{url}: unsafe path {m.name}")
+                    if m.issym() or m.islnk() or m.isdev():
+                        continue  # links are not needed by this build
+                    if m.isdir():
+                        target.mkdir(parents=True, exist_ok=True)
+                    elif m.isfile():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(tf.extractfile(m).read())
+            stamp.write_text(e["commit"], encoding="utf-8")
+
+
+def renamed_root(e, root):
+    """A copy of a Java source root with a package prefix renamed, the
+    source-level equivalent of the jarjar rule Soong applies to the library
+    (every occurrence of the package name, and the directory layout)."""
+    frm, to = e["rename"]["from"], e["rename"]["to"]
+    out = OUT / "renamed" / e["project"] / root.relative_to(dep_dir(e, ""))
+    stamp = out / ".done"
+    key = f"{frm}={to}"
+    if stamp.is_file() and stamp.read_text() == key:
+        return out
+    if out.is_dir():
+        shutil.rmtree(out)
+    pat = re.compile(r"\b" + re.escape(frm) + r"\b")
+    frm_dir, to_dir = frm.replace(".", "/"), to.replace(".", "/")
+    for f in root.rglob("*.java"):
+        r = f.relative_to(root).as_posix()
+        if r.startswith(frm_dir + "/"):
+            r = to_dir + r[len(frm_dir):]
+        dest = out / r
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(pat.sub(to, f.read_text(encoding="utf-8")), encoding="utf-8", newline="\n")
+    stamp.write_text(key, encoding="utf-8")
+    return out
+
+
+def gen_nano(gen, sources):
+    """Soong's `proto: { type: "nano" }` static libraries of the framework
+    (framework-protos, devicepolicyprotosnano, libaconfig_java_proto_nano),
+    with the nano runtime renamed as their jarjar rules rename it."""
+    out = gen / "nano"
+    if out.is_dir():
+        shutil.rmtree(out)
+    files, roots = [], [AOSP, PROTOBUF_SRC]
+    for e in sources:
+        for d in e.get("nano", []):
+            p = dep_dir(e, d)
+            files += sorted(p.rglob("*.proto")) if p.is_dir() else [p]
+            if not e.get("local"):
+                roots.append(dep_dir(e, ""))
+    args = [sys.executable, "-I", HERE / "gen_nano.py"]
+    for r in roots:
+        args += ["-I", r]
+    run(args + ["--runtime", "com.android.framework.protobuf.nano", out] + files)
+    return out
+
+
+def gen_sysprop(gen, sources):
+    out = gen / "sysprop"
+    if out.is_dir():
+        shutil.rmtree(out)
+    files = [f for e in sources for d in e.get("sysprop", []) for f in sorted(dep_dir(e, d).glob("*.sysprop"))]
+    run([sys.executable, "-I", HERE / "gen_sysprop.py", out] + files)
+    return out
+
+
+def dep_dir(e, d):
+    if e.get("local"):
+        return AOSP / e["project"] / d
+    return DEPS / e["project"] / d
+
+
+# --- javac / d8 -------------------------------------------------------------------
+
+
+def write_argfile(path, args):
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        for a in args:
+            f.write('"' + str(a).replace("\\", "/") + '"\n')
+
+
+def source_key(path):
+    """'pkg/dir/File.java' of a source file, from its package declaration."""
+    pkg = package_of(Path(path))
+    return (pkg.replace(".", "/") + "/" if pkg else "") + Path(path).name
+
+
+def javac(explicit, sourcepath, classes):
     if classes.is_dir():
         shutil.rmtree(classes)
     classes.mkdir(parents=True)
-    stubs = sorted((HERE / "stubs").rglob("*.java"))
     args = [
         "-encoding", "UTF-8",
         "-source", JAVA_VERSION, "-target", JAVA_VERSION,
@@ -529,66 +675,98 @@ def javac(java_dirs, roots, classes):
         "-nowarn", "-Xlint:none", "-Xmaxerrs", "100000",
         "-proc:none",
         "-implicit:class",
-        "-sourcepath", os.pathsep.join(str(d) for d in java_dirs),
+        "-sourcepath", os.pathsep.join(str(d) for d in sourcepath),
         "-d", classes,
-    ] + roots
-    # Stubs compile into their own directory and are only on the class path.
-    stub_classes = OUT / "classes-stubs"
-    if stub_classes.is_dir():
-        shutil.rmtree(stub_classes)
-    stub_classes.mkdir(parents=True)
-    if stubs:
-        sargs = ["-encoding", "UTF-8", "-source", JAVA_VERSION, "-target", JAVA_VERSION,
-                 "--system=none", "--module-path", boot_module(), "--add-modules", "java.base",
-                 ] + boot_exports() + [
-                 "-nowarn", "-proc:none", "-implicit:class",
-                 "-sourcepath", os.pathsep.join(str(d) for d in [HERE / "stubs"] + java_dirs),
-                 "-d", stub_classes] + stubs
-        write_argfile(OUT / "javac-stubs.args", sargs)
-        run(["javac", "-J-Xmx2g", f"@{OUT / 'javac-stubs.args'}"])
-    args[args.index("-sourcepath")] = "-classpath"
-    args.insert(args.index("-classpath") + 1, stub_classes)
-    args.insert(args.index("-classpath") + 2, "-sourcepath")
+    ] + explicit
     write_argfile(OUT / "javac.args", args)
     t = time.time()
-    r = subprocess.run(["javac", "-J-Xmx3g", f"@{OUT / 'javac.args'}"], capture_output=True, text=True)
+    r = subprocess.run(["javac", "-J-Xmx4g", f"@{OUT / 'javac.args'}"], capture_output=True, text=True)
     (OUT / "javac.log").write_text(r.stdout + r.stderr, encoding="utf-8")
-    if r.returncode != 0:
-        tail = (r.stdout + r.stderr).splitlines()[-40:]
-        log("\n".join(tail))
-        raise SystemExit(f"javac failed; full log in {OUT / 'javac.log'}")
-    return time.time() - t
+    errors = [ln for ln in (r.stdout + r.stderr).splitlines() if ": error: " in ln]
+    log(f"javac: exit {r.returncode}, {len(errors)} errors, {time.time() - t:.0f} s")
+    return r.returncode == 0, r.stdout + r.stderr, time.time() - t
 
 
-def stub_class_names():
-    names = set()
-    for s in (HERE / "stubs").rglob("*.java"):
-        names.add(s.relative_to(HERE / "stubs").with_suffix("").as_posix())
-    return names
+REPAIRED = OUT / "repaired"
+REPAIRED_SP = OUT / "repaired-sourcepath"
 
 
-def package_jar(classes, out_jar):
-    stubs = stub_class_names()
-    entries = []
-    for p in sorted(classes.rglob("*.class")):
-        name = p.relative_to(classes).as_posix()
-        outer = name[:-len(".class")].split("$")[0]
-        if outer in stubs:
+def repair_round(log_text, explicit, sourcepath, report):
+    """Applies repair.py to every file with errors; returns the new explicit
+    list. Repaired copies of explicit files go to out/framework/repaired, of
+    source path files to a root that comes first on the source path."""
+    import repair
+    errs, spelled = {}, {}
+    for path, line, col, msg in repair.parse_errors(log_text):
+        k = os.path.normcase(os.path.abspath(path))
+        spelled.setdefault(k, os.path.abspath(path))
+        errs.setdefault(k, []).append((line, col, msg))
+    explicit_idx = {os.path.normcase(str(Path(f).resolve())): i for i, f in enumerate(explicit)}
+    changed = 0
+    for path, el in sorted(errs.items()):
+        src = Path(spelled[path])
+        text = src.read_text(encoding="utf-8", errors="replace")
+        new, done, unhandled = repair.repair(text, el)
+        key = source_key(src)
+        for desc, reason in done:
+            report["not_built"].append({"class": key[:-5].replace("/", "."), "member": desc,
+                                        "reason": reason})
+        for desc, reason in unhandled:
+            report["not_built_unhandled"].append({"class": key, "member": desc, "reason": reason})
+        if new == text:
             continue
-        entries.append((name, p.read_bytes()))
-    with zipfile.ZipFile(out_jar, "w", zipfile.ZIP_DEFLATED) as z:
-        for name, data in entries:
+        changed += 1
+        if path in explicit_idx:
+            dest = REPAIRED / key
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(new, encoding="utf-8", newline="\n")
+            explicit[explicit_idx[path]] = dest
+        else:
+            dest = REPAIRED_SP / key
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(new, encoding="utf-8", newline="\n")
+    log(f"repair: {changed} files changed")
+    return changed
+
+
+sys.path.insert(0, str(ROOT / "spikes" / "s1" / "java"))
+from build_boot import class_source_file  # noqa: E402
+
+
+def split_classes(classes, origin):
+    """{jar name: [(entry, bytes)]} by the source file each class came from;
+    classes of compile-only sources (origin None) are dropped."""
+    jars, unplaced = {}, []
+    for p in sorted(classes.rglob("*.class")):
+        data = p.read_bytes()
+        name, src = class_source_file(data)
+        pkg = name.rsplit("/", 1)[0] + "/" if "/" in name else ""
+        key = pkg + (src or name.split("/")[-1].split("$")[0] + ".java")
+        if key not in origin:
+            unplaced.append(key)
+            continue
+        if origin[key] is None:
+            continue
+        jars.setdefault(origin[key], []).append((name + ".class", data))
+    if unplaced:
+        raise SystemExit(f"classes from unknown sources: {sorted(set(unplaced))[:20]}")
+    return jars
+
+
+def write_jar(path, entries):
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in sorted(entries):
             z.writestr(zipfile.ZipInfo(name, date_time=(2008, 1, 1, 0, 0, 0)), data)
-    return len(entries)
 
 
-def d8(classes_jar, out_jar):
+def d8(classes_jar, out_jar, classpath):
     cmd = ["java", "-Xmx3g", "-cp", D8_JAR, "com.android.tools.r8.D8",
            "--release", "--android-platform-build", "--min-api", MIN_API,
            "--output", out_jar]
     for j in BOOT_JARS:
         cmd += ["--lib", j]
-    cmd += ["--classpath", OUT / "classes-stubs"]
+    for c in classpath:
+        cmd += ["--classpath", c]
     cmd.append(classes_jar)
     run(cmd)
 
@@ -607,16 +785,38 @@ def main():
     report = {"aidl_skipped": []}
     t0 = time.time()
 
+    sources = load_sources()
+    fetch_sources(sources)
+    ACONFIG_PROJECTS.extend(dep_dir(e, d) for e in sources for d in e.get("aconfig", []))
+
     java, aidl, missing, generated, tree = universe()
     report["filegroups_not_fetched"] = missing
     report["generated_filegroups"] = generated
     log(f"universe: {len(java)} java, {len(aidl)} aidl; {len(missing)} filegroups of projects "
         f"not fetched")
-    java_dirs = [MODULES_UTILS / "java"]
-    for f in java:
-        r = source_root(f)
-        if r is not None and r not in java_dirs:
-            java_dirs.append(r)
+
+    # AIDL of other projects: compiled into the jar the entry names, or
+    # compile-only; aidl_include directories are import roots only.
+    extra_aidl, aidl_jar, aidl_args = [], {}, {}
+    for e in sources:
+        for d in e.get("aidl", []):
+            for f in sorted(dep_dir(e, d).rglob("*.aidl")):
+                extra_aidl.append(f)
+                aidl_jar[f] = e.get("jar", "stub")
+        for v in e.get("aidl_versioned", []):
+            root = dep_dir(e, v["dir"])
+            h = root / ".hash"
+            hashes = h.read_text(encoding="utf-8").split() if h.is_file() else []
+            extra = ["--structured", f"--version={v['version']}"]
+            if e.get("stability"):
+                extra.append(f"--stability={e['stability']}")
+            if hashes:
+                extra.append(f"--hash={hashes[-1]}")
+            for f in sorted(root.rglob("*.aidl")):
+                extra_aidl.append(f)
+                aidl_jar[f] = e.get("jar", "stub")
+                aidl_args[f] = extra
+    include_roots = [dep_dir(e, d) for e in sources for d in e.get("aidl_include", [])]
 
     if args.skip_aidl and (gen / "aidl").is_dir():
         aidl_out = gen / "aidl"
@@ -625,37 +825,126 @@ def main():
         if prev.is_file():
             report["aidl_skipped"] = json.loads(prev.read_text())["aidl_skipped"]
     else:
-        aidl_out = gen_aidl(gen, aidl, report)
+        aidl_out = gen_aidl(gen, aidl + extra_aidl, report, include_roots, aidl_args)
     if args.skip_res and (gen / "R").is_dir():
         r_java, apk = gen / "R", OUT / "framework-res.apk"
     else:
         r_java, apk = build_res(gen)
-    gen_dirs = [gen_messagequeue(gen), aidl_out, gen_aconfig(gen), gen_logtags(gen, java_dirs), r_java,
-                gen_javastream(gen, tree, report)]
+    gen_dirs = [gen_messagequeue(gen), aidl_out, gen_aconfig(gen), gen_logtags(gen), r_java,
+                gen_javastream(gen, tree, report), gen_statslog(gen, tree, generated, report),
+                gen_sysprop(gen, sources), gen_nano(gen, sources)]
     gen_java = [f for d in gen_dirs if d.name != "aconfig" for f in d.rglob("*.java")]
-    gen_dirs.append(gen_aconfig_from_uses(gen, java + gen_java, report))
 
-    # Generated sources first: messagequeue-gen replaces nothing on the
-    # source path (the variants live in subdirectories).
-    all_dirs = gen_dirs + java_dirs
-    roots = roots_from_file(all_dirs)
+    # Java of other projects.
+    dep_java = {}
+    stub_roots = [HERE / "stubs"]
+    stubsrc = OUT / "stubsrc"
+    implicit_roots = []
+    for e in sources:
+        for d in e.get("implicit", []):
+            root = dep_dir(e, d)
+            if e.get("rename"):
+                root = renamed_root(e, root)
+            implicit_roots.append((root, e["jar"]))
+        for d in e.get("java", []):
+            root = dep_dir(e, d)
+            if e.get("rename"):
+                root = renamed_root(e, root)
+            if e.get("jar", "stub") == "stub":
+                out = stubsrc / e["project"] / d
+                if not (out / ".done").is_file() or (out / ".done").read_text() != e["commit"]:
+                    if out.is_dir():
+                        shutil.rmtree(out)
+                    run([sys.executable, "-I", HERE / "stubgen.py", out, root])
+                    (out / ".done").write_text(e["commit"], encoding="utf-8")
+                stub_roots.append(out)
+            else:
+                for f in sorted(root.rglob("*.java")):
+                    dep_java[f] = e["jar"]
+    stub_java = [f for r in stub_roots for f in r.rglob('*.java')]
+    gen_dirs.append(gen_aconfig_from_uses(gen, java + gen_java + list(dep_java) + stub_java, report))
+
+    # Which jar each source belongs to, by 'package/File.java'. Compile-only
+    # sources map to None; framework sources win over a stub of the same class.
+    origin = {}
+    for root in stub_roots:
+        for f in root.rglob("*.java"):
+            origin[source_key(f)] = None
+    for f in [MODULES_UTILS / "java"]:
+        for s in f.rglob("*.java"):
+            origin[source_key(s)] = "framework"
+    for root, jar in implicit_roots:
+        for s in root.rglob("*.java"):
+            origin[source_key(s)] = jar
+    for f, jar in dep_java.items():
+        origin[source_key(f)] = jar
+    aidl_gen_jar = {}
+    for f, jar in aidl_jar.items():
+        aidl_gen_jar[source_key(f).replace(".aidl", ".java")] = jar
+    explicit = []
+    for d in gen_dirs:
+        for f in d.rglob("*.java"):
+            k = source_key(f)
+            origin[k] = aidl_gen_jar.get(k, "framework") if d == aidl_out else "framework"
+            if origin[k] is not None:
+                explicit.append(f)
+    for f in java:
+        origin[source_key(f)] = "framework"
+        explicit.append(f)
+    explicit += [f for f, jar in dep_java.items()]
+    # The framework's own static libraries (modules-utils) and the
+    # compile-only stubs come in through the source path when referenced.
+    sourcepath = [MODULES_UTILS / "java", aidl_out] + [r for r, _ in implicit_roots] + stub_roots
+    (OUT / "origin.json").write_text(json.dumps(origin, indent=0, sort_keys=True), encoding="utf-8")
+
     classes = OUT / "classes"
-    secs = javac(all_dirs, roots, classes)
-    cj = OUT / "framework-classes.jar"
-    n = package_jar(classes, cj)
-    log(f"javac: {n} classes in {secs:.0f} s")
-    jar = OUT / "framework.jar"
-    d8(cj, jar)
+    for d in (REPAIRED, REPAIRED_SP):
+        if d.is_dir():
+            shutil.rmtree(d)
+    REPAIRED_SP.mkdir(parents=True)
+    sourcepath = [REPAIRED_SP] + sourcepath
+    report["not_built"], report["not_built_unhandled"] = [], []
+    secs = 0
+    for rnd in range(12):
+        ok, javac_log, s = javac(explicit, sourcepath, classes)
+        secs += s
+        if ok:
+            break
+        if not repair_round(javac_log, explicit, sourcepath, report):
+            errors = [ln for ln in javac_log.splitlines() if ": error: " in ln]
+            log("\n".join(errors[:40]))
+            raise SystemExit(f"javac failed with {len(errors)} errors that repair.py does not "
+                             f"handle; full log in {OUT / 'javac.log'}")
+    else:
+        raise SystemExit("javac still fails after 12 repair rounds")
+    report["javac_rounds"] = rnd + 1
+    jars = split_classes(classes, origin)
+    log(f"javac: {sum(len(v) for v in jars.values())} classes in {secs:.0f} s")
+    built = {}
+    cjars = {}
+    for name, entries in jars.items():
+        cj = OUT / f"{name}-classes.jar"
+        write_jar(cj, entries)
+        cjars[name] = cj
+    stub_jar = OUT / "compile-only-classes.jar"
+    write_jar(stub_jar, [(p.relative_to(classes).as_posix(), p.read_bytes())
+                         for p in classes.rglob("*.class")])
+    for name, cj in cjars.items():
+        jar = OUT / f"{name}.jar"
+        d8(cj, jar, [stub_jar])
+        built[name] = {"classes": len(jars[name]), "bytes": jar.stat().st_size}
     report.update({
-        "classes": n,
+        "jars": built,
         "universe_java": len(java),
         "universe_aidl": len(aidl),
-        "framework_jar_bytes": jar.stat().st_size,
         "framework_res_apk_bytes": apk.stat().st_size,
+        "javac_seconds": round(secs),
         "seconds": round(time.time() - t0),
     })
     (OUT / "report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
-    log(f"wrote {jar} ({jar.stat().st_size} bytes), {apk} ({apk.stat().st_size} bytes)")
+    for name, b in built.items():
+        log(f"wrote {OUT / (name + '.jar')}: {b['classes']} classes, {b['bytes']} bytes")
+    log(f"wrote {apk} ({apk.stat().st_size} bytes)")
 
 
 if __name__ == "__main__":

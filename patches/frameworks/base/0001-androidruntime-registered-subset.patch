@@ -1,0 +1,91 @@
+AndroidRuntime: register the natives Andruna builds, without HWUI and libbinder.
+
+Under ANDRUNA, the JNI registration table comes from andruna_reg_jni.inc
+(aosp/modules/libandroid_runtime.cmake writes it for the sources that are
+built), the graphics natives (init_android_graphics) are not initialized and
+runtime_isSensitiveThread does not ask libbinder for a StrictMode policy.
+Both are not part of this build yet. Classes whose natives are not
+registered throw UnsatisfiedLinkError when a native method is called.
+
+--- a/core/jni/AndroidRuntime.cpp
++++ b/core/jni/AndroidRuntime.cpp
+@@ -21,14 +21,18 @@
+ #include <android-base/macros.h>
+ #include <android-base/parsebool.h>
+ #include <android-base/properties.h>
++#if !defined(ANDRUNA)
+ #include <android/graphics/jni_runtime.h>
++#endif
+ #include <android_os.h>
+ #include <android_runtime/AndroidRuntime.h>
+ #include <assert.h>
++#if !defined(ANDRUNA)
+ #include <binder/IBinder.h>
+ #include <binder/IPCThreadState.h>
+ #include <binder/IServiceManager.h>
+ #include <binder/Parcel.h>
++#endif
+ #include <bionic/malloc.h>
+ #include <cutils/properties.h>
+ #include <dirent.h>
+@@ -48,7 +52,9 @@
+ #include <string>
+ #include <vector>
+ 
++#if !defined(ANDRUNA)
+ #include "android_util_Binder.h"
++#endif
+ #include "jni.h"
+ 
+ using namespace android;
+@@ -327,7 +333,11 @@
+         mArgBlockStart(argBlockStart),
+         mArgBlockLength(argBlockLength)
+ {
++#if !defined(ANDRUNA)
++    // Andruna: the graphics natives (HWUI) are not built yet; see
++    // docs/plan/phase2/framework-build.md.
+     init_android_graphics();
++#endif
+ 
+     // Pre-allocate enough space to hold a fair number of options.
+     mOptions.setCapacity(20);
+@@ -436,8 +446,14 @@
+  * into us)
+  */
+ static bool runtime_isSensitiveThread() {
++#if defined(ANDRUNA)
++    // Andruna: libbinder is not part of this build yet, so no thread has a
++    // Binder StrictMode policy.
++    return false;
++#else
+     IPCThreadState* state = IPCThreadState::selfOrNull();
+     return state && state->getStrictModePolicy() != 0;
++#endif
+ }
+ 
+ static int hasDir(const char* dir)
+@@ -1557,6 +1573,15 @@
+     return 0;
+ }
+ 
++#if defined(ANDRUNA)
++// Andruna builds a subset of the framework's natives so far
++// (aosp/modules/libandroid_runtime.cmake). The table lists the
++// registrations of the sources that are built; a class whose natives are
++// not registered throws UnsatisfiedLinkError when one of them is called.
++static const RegJNIRec gRegJNI[] = {
++#include "andruna_reg_jni.inc"
++};
++#else
+ static const RegJNIRec gRegJNI[] = {
+         REG_JNI(register_com_android_internal_os_ApplicationSharedMemory),
+         REG_JNI(register_com_android_internal_os_RuntimeInit),
+@@ -1744,6 +1769,7 @@
+         REG_JNI(register_android_window_InputTransferToken),
+         REG_JNI(register_android_view_WindowManagerGlobal),
+ };
++#endif
+ 
+ /*
+  * Register android native functions with the VM.

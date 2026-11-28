@@ -11,6 +11,9 @@
 #   ANDRUNA_GUEST_STAGE=linker-tests  crates/andruna-linker/tests/guest/*
 #   ANDRUNA_GUEST_STAGE=art           libart.so, the libraries ART opens at
 #                                     start-up, dalvikvm, dex2oat (art.cmake)
+#   ANDRUNA_GUEST_STAGE=framework     libutils.so, libandroidfw.so,
+#                                     libandroid_runtime.so,
+#                                     andruna_app_process (framework.cmake)
 #
 # libc++ is built between the bionic and aosp stages with LLVM's runtimes
 # build (build_guest.py, step libcxx).
@@ -78,10 +81,18 @@ endif()
 if(ANDRUNA_GUEST_STAGE STREQUAL "art")
   set(ANDRUNA_AOSP_RUNTIME ON CACHE BOOL "Also compile libart" FORCE)
 endif()
+if(ANDRUNA_GUEST_STAGE STREQUAL "framework")
+  set(ANDRUNA_AOSP_RUNTIME ON CACHE BOOL "Also compile libart" FORCE)
+  set(ANDRUNA_AOSP_FRAMEWORK ON CACHE BOOL "Also compile the framework's natives" FORCE)
+endif()
 add_subdirectory("${ANDRUNA_ROOT}/aosp" aosp EXCLUDE_FROM_ALL)
 
 if(ANDRUNA_GUEST_STAGE STREQUAL "art")
   include("${CMAKE_CURRENT_SOURCE_DIR}/art.cmake")
+  return()
+endif()
+if(ANDRUNA_GUEST_STAGE STREQUAL "framework")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/framework.cmake")
   return()
 endif()
 

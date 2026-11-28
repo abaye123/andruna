@@ -21,6 +21,12 @@ Steps (all output in out/guest/<arch>/ of the repository):
                 libcore), dalvikvm and dex2oat, collected in art/out
                 (aosp/guest/art.cmake; needs the art and libcore patches;
                 not in the default step list)
+  framework     libutils.so, libandroidfw.so, libandroid_runtime.so and
+                andruna_app_process (aosp/guest/framework.cmake) into the
+                ART root's lib64 and bin, and the framework's jars and
+                framework-res.apk (out/framework, aosp/framework/build.py)
+                into its framework directory; needs the art step and the
+                frameworks/base patch; not in the default step list
 
 Usage: python aosp/tools/build_guest.py [--arch x64|arm64] [step...]
 
@@ -300,6 +306,29 @@ def check_no_gs_access(lib_dir):
     print("no %gs: access outside nterp")
 
 
+FRAMEWORK_FILES = ("framework.jar", "framework-location.jar", "framework-telecom.jar",
+                   "framework-res.apk")
+
+
+def step_framework(arch, out):
+    """The framework's natives built so far, staged into the ART root:
+    lib64 (the .so files), bin (andruna_app_process) and framework (the
+    jars and framework-res.apk, mounted as the guest's /system/framework)."""
+    root = out / "art-root"
+    b = stage(arch, out, "framework", [f"-DANDRUNA_ART_ROOT={root}"])
+    for f in (b / "out").iterdir():
+        dst = root / ("bin" if f.name == "andruna_app_process" else "lib64") / f.name
+        shutil.copy2(f, dst)
+    fw = Path(os.environ.get("ANDRUNA_FRAMEWORK_OUT", ROOT / "out" / "framework"))
+    (root / "framework").mkdir(parents=True, exist_ok=True)
+    for name in FRAMEWORK_FILES:
+        if (fw / name).exists():
+            shutil.copy2(fw / name, root / "framework" / name)
+        else:
+            print(f"warning: {fw / name} missing (aosp/framework/build.py)")
+    print(f"framework staged in {root}")
+
+
 def step_builtins(arch, out):
     """compiler-rt builtins for arm64 Android (llvm-mingw ships them for
     x86_64 Linux only): every generic and aarch64 source that compiles, and
@@ -346,13 +375,13 @@ def step_builtins(arch, out):
 STEPS = {"sysroot": step_sysroot, "builtins": step_builtins, "bionic": step_bionic,
          "libcxx": step_libcxx, "aosp": step_aosp, "tests": step_tests,
          "linker-tests": step_linker_tests, "binder-tests": step_binder_tests,
-         "art": step_art}
+         "art": step_art, "framework": step_framework}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arch", default="x64", choices=ARCH)
-    ap.add_argument("steps", nargs="*", default=[s for s in STEPS if s != "art"])
+    ap.add_argument("steps", nargs="*", default=[s for s in STEPS if s not in ("art", "framework")])
     args = ap.parse_args()
     out = ROOT / "out" / "guest" / args.arch
     out.mkdir(parents=True, exist_ok=True)

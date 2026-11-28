@@ -56,6 +56,8 @@ class Field:
     def __init__(self, name, number, label, type_name, packed):
         self.name, self.number, self.label = name, number, label
         self.type_name, self.packed = type_name, packed
+        self.options = []  # [(name, value)] of the field options, in order
+        self.oneof = None
         self.resolved = None  # (type number, full type name or None)
 
 
@@ -77,6 +79,7 @@ class ProtoFile:
         self.options = {}
         self.imports = []
         self.enums, self.messages = [], []
+        self.extends = []  # [(extended message name, Field)]
 
 
 class Parser:
@@ -120,8 +123,10 @@ class Parser:
         return v
 
     def field_options(self):
-        """[packed = true, (x).y = {...}, ...] -> packed flag."""
+        """[packed = true, (x).y = {...}, ...] -> packed flag; every
+        `name = scalar` option is kept in self.last_options."""
         packed = False
+        self.last_options = []
         self.take("[")
         depth = 1
         name = []
@@ -136,6 +141,8 @@ class Parser:
                 val = self.peek()
                 if key == "packed":
                     packed = val == "true"
+                if val not in ("{", "["):
+                    self.last_options.append((key, val))
                 name = []
             elif depth == 1 and tok == ",":
                 name = []
@@ -175,7 +182,17 @@ class Parser:
                 pf.messages.append(self.parse_message(pf.package))
             elif tok == "enum":
                 pf.enums.append(self.parse_enum(pf.package))
-            elif tok in ("extend", "service"):
+            elif tok == "extend":
+                self.take()
+                target = self.take()
+                self.take("{")
+                while self.peek() != "}":
+                    lab = "optional"
+                    if self.peek() in ("optional", "repeated", "required"):
+                        lab = self.take()
+                    pf.extends.append((target, self.parse_field(lab)))
+                self.take("}")
+            elif tok == "service":
                 self.take()
                 self.take()
                 self.skip_block()
@@ -247,10 +264,14 @@ class Parser:
         self.take("=")
         number = int(self.take(), 0)
         packed = False
+        options = []
         if self.peek() == "[":
             packed = self.field_options()
+            options = self.last_options
         self.take(";")
-        return Field(name, number, label, type_name, packed)
+        f = Field(name, number, label, type_name, packed)
+        f.options = options
+        return f
 
     def parse_message(self, scope):
         self.take("message")
@@ -270,13 +291,15 @@ class Parser:
                 self.take()
             elif tok == "oneof":
                 self.take()
-                self.take()
+                oneof = self.take()
                 self.take("{")
                 while self.peek() != "}":
                     if self.peek() == "option":
                         self.skip_statement()
                         continue
-                    m.fields.append(self.parse_field("optional"))
+                    f = self.parse_field("optional")
+                    f.oneof = oneof
+                    m.fields.append(f)
                 self.take("}")
             elif tok == "extend":
                 self.take()

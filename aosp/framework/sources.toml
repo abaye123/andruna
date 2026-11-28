@@ -1,0 +1,258 @@
+# Directories of other AOSP projects the framework build uses, at the commit
+# the pinned tag (aosp/aosp.lock: android-17.0.0_r1) resolves to in each
+# project. aosp/framework/build.py downloads each directory from gitiles
+# (`<project>/+archive/<commit>/<dir>.tar.gz`) into out/framework/deps. These
+# are directories of large projects that the framework build needs only a
+# small part of; whole projects are fetched by `cargo xtask fetch`
+# (aosp.lock). ADR 0024.
+#
+# Keys:
+#   jar             "framework": compiled into framework.jar, as Soong
+#                   compiles these sources or static libraries into
+#                   framework-minus-apex; "stub": compile-only (the API of a
+#                   module that is its own jar on Android; stubgen.py keeps
+#                   the signatures, nothing is packaged)
+#   java            Java package roots
+#   aidl            AIDL roots: every .aidl below is compiled to Java
+#   aidl_versioned  frozen AIDL interface versions ({dir, version}), compiled
+#                   with --structured --version and the frozen hash, as
+#                   Soong's aidl_interface <name>-V<n>-java
+#   aidl_include    AIDL import roots only (parcelable declarations)
+#   aconfig         directories whose .aconfig declarations become flag
+#                   classes (all flags disabled, like every other flag)
+
+# --- APIs of mainline modules (compile-only) ------------------------------------
+
+[[source]]
+project = "packages/modules/ConfigInfrastructure"
+commit = "333bc8067efc529ef4d197fec2f4f2cae1ad2ece"
+purpose = "android.provider.DeviceConfig (framework-configinfrastructure)"
+jar = "stub"
+java = ["framework/java"]
+aconfig = ["framework"]
+
+[[source]]
+project = "packages/modules/Connectivity"
+commit = "347fbd34b368d19f0d87e908ea101eed3601a731"
+purpose = "android.net (framework-connectivity, framework-connectivity-t, framework-tethering)"
+jar = "stub"
+java = ["framework/src", "framework-t/src", "Tethering/common/TetheringLib/src", "nearby/framework/java"]
+aidl = ["framework/src", "framework-t/src", "Tethering/common/TetheringLib/src"]
+aidl_include = ["framework/aidl-export"]
+
+[[source]]
+project = "packages/modules/Connectivity"
+commit = "347fbd34b368d19f0d87e908ea101eed3601a731"
+purpose = "net-utils-framework-common-srcs, part of framework-non-updatable-sources"
+jar = "framework"
+java = ["staticlibs/framework"]
+
+[[source]]
+project = "packages/modules/Bluetooth"
+commit = "c77db469de80f86660bc053bec4dee0c5d4b947c"
+purpose = "android.bluetooth (framework-bluetooth)"
+jar = "stub"
+java = ["framework/java"]
+aidl_include = ["framework/aidl-export"]
+
+[[source]]
+project = "packages/modules/Permission"
+commit = "1093eca7407576c72e51b1a88550ee0667a6e5dc"
+purpose = "android.app.role, android.permission, android.safetycenter (framework-permission, framework-permission-s)"
+jar = "stub"
+java = ["framework/java", "framework-s/java"]
+
+[[source]]
+project = "packages/modules/Wifi"
+commit = "67beff9acf0e91046d2a9a36a68cb06ef263d1f1"
+purpose = "android.net.wifi (framework-wifi)"
+jar = "stub"
+java = ["framework/java"]
+aidl_include = ["framework/aidl-export"]
+
+[[source]]
+project = "packages/modules/AppSearch"
+commit = "85ee215beafd0236559a12b8764d6f78421db215"
+purpose = "android.app.appsearch (framework-appsearch)"
+jar = "stub"
+java = ["framework/java"]
+
+[[source]]
+project = "packages/modules/IPsec"
+commit = "5c58f82cc230a9a4e22c80d6eaec62dffaec4444"
+purpose = "android.net.ipsec.ike (android.net.ipsec.ike)"
+jar = "stub"
+java = ["src/java"]
+
+[[source]]
+project = "packages/modules/HealthFitness"
+commit = "a292a16a8ac82667b65d763c00fa935cc44e9925"
+purpose = "android.health.connect (framework-healthfitness)"
+jar = "stub"
+java = ["framework/java"]
+
+[[source]]
+project = "packages/providers/MediaProvider"
+commit = "773ea53100eeb1e97c223826ca59054a58cd74ff"
+purpose = "android.provider.MediaStore (framework-mediaprovider)"
+jar = "stub"
+java = ["apex/framework/java"]
+
+[[source]]
+project = "packages/modules/Media"
+commit = "efe6c6621fe6a6faee106a1230b010c32cb30c35"
+purpose = "android.media.MediaSession2, MediaCommunicationManager (framework-media)"
+jar = "stub"
+java = ["apex/framework/java"]
+
+[[source]]
+project = "packages/modules/StatsD"
+commit = "8129a553528b0ef83e87e00c9f2604ed8afb2949"
+purpose = "android.app.StatsManager, android.util.StatsEvent (framework-statsd)"
+jar = "stub"
+java = ["framework/java"]
+
+# --- HAL and native service interfaces (AIDL, compiled into framework.jar) -------
+
+[[source]]
+project = "hardware/interfaces"
+commit = "0162af698935100a590b7359581ac8b1b80693e5"
+purpose = "HAL AIDL interfaces listed in framework-non-updatable-sources and framework-internal-utils"
+stability = "vintf"
+jar = "framework"
+aidl_versioned = [
+  { dir = "common/aidl/aidl_api/android.hardware.common/2", version = 2 },
+  { dir = "common/fmq/aidl/aidl_api/android.hardware.common.fmq/1", version = 1 },
+  { dir = "biometrics/common/aidl/aidl_api/android.hardware.biometrics.common/4", version = 4 },
+  { dir = "biometrics/fingerprint/aidl/aidl_api/android.hardware.biometrics.fingerprint/5", version = 5 },
+  { dir = "biometrics/face/aidl/aidl_api/android.hardware.biometrics.face/5", version = 5 },
+  { dir = "keymaster/aidl/aidl_api/android.hardware.keymaster/4", version = 4 },
+  { dir = "security/keymint/aidl/aidl_api/android.hardware.security.keymint/5", version = 5 },
+  { dir = "radio/aidl/aidl_api/android.hardware.radio/5", version = 5 },
+  { dir = "radio/aidl/aidl_api/android.hardware.radio.data/5", version = 5 },
+  { dir = "radio/aidl/aidl_api/android.hardware.radio.network/5", version = 5 },
+  { dir = "radio/aidl/aidl_api/android.hardware.radio.voice/5", version = 5 },
+  { dir = "thermal/aidl/aidl_api/android.hardware.thermal/3", version = 3 },
+  { dir = "gnss/aidl/aidl_api/android.hardware.gnss/2", version = 2 },
+  { dir = "tv/tuner/aidl/aidl_api/android.hardware.tv.tuner/3", version = 3 },
+  { dir = "vibrator/aidl/aidl_api/android.hardware.vibrator/4", version = 4 },
+  { dir = "usb/gadget/aidl/aidl_api/android.hardware.usb.gadget/1", version = 1 },
+  { dir = "contexthub/aidl/aidl_api/android.hardware.contexthub/5", version = 5 },
+  { dir = "power/aidl/aidl_api/android.hardware.power/6", version = 6 },
+  { dir = "security/secureclock/aidl/aidl_api/android.hardware.security.secureclock/1", version = 1 },
+  { dir = "graphics/common/aidl/aidl_api/android.hardware.graphics.common/3", version = 3 },
+  { dir = "cas/aidl/aidl_api/android.hardware.cas/1", version = 1 },
+]
+
+[[source]]
+project = "system/hardware/interfaces"
+commit = "9c3469aa3d4aeec5b2bc8e8ae8fdb4437dab4edb"
+purpose = "android.system.keystore2 (android.system.keystore2-V6-java-source)"
+stability = "vintf"
+jar = "framework"
+aidl_versioned = [
+  { dir = "keystore2/aidl/aidl_api/android.system.keystore2/6", version = 6 },
+]
+
+[[source]]
+project = "system/security"
+commit = "cbb2ef1617a94d6cdf2dc2ccb7a545575dbb20cb"
+purpose = "android.security.* keystore service interfaces (apc, authorization, legacykeystore, maintenance, metrics)"
+jar = "framework"
+aidl = ["keystore2/aidl"]
+
+# --- Static libraries of framework-minus-apex -------------------------------------
+
+[[source]]
+project = "frameworks/base"
+local = true
+purpose = "DevicePolicyAnnotation and ImmutabilityAnnotation (annotation libraries)"
+jar = "framework"
+java = ["tools/processors/devicepolicy/annotations"]
+implicit = ["tools/processors/immutability/src"]
+
+[[source]]
+project = "frameworks/base"
+local = true
+purpose = "com.android.sysprop.* sysprop_library modules of the framework"
+jar = "framework"
+sysprop = ["core/sysprop"]
+
+[[source]]
+project = "system/libsysprop"
+commit = "feca0b466b9fa68a8e86a6e0b31579669e645f41"
+purpose = "PlatformProperties (android.sysprop.*), a static library of the framework"
+jar = "framework"
+sysprop = ["srcs/android/sysprop"]
+
+[[source]]
+project = "external/bouncycastle"
+commit = "c404048739e9a35cd51ad82906aadf910cca09dd"
+purpose = "bouncycastle-repackaged-unbundled (com.android.internal.org.bouncycastle), MIT-style license"
+jar = "framework"
+implicit = ["repackaged_platform/bcprov/src/main/java", "repackaged_platform/bcpkix/src/main/java"]
+
+[[source]]
+project = "external/perfetto"
+local = true
+purpose = "perfetto_trace_lib_framework_java, renamed to com.android.internal.dev.perfetto.sdk as its jarjar rules do"
+jar = "framework"
+java = ["src/android_sdk/java/main"]
+rename = { from = "dev.perfetto.sdk", to = "com.android.internal.dev.perfetto.sdk" }
+
+[[source]]
+project = "external/protobuf"
+local = true
+purpose = "libprotobuf-java-nano, renamed to com.android.framework.protobuf.nano (frameworks/base/proto/jarjar-rules.txt)"
+jar = "framework"
+implicit = ["javanano/src/main/java"]
+rename = { from = "com.google.protobuf.nano", to = "com.android.framework.protobuf.nano" }
+
+# --- Other boot class path jars built from frameworks/base ------------------------
+
+[[source]]
+project = "frameworks/base"
+local = true
+purpose = "framework-location (location/java), its own jar on the boot class path"
+jar = "framework-location"
+java = ["location/java"]
+aidl = ["location/java"]
+
+[[source]]
+project = "frameworks/base"
+local = true
+purpose = "framework-telecom (telecomm/framework/java), its own jar on the boot class path"
+jar = "framework-telecom"
+java = ["telecomm/framework/java"]
+aidl = ["telecomm/framework/java"]
+
+[[source]]
+project = "packages/modules/AppSearch"
+commit = "85ee215beafd0236559a12b8764d6f78421db215"
+purpose = "android.app.appsearch, the parts in framework/java/external (framework-appsearch)"
+jar = "stub"
+java = ["framework/java/external"]
+
+# --- Protocol buffer (nano) static libraries ----------------------------------------
+
+[[source]]
+project = "frameworks/base"
+local = true
+purpose = "framework-protos (nano)"
+jar = "framework"
+nano = ["proto/src"]
+
+[[source]]
+project = "frameworks/proto_logging"
+local = true
+purpose = "devicepolicyprotosnano (nano)"
+jar = "framework"
+nano = ["stats/message/devicepolicy/device_policy.proto", "stats/enums/stats/devicepolicy/device_policy_enums.proto"]
+
+[[source]]
+project = "build"
+commit = "5ce6f787337d0223710bf7d4a16dbe6d2a35f777"
+purpose = "libaconfig_java_proto_nano and aconfig_storage_reader_java (android.os.flagging, android.aconfig.storage), static libraries of the framework"
+jar = "framework"
+nano = ["tools/aconfig/aconfig_protos/protos"]
+implicit = ["tools/aconfig/aconfig_storage_read_api/srcs", "tools/aconfig/aconfig_storage_file/srcs"]
