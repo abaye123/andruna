@@ -752,21 +752,32 @@ mod tests {
                 None,
             )
             .unwrap();
-            let probe = VirtualAlloc(None, 2 * LEN, MEM_RESERVE, PAGE_NOACCESS);
-            assert!(!probe.is_null());
-            VirtualFree(probe, 0, MEM_RELEASE).unwrap();
-            let v = MapViewOfFile3(
-                section,
-                None,
-                Some(probe),
-                0,
-                LEN,
-                VIRTUAL_ALLOCATION_TYPE(0),
-                PAGE_READONLY.0,
-                None,
-            );
-            assert_eq!(v.Value, probe, "view mapped where asked");
-            probe as usize
+            // Another test thread can take the probed range between the
+            // release and the mapping, so probe again a few times.
+            let mut mapped = None;
+            for _ in 0..16 {
+                let probe = VirtualAlloc(None, 2 * LEN, MEM_RESERVE, PAGE_NOACCESS);
+                assert!(!probe.is_null());
+                VirtualFree(probe, 0, MEM_RELEASE).unwrap();
+                let v = MapViewOfFile3(
+                    section,
+                    None,
+                    Some(probe),
+                    0,
+                    LEN,
+                    VIRTUAL_ALLOCATION_TYPE(0),
+                    PAGE_READONLY.0,
+                    None,
+                );
+                if v.Value == probe {
+                    mapped = Some(probe as usize);
+                    break;
+                }
+                if !v.Value.is_null() {
+                    windows::Win32::System::Memory::UnmapViewOfFile(v).unwrap();
+                }
+            }
+            mapped.expect("view mapped where asked")
         };
         adopt(
             base,
