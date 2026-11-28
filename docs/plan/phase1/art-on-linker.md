@@ -235,9 +235,9 @@ the boot image's fixed mappings: ART places `boot.art` and the oat files
 right after each other at a randomized, page-aligned base, so their
 addresses and file offsets do not agree modulo 64 KiB and Windows cannot
 map them as views (about 15 ms). Merging adjacent views of one file
-would take the first group; aligning ART's
-relocation delta and the image layout to 64 KiB would make them views (an
-ART change, not made). Under sysd the boot image comes from its shared
+would make the second segments views; aligning ART's relocation delta and
+the image layout to 64 KiB would do it for the boot image (an ART change,
+not made). Under sysd the boot image comes from its shared
 view instead (`crates/andruna-lx/src/image.rs`).
 
 `ANDRUNA_PROFILE=1` prints, at exit: phase marks in ms since Windows
