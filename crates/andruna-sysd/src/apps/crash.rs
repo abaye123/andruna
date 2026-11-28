@@ -49,9 +49,8 @@ pub fn from_output(code: i64, stderr: &[String]) -> Option<Crash> {
         let head = &stderr[i];
         // `Exception in thread "main" java.lang.X: message`
         let what = head
-            .splitn(2, "\" ")
-            .nth(1)
-            .unwrap_or(head.as_str())
+            .split_once("\" ")
+            .map_or(head.as_str(), |x| x.1)
             .to_string();
         let thread = head
             .strip_prefix("Exception in thread \"")

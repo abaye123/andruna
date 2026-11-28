@@ -176,7 +176,7 @@ pub fn run() -> i32 {
         version: env!("CARGO_PKG_VERSION").into(),
     });
     let attach = match host::recv_to_host(&mut from_sysd) {
-        Ok(Some(ToHost::Attach(a))) => a,
+        Ok(Some(ToHost::Attach(a))) => *a,
         Ok(Some(ToHost::Stop)) | Ok(None) => return 0,
         Err(e) => {
             send(&FromHost::Refused {

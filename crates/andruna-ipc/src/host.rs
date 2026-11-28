@@ -108,7 +108,7 @@ pub struct Attach {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToHost {
-    Attach(Attach),
+    Attach(Box<Attach>),
     /// End the app now (status 0, no crash report).
     Stop,
 }
@@ -386,7 +386,7 @@ impl ToHost {
                 } else {
                     None
                 };
-                Self::Attach(Attach {
+                Self::Attach(Box::new(Attach {
                     package,
                     data_dir,
                     art_root,
@@ -394,7 +394,7 @@ impl ToHost {
                     mode,
                     runtime_options,
                     boot_image,
-                })
+                }))
             }
             k => return Err(DecodeError::UnknownKind(k)),
         };
@@ -519,7 +519,7 @@ mod tests {
     use super::*;
 
     fn attach(entry: Entry, boot: bool) -> ToHost {
-        ToHost::Attach(Attach {
+        ToHost::Attach(Box::new(Attach {
             package: "com.example.app".into(),
             data_dir: r"C:\d\data\com.example.app".into(),
             art_root: r"C:\p\art".into(),
@@ -536,7 +536,7 @@ mod tests {
                     len: 0x4d_0000,
                 }],
             }),
-        })
+        }))
     }
 
     #[test]

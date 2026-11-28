@@ -34,9 +34,9 @@ report its crash.
 - **Lifecycle:** one process per package (starts are serialized); a start
   answers only after the host sent `Running` (or with the host's refusal);
   `Stop` asks the app to end and kills it after 2 s; a stopped app is not
-  a crash. Packages are read through a `PackageStore` trait; until the
-  package database exists, a minimal record per package
-  (`system\packages\<package>.txt`) is read.
+  a crash. Packages are read through a `PackageStore` trait: the package
+  database (andruna-pkg) first, then hand-installed main-class programs
+  (`system\packages\<package>.txt`) for development and tests.
 - **Process creation** in sysd holds one lock from the inheritable handle
   duplicates to `CreateProcess`, so no other child inherits them.
 
@@ -47,4 +47,4 @@ report its crash.
   package store (which entry a package has), not in sysd's lifecycle.
 - Stopping an app is in the supervisor's API but not yet a launcher or
   manager request (the 0x0010 range belongs to the product track).
-- The record format is temporary; the package manager replaces the store.
+- The hand-installed record format is for development and tests only.

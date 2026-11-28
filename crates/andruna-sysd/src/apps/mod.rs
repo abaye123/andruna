@@ -56,6 +56,12 @@ pub const ATTACH_TIMEOUT: Duration = Duration::from_secs(20);
 /// Output lines logged per process; the rest is counted only.
 const MAX_LOGGED_LINES: usize = 2000;
 
+/// Receives a host's missing-function reports (package, entries).
+pub type MissingSink = Arc<dyn Fn(&str, &[(String, u64)]) + Send + Sync>;
+
+/// Called once when a host process has ended.
+pub type ExitSink = Box<dyn FnOnce(&Arc<HostProcess>, ExitReport) + Send>;
+
 /// How app hosts are started.
 #[derive(Clone, Debug)]
 pub struct HostConfig {
@@ -258,7 +264,7 @@ pub struct StartContext<'a> {
     pub job: BorrowedHandle<'a>,
     pub boot_image: Option<&'a BootImage>,
     /// Called with the missing-function reports of the host.
-    pub on_missing: Arc<dyn Fn(&str, &[(String, u64)]) + Send + Sync>,
+    pub on_missing: MissingSink,
 }
 
 /// The data directory's guest tree and temporary directory.
@@ -306,7 +312,7 @@ pub fn start_host(
     ctx: &StartContext<'_>,
     pkg: &InstalledPackage,
     activity: Option<&str>,
-    on_exit: Box<dyn FnOnce(&Arc<HostProcess>, ExitReport) + Send>,
+    on_exit: ExitSink,
 ) -> Result<Arc<HostProcess>, StartError> {
     let t0 = Instant::now();
     let layout = ctx.layout;
@@ -479,7 +485,7 @@ fn spawn_channel(
     h: Arc<HostProcess>,
     mut from_host: File,
     attach: Attach,
-    on_missing: Arc<dyn Fn(&str, &[(String, u64)]) + Send + Sync>,
+    on_missing: MissingSink,
 ) -> Option<thread::JoinHandle<()>> {
     let mut attach = Some(attach);
     thread::Builder::new()
@@ -515,7 +521,7 @@ fn spawn_channel(
                             version = version
                         );
                         if let Some(a) = attach.take()
-                            && let Err(e) = h.send(&ToHost::Attach(a))
+                            && let Err(e) = h.send(&ToHost::Attach(Box::new(a)))
                         {
                             warn!("host_attach_failed", package = h.package, error = e);
                         }

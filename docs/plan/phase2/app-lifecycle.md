@@ -19,6 +19,7 @@ crashed. Decisions: [ADR 0037](../../decisions/0037-app-host-channel-and-lifecyc
 | Focus of a running app | `NoWindow` (apps have no window until the compositor exists) |
 | `Stop` | the app ends (status 0 through the linker's exit path), no crash event |
 | A process killed from outside (`taskkill /F`) | `AppCrashed` with its exit code |
+| An APK installed through andruna-pkg (`StartActivity`) | the record comes from the package database, the AppContainer from its install hook; the framework entry is refused honestly (`HostStartFailed`) |
 | A framework package (no `main`) | refused by the host with "the framework entry is not available: framework.jar is not part of this runtime"; `StartPackage` answers `HostStartFailed` with that message; no event |
 | Installed without a package record, or no andruna-app | `HostStartFailed` naming what is missing |
 | Boot image view | the ART boot image (3 images, 3 oat files) laid out in a 27.75 MiB view file; ART's mappings adopt 28 292 KiB of it, 0 KiB copied |
@@ -111,6 +112,7 @@ cargo test -p andruna-sysd --test lifecycle boot_image_start_times -- --nocaptur
   where it chooses, outside the reservation).
 - arm64: not run. If ART's segment alignment differs there, lx copies
   instead of adopting (reported at exit).
-- The package database: a minimal record reader stands in behind
-  `PackageStore`.
+- Main-class programs are installed by hand for tests and development
+  (`RecordStore`); packages installed from APKs come from andruna-pkg's
+  database (`DatabaseStore`) and start through the framework entry.
 - A warm host (ADR 0035 option 1) is not built.
