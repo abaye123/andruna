@@ -687,7 +687,6 @@ mod tests {
         let line = format!("{a:08x}-{:08x} rw-p {off:08x}", a + len);
         assert!(maps.lines().any(|l| l.starts_with(&line)), "{maps}");
         munmap(a, len).unwrap();
-        assert_ne!(fault_kind(a), Some(FaultKind::Mapped));
         fs::close(fd).unwrap();
     }
 

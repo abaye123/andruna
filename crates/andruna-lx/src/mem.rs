@@ -1519,8 +1519,9 @@ mod tests {
         }
         assert_eq!(s.protection_of(a, 3 * PAGE_SIZE), Some(RW));
         s.munmap(a, 3 * PAGE_SIZE).unwrap();
+        // The reservation is returned to Windows. (Its state is not checked:
+        // another test thread may take the range at once.)
         assert!(s.spans.is_empty() && s.reservations.is_empty());
-        assert_eq!(state(a).0, 0x10000, "reservation returned to Windows");
     }
 
     #[test]
@@ -1618,7 +1619,7 @@ mod tests {
             Err(Errno::EEXIST)
         );
         s.munmap(a, 4 * PAGE_SIZE).unwrap();
-        assert_eq!(state(a).0, 0x10000);
+        assert!(s.reservations.is_empty());
 
         // MAP_FIXED into free memory at a page (not 64 KiB) boundary.
         let f = a + 3 * PAGE_SIZE;
@@ -1639,15 +1640,18 @@ mod tests {
     #[test]
     fn hint_is_used_when_free() {
         let mut s = AddressSpace::new();
-        let a = s.mmap(0, PAGE_SIZE, RW, ANON, -1, 0).unwrap();
-        s.munmap(a, PAGE_SIZE).unwrap();
+        // The pages freed stay in this table's reservation (its first pages
+        // are still mapped), so no other thread can take them meanwhile.
+        let a = s.mmap(0, 16 * PAGE_SIZE, RW, ANON, -1, 0).unwrap();
+        s.munmap(a + 4 * PAGE_SIZE, 12 * PAGE_SIZE).unwrap();
         let b = s
-            .mmap(a + 5 * PAGE_SIZE, PAGE_SIZE, RW, ANON, -1, 0)
+            .mmap(a + 9 * PAGE_SIZE, PAGE_SIZE, RW, ANON, -1, 0)
             .unwrap();
-        assert_eq!(b, a + 5 * PAGE_SIZE);
+        assert_eq!(b, a + 9 * PAGE_SIZE);
         // A hint on occupied memory is ignored.
         let c = s.mmap(b, PAGE_SIZE, RW, ANON, -1, 0).unwrap();
         assert_ne!(c, b);
+        s.munmap(a, 4 * PAGE_SIZE).unwrap();
         s.munmap(b, PAGE_SIZE).unwrap();
         s.munmap(c, PAGE_SIZE).unwrap();
         assert!(s.reservations.is_empty());
