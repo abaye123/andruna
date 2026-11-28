@@ -210,8 +210,10 @@ step lx's documentation names next), a per-process `/proc/self/stat`
 
 `ANDRUNA_PROFILE=1` prints, at exit: phase marks in ms since Windows
 created the process, system call counts and dispatcher time per number,
-the slowest calls with their path argument, and exception counts (lazy
-FS-base restores, emulated instructions, delivered signals).
+the slowest calls with their path or address range argument, and
+exception counts (lazy FS-base restores, emulated instructions, delivered
+signals). `ANDRUNA_PROFILE_EVERY=<seconds>` also prints it periodically
+(calls still in progress are not counted until they return).
 
 ## ARM64
 

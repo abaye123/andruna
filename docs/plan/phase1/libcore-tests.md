@@ -4,7 +4,9 @@
 Conscrypt, Bouncy Castle, BoringSSL (NativeBN) and the time zone data are
 in the ART root. With main's wall clock, JNI stub and Linux layer fixes the
 pass rate is **98.2% (interpreter) and 98.1% (JIT)**; the providers and the
-time zone data alone took it from 89.8% to 97.4%. First round: branch
+time zone data alone took it from 89.8% to 97.4%. The JIT hangs of round 2
+are fixed (branch `p1-jit-hang`, [below](#jit-hang-resolved-mincore)):
+**98.3% in both modes**, no timeouts. First round: branch
 `phase1-libcore-tests`. The
 phase 1 exit criterion "selected libcore tests pass" is measured here: a
 subset of libcore's own luni tests, compiled for ART and run in-process on
@@ -39,9 +41,12 @@ cargo xtask libcore-tests --no-build --mode jit
   clang++), and the art stage of `build_guest.py` stages `libcrypto.so`,
   `libssl.so`, `libjavacrypto.so` and the time zone module files
   (`<ART root>/tzdata`, mounted at `/apex/com.android.tzdata`); ADR 0021.
-- andruna-app runs with the boot image (dex2oat `--compile-boot`), so the
-  boot class path runs as AOT code in both modes; `--mode int` interprets the
-  test code, `--mode jit` JIT-compiles it.
+- andruna-app runs with the boot image (dex2oat `--compile-boot`).
+  `--mode jit` runs the boot class path as AOT code and JIT-compiles the
+  test code. `--mode int` passes `-Xint`, which makes ART interpret
+  everything, the boot class path's AOT code included, with the switch
+  interpreter (nterp is off on x86_64, patch `art/0003`): compute-heavy
+  tests are 10 to 40 times slower there (below).
 
 Machine: Intel Core Ultra 7 258V, Windows 11 build 26300, shared with other
 work. andruna-app built from `main` at `ba6f619` (this branch does not
@@ -122,23 +127,88 @@ lines):
 | Category | Interpreter | JIT | What |
 | --- | --- | --- | --- |
 | `lx-syscall` | 29 | 29 | Sockets, `statvfs`, `FIONREAD`, `/dev` entries, mounts, ENOTTY from `tcgetattr` (round 1), plus what the providers hid: no inotify (`WatchService`, 14), setting file times (`futimens`/`utimensat`) ENOSYS (4) |
-| `triage` | 13 | 16 | Round 1's, plus three tests the providers hid (`LinuxPathTest#test_toRealPath`, `#test_toURI`, `ObjectStreamClassSuidTest` for target SDK 23); with the JIT, three hangs (below) |
+| `triage` | 13 | 16 | Round 1's, plus three tests the providers hid (`LinuxPathTest#test_toRealPath`, `#test_toURI`, `ObjectStreamClassSuidTest` for target SDK 23); with the JIT, three hangs (below, fixed since: their lines are removed) |
 | `environment` | 8 | 8 | Unchanged |
 | `harness` | 5 | 5 | Round 1's 3, plus `filesystemstest.jar` (a built test resource) for two `FileSystemsTest` cases |
 | `icu-data` | 2 | 2 | Root-locale fallbacks for unknown locales |
 | `bootclasspath` | 1 | 1 | No XML transformer (Xalan is not on the boot class path) |
 
-**JIT hangs (new finding).** With the JIT, `BigIntegerTest`'s two prime
-generation tests (thousands of NativeBN allocations each) give no result in
-60 s, and once `StandardCharsetsEncoderTest` (UTF-16LE) did too. A probe
-with the same loop under `--mode jit` finishes the loop and then hangs: ART
-aborts with "Thread suspend timeout" while the main thread and
-HeapTaskDaemon (in a GC) both hold the mutator lock shared and have spent
-over 100 s in system time. It did not reproduce with
-`registerNativeAllocation` pressure alone or with plain BigInteger
-arithmetic. On `8b4cf96` the same tests crashed in the JNI stubs instead
-(finding 2), so whether the hang comes from the newer madvise retry in
-andruna-lx or from ART is open. Owner: ART integration and andruna-lx.
+**JIT hangs (found in round 2, fixed since).** With the JIT,
+`BigIntegerTest`'s two prime generation tests (thousands of NativeBN
+allocations each) gave no result in 60 s, and once
+`StandardCharsetsEncoderTest` (UTF-16LE) did too. ART aborted with "Thread
+suspend timeout" while the main thread and HeapTaskDaemon (in a GC) both
+held the mutator lock shared and had spent over 100 s in system time. The
+cause was the loader's interim `mincore` ([below](#jit-hang-resolved-mincore)).
+
+## JIT hang resolved: mincore
+
+Branch `p1-jit-hang`, 2026-11-28, on main at `11f740a`, with the ART root
+of round 2 (Conscrypt, BoringSSL and the time zone data).
+
+**Evidence.** A probe (1024 times `BigInteger.probablePrime(128)` and
+`isProbablePrime(100)`) under `--mode jit` hung 5 of 5 runs (aborted with
+the suspend timeout after 51 to 62 s, or still running at 90 s).
+`ANDRUNA_PROFILE` with the new `ANDRUNA_PROFILE_EVERY=15` (periodic
+report, since the process never exits normally) showed one `mincore`
+(x86_64 number 27) on `[0x2000000, +0x11c0000)` taking **35 s**, and
+another on 64 pages taking 0.7 s; the faults, retries and futexes were
+not involved (no signals delivered, no `MADV_DONTNEED` window retries).
+
+**Cause.** ART's concurrent copying collector clears its from-space after
+every collection with `ZeroMemory(..., release_eagerly=false)`, which calls
+`mincore` on each block: resident pages are zeroed and `MADV_FREE`d, the
+others `MADV_DONTNEED`ed. The loader answered `mincore` (andruna-lx does
+not have it yet) with one `VirtualQuery` per page. Windows computes each
+answer's region size by walking the page tables to the end of the region,
+so the cost of one query grows with the resident part of the region
+(measured: 0.04 ms at 16 MiB, 0.5 ms at 64 MiB, 4 ms at 256 MiB, 18 ms at
+1 GiB, all pages touched) and the loop is quadratic. lx commits a writable
+mapping in one allocation, so ART's region space is one large region: 4544
+queries at about 8 ms each. The collector (or a mutator running a
+blocking GC) spends that in kernel time inside a GC phase, holding the
+mutator lock shared, and a thread that suspends all threads times out.
+The JIT makes it visible because compiled code allocates fast enough to
+trigger collections back to back.
+
+**Fix.** `crates/andruna-linker/src/interim.rs`: `mincore` checks the
+range with one `VirtualQuery` per region (`ENOMEM` on free memory, as
+before) and reads residency with `QueryWorkingSetEx`, 4096 pages per call.
+A page is resident when it is in the working set, so committed pages
+never touched are not, as on Linux; before, every committed page counted
+as resident and ART zeroed whole blocks by hand. andruna-lx's own
+`mincore` (lx round 3) uses the same working-set rule; when it lands the
+interim entry stops being reached and can be deleted. Test:
+`mincore_of_a_large_resident_range_is_fast_and_reports_untouched_pages`
+(64 MiB, three quarters touched; the per-page version needs about 8 s).
+
+**After.** The probe: 40 of 40 runs pass, 1.0 to 1.3 s each.
+`BigIntegerTest` and `StandardCharsetsEncoderTest` with the JIT: 20 of 20
+harness runs, all 20 tests pass in each; `test_probablePrime` 1.2 s,
+`test_Constructor_IILjava_util_Random` 1.3 s. The three `triage` lines
+are removed from `expectations.txt`. Full runs (350 classes, 3149 tests,
+same machine, andruna-app release with the fix, the ART root of round 2):
+
+| Mode | Tests | Pass | Fail | Skip | Timeout | Pass rate | Wall |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **JIT** | 3149 | 3092 | 54 | 3 | 0 | **98.3%** | 63 s |
+| **interpreter** | 3149 | 3092 | 54 | 3 | 0 | **98.3%** | 171 s |
+
+No unexpected failures. Four unexpected passes, the same in both modes and
+unrelated to this fix: `ConsoleTest#testReadPassword`,
+`#testReadPasswordWithPrompt` and
+`FileInputStreamTest#test_available_on_nonIOCTL_supported_file` (listed
+as `lx-syscall`; they depend on what the harness's standard input is) and
+`OldThreadTest#test_yield` (timing, `triage`). Their lines are kept.
+
+**Slow interpreter times.** In the interpreter the two prime tests take
+36 s and 51 s with the fix (37 s and 108 s before it): the `mincore` cost
+was part of the second, the rest is not a fault. `--mode int` passes
+`-Xint`, so BigInteger's Java code in the boot class path is interpreted
+too, by the switch interpreter. The probe takes 22 s with `-Xint`, 1.7 s
+with the boot image's AOT code and no JIT (`--mode jit -Xusejit:false`)
+and 1.0 s with the JIT; its profile under `-Xint` shows no system call or
+exception cost (the 22 s are user time).
 
 ## Round 1 results (x64)
 
@@ -319,7 +389,6 @@ test support code are compiled from the fetched AOSP tree, never copied
 
 ## What remains
 
-- The JIT hangs of round 2 (above).
 - Linux layer: inotify, file times, sockets, `statvfs`, `FIONREAD`, mounts
   (29 tests).
 - Mockito for 8 dropped classes needs a dex-capable mocking backend (for

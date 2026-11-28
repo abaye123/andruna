@@ -408,14 +408,30 @@ fn membarrier(cmd: i32) -> i64 {
     }
 }
 
+/// `mincore`: a page is resident when it is in the process's working set
+/// (a committed page that was never touched is not, as on Linux).
+///
+/// The range is checked one Windows region at a time and the residency
+/// read with one `QueryWorkingSetEx` per chunk of pages. A `VirtualQuery`
+/// per page was quadratic: Windows computes each answer's region size by
+/// walking the page tables to the end of the region, and ART's
+/// concurrent copying collector asks about tens of megabytes of its
+/// region space after every collection (`ZeroMemory`).
 fn mincore(addr: u64, len: u64, vec: *mut u8) -> i64 {
     use windows::Win32::System::Memory::{MEM_FREE, MEMORY_BASIC_INFORMATION, VirtualQuery};
+    use windows::Win32::System::ProcessStatus::{
+        PSAPI_WORKING_SET_EX_INFORMATION, QueryWorkingSetEx,
+    };
+    use windows::Win32::System::Threading::GetCurrentProcess;
     if !addr.is_multiple_of(PAGE) {
         return err(EINVAL);
     }
     let pages = len.div_ceil(PAGE);
+    let Some(end) = pages.checked_mul(PAGE).and_then(|l| addr.checked_add(l)) else {
+        return err(ENOMEM);
+    };
     let mut p = addr;
-    for i in 0..pages {
+    while p < end {
         let mut m = MEMORY_BASIC_INFORMATION::default();
         // SAFETY: queries the address space only.
         let n = unsafe {
@@ -425,14 +441,44 @@ fn mincore(addr: u64, len: u64, vec: *mut u8) -> i64 {
                 core::mem::size_of_val(&m),
             )
         };
-        if n == 0 || m.State == MEM_FREE {
+        if n == 0 || m.State == MEM_FREE || m.RegionSize == 0 {
             return err(ENOMEM);
         }
-        if !vec.is_null() {
-            // SAFETY: the caller's vector of `pages` bytes.
-            unsafe { *vec.add(i as usize) = u8::from(m.State.0 == 0x1000) };
+        p = m.BaseAddress as u64 + m.RegionSize as u64;
+    }
+    if vec.is_null() {
+        return 0;
+    }
+    const CHUNK: u64 = 4096;
+    let mut info = Vec::new();
+    let mut done = 0u64;
+    while done < pages {
+        let n = (pages - done).min(CHUNK);
+        info.clear();
+        info.extend((0..n).map(|i| PSAPI_WORKING_SET_EX_INFORMATION {
+            VirtualAddress: (addr + (done + i) * PAGE) as *mut core::ffi::c_void,
+            ..Default::default()
+        }));
+        // SAFETY: `info` is a writable array of the size passed; the call
+        // only queries the address space.
+        let ok = unsafe {
+            QueryWorkingSetEx(
+                GetCurrentProcess(),
+                info.as_mut_ptr().cast(),
+                (info.len() * core::mem::size_of::<PSAPI_WORKING_SET_EX_INFORMATION>()) as u32,
+            )
+        };
+        if ok.is_err() {
+            return err(ENOMEM);
         }
-        p += PAGE;
+        for (i, e) in info.iter().enumerate() {
+            // SAFETY: the Flags view of the attribute union; bit 0 is
+            // `Valid` (in the working set).
+            let valid = unsafe { e.VirtualAttributes.Flags } & 1;
+            // SAFETY: the caller's vector of `pages` bytes.
+            unsafe { *vec.add((done as usize) + i) = valid as u8 };
+        }
+        done += n;
     }
     0
 }
@@ -469,9 +515,57 @@ mod tests {
         let v = vec![0u8; 3 * PAGE as usize];
         let base = (v.as_ptr() as u64).next_multiple_of(PAGE);
         let mut out = [0u8; 1];
+        // SAFETY: a page of `v`, which is alive.
+        unsafe { core::ptr::write_volatile(base as *mut u8, 1) };
         assert_eq!(mincore(base, PAGE, out.as_mut_ptr()), 0);
         assert_eq!(out[0], 1);
         assert_eq!(mincore(base + 1, PAGE, out.as_mut_ptr()), err(EINVAL));
         assert_eq!(mincore(0x1000, PAGE, out.as_mut_ptr()), err(ENOMEM));
+    }
+
+    #[test]
+    fn mincore_of_a_large_resident_range_is_fast_and_reports_untouched_pages() {
+        use windows::Win32::System::Memory::{
+            MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc, VirtualFree,
+        };
+        // 64 MiB committed in one allocation and touched, like ART's region
+        // space in lx. Windows' VirtualQuery walks the page tables to the
+        // end of the region for each answer, so one query per page took
+        // about 8 s here (0.5 ms each).
+        let len: u64 = 64 << 20;
+        // SAFETY: a new private allocation.
+        let base =
+            unsafe { VirtualAlloc(None, len as usize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) }
+                as u64;
+        assert_ne!(base, 0);
+        // The first three quarters are touched, the last quarter is not.
+        let touched = len / PAGE * 3 / 4;
+        for i in 0..touched {
+            // SAFETY: inside the new allocation.
+            unsafe { core::ptr::write_volatile((base + i * PAGE) as *mut u8, 1) };
+        }
+        let pages = (len / PAGE) as usize;
+        let mut out = vec![0xffu8; pages];
+        let t0 = std::time::Instant::now();
+        assert_eq!(mincore(base, len, out.as_mut_ptr()), 0);
+        let took = t0.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(2),
+            "mincore took {took:?}"
+        );
+        let touched = touched as usize;
+        assert!(out[..touched].iter().all(|&b| b == 1));
+        // Windows may bring in a few pages around a fault; most of the
+        // untouched ones are not resident.
+        let resident = out[touched..].iter().filter(|&&b| b != 0).count();
+        assert!(out[touched..].iter().all(|&b| b <= 1));
+        assert!(
+            resident < (pages - touched) / 10,
+            "{resident} untouched pages resident"
+        );
+        // SAFETY: the allocation made above.
+        unsafe { VirtualFree(base as *mut core::ffi::c_void, 0, MEM_RELEASE) }.unwrap();
+        // The range is free memory now.
+        assert_eq!(mincore(base, PAGE, out.as_mut_ptr()), err(ENOMEM));
     }
 }
