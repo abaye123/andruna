@@ -36,11 +36,42 @@ pub fn enabled() -> bool {
     match STATE.load(Ordering::Relaxed) {
         0 => {
             let on = std::env::var_os("ANDRUNA_PROFILE").is_some();
-            STATE.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+            if STATE
+                .compare_exchange(
+                    0,
+                    if on { 2 } else { 1 },
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+                && on
+            {
+                start_periodic();
+            }
             on
         }
         s => s == 2,
     }
+}
+
+/// `ANDRUNA_PROFILE_EVERY=<seconds>`: also print the report periodically,
+/// for processes that hang or die without a normal exit.
+fn start_periodic() {
+    let Some(secs) = std::env::var("ANDRUNA_PROFILE_EVERY")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&s| s > 0)
+    else {
+        return;
+    };
+    let _ = std::thread::Builder::new()
+        .name("andruna-profile".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(secs));
+                report_now("periodic");
+            }
+        });
 }
 
 fn origin() -> Instant {
@@ -96,7 +127,14 @@ const PATH_CALLS: [i64; 4] = [257, 262, 269, 267];
 #[cfg(target_arch = "aarch64")]
 const PATH_CALLS: [i64; 4] = [56, 79, 48, 78];
 
-/// The slowest calls: (ns, number, path argument).
+/// Memory calls whose first two arguments are an address and a length
+/// (`mmap`, `mprotect`, `munmap`, `mincore`, `madvise`).
+#[cfg(target_arch = "x86_64")]
+const MEMORY_CALLS: [i64; 5] = [9, 10, 11, 27, 28];
+#[cfg(target_arch = "aarch64")]
+const MEMORY_CALLS: [i64; 5] = [222, 226, 215, 232, 233];
+
+/// The slowest calls: (ns, number, path or address range argument).
 static SLOWEST: std::sync::Mutex<Vec<(u64, i64, String)>> = std::sync::Mutex::new(Vec::new());
 
 /// End of a timed system call `n` with arguments `a`, started at `t0`.
@@ -118,6 +156,8 @@ pub unsafe fn syscall(n: i64, a: &[i64; 6], t0: Option<Instant>) {
                 unsafe { core::ffi::CStr::from_ptr(a[1] as *const core::ffi::c_char) }
                     .to_string_lossy()
                     .into_owned()
+            } else if MEMORY_CALLS.contains(&n) {
+                format!("addr {:#x} len {:#x}", a[0], a[1])
             } else {
                 String::new()
             };
@@ -167,6 +207,11 @@ pub fn report() {
         return;
     }
     mark("exit");
+    report_now("exit");
+}
+
+/// Prints the report now; `when` names the occasion.
+fn report_now(when: &str) {
     let mut rows: Vec<(usize, u64, u64)> = (0..NR)
         .map(|i| {
             (
@@ -182,6 +227,11 @@ pub fn report() {
     let ns: u64 = rows.iter().map(|r| r.2).sum();
     let mut s = String::new();
     use std::fmt::Write as _;
+    let _ = writeln!(
+        s,
+        "[andruna-profile] report ({when}, {:.0} ms since process creation)",
+        since_creation_ms()
+    );
     let _ = writeln!(s, "[andruna-profile] phases (ms since process creation):");
     for (n, t) in MARKS.lock().unwrap_or_else(|e| e.into_inner()).iter() {
         let _ = writeln!(s, "[andruna-profile]   {t:9.2}  {n}");

@@ -44,7 +44,9 @@ calling convention (see `src/lib.rs` and `aosp/bionic/host_symbols.txt`).
   andruna-lx's clocks without a system call, as on Linux.
   `ANDRUNA_NO_VDSO` leaves it out.
 - `ANDRUNA_PROFILE` (`profile.rs`): phase marks, system call counts and
-  times, and exception counts on stderr at exit.
+  times, and exception counts on stderr at exit; with
+  `ANDRUNA_PROFILE_EVERY=<seconds>` also periodically, for processes that
+  hang or abort.
 - Debugging: Windows unwind tables translated from `.eh_frame` (x64), crash
   reports for faults in guest code, and LLDB commands in the file named by
   `ANDRUNA_LLDB_FILE` (`command source` it in llvm-mingw's `lldb.exe`).
