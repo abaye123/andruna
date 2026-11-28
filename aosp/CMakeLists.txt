@@ -69,3 +69,11 @@ if(ANDRUNA_AOSP_RUNTIME)
     include(modules/conscrypt.cmake)
   endif()
 endif()
+
+# Graphics: Skia and HWUI (phase 3, Android ELF build only; set by the
+# guest stage hwui, docs/plan/phase3/hwui.md).
+option(ANDRUNA_AOSP_GRAPHICS "Also compile Skia and HWUI (Android ELF build)" OFF)
+if(ANDRUNA_AOSP_GRAPHICS AND ANDRUNA_AOSP_ELF)
+  include(modules/skia.cmake)
+  include(modules/hwui.cmake)
+endif()

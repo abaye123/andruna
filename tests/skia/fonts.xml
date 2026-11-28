@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Font configuration of the Skia scene test (tests/skia/run.py copies it to
+  /system/etc/fonts.xml of the guest root). Same format as Android's
+  fonts.xml: a default sans-serif family and a Hebrew fallback family.
+-->
+<familyset version="23">
+    <family name="sans-serif">
+        <font weight="400" style="normal">Roboto-Regular.ttf
+            <axis tag="wght" stylevalue="400" />
+        </font>
+    </family>
+    <family lang="und-Hebr">
+        <font weight="400" style="normal">NotoSansHebrew-Regular.ttf</font>
+    </family>
+</familyset>

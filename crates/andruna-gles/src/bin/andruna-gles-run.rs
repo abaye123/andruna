@@ -8,7 +8,9 @@
 //!
 //! ANGLE's DLLs come from `ANDRUNA_ANGLE_DIR` (or next to this executable);
 //! `ANDRUNA_GLES_DEVICE=warp` selects the software rasterizer;
-//! `ANDRUNA_LIB_PATH` (`;`-separated) adds library directories.
+//! `ANDRUNA_LIB_PATH` (`;`-separated) adds library directories;
+//! `ANDRUNA_GUEST_ENV` (`;`-separated `NAME=value`) adds guest environment
+//! variables.
 
 use std::path::{Path, PathBuf};
 
@@ -78,6 +80,19 @@ fn main_inner() -> Result<i32, String> {
     ]
     .iter()
     .map(|s| s.to_string())
+    // `ANDRUNA_GUEST_ENV` (`;`-separated `NAME=value`) adds variables, as in
+    // andruna-elf.
+    .chain(
+        std::env::var("ANDRUNA_GUEST_ENV")
+            .ok()
+            .into_iter()
+            .flat_map(|v| {
+                v.split(';')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            }),
+    )
     .collect();
     let _ = andruna_lx::fs::set_cwd("/data/local/tmp");
     match run(Program {

@@ -1,0 +1,250 @@
+name: HWUI
+
+# Skia and HWUI as guest libraries (docs/plan/phase3/hwui.md).
+#
+# build (x64, arm64): the guest userland (bionic, libc++), andruna-gles'
+#   guest libraries and the hwui stage, all on the x64 runner (arm64 is
+#   cross-built). x64 then runs the Skia scene test on the CPU raster back
+#   end and on Ganesh GL over ANGLE on WARP, and compares both images with
+#   the references in tests/skia/reference.
+# arm64: runs the cross-built raster test natively on the windows-11-arm
+#   runner against the same reference.
+
+on:
+  push:
+    branches: [p3-hwui]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hwui-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  ANDRUNA_LLVM_MINGW: C:\tools\llvm-mingw
+  ANDRUNA_JOBS: "4"
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: windows-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: hwui-cargo-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: hwui-cargo-
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: cargo xtask toolchain
+
+      - name: CMake and Ninja
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { python -m pip install ninja }
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { python -m pip install cmake }
+
+      - name: Cache AOSP sources
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-all-${{ hashFiles('aosp/aosp.lock') }}
+
+      - name: Fetch and patch AOSP
+        run: |
+          git config --global core.longpaths true
+          cargo xtask fetch
+          if ($LASTEXITCODE -ne 0) { throw "fetch failed" }
+          cargo xtask patch
+          if ($LASTEXITCODE -ne 0) { throw "patch failed" }
+
+      - name: Cache llvm-project
+        uses: actions/cache@v4
+        with:
+          path: out/llvm-project
+          key: llvm-project-llvmorg-23.1.6-v1
+
+      - name: Fetch llvm-project
+        run: |
+          if (-not (Test-Path out/llvm-project/runtimes)) {
+            git clone --depth 1 --filter=blob:none --sparse --branch llvmorg-23.1.6 https://github.com/llvm/llvm-project out/llvm-project
+            if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+            git -C out/llvm-project sparse-checkout set libcxx libcxxabi libunwind runtimes cmake llvm/cmake llvm/utils/llvm-lit compiler-rt/lib/builtins libc
+            if ($LASTEXITCODE -ne 0) { throw "sparse checkout failed" }
+          }
+
+      - name: Cache guest userland
+        id: guest-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            out/guest/${{ matrix.arch }}/sysroot
+            out/guest/${{ matrix.arch }}/libcxx-install
+            out/guest/${{ matrix.arch }}/builtins
+          key: hwui-guest-${{ matrix.arch }}-${{ hashFiles('aosp/aosp.lock', 'aosp/bionic/**', 'aosp/modules/bionic*.cmake', 'aosp/cmake/**', 'aosp/tools/build_guest.py', 'patches/bionic/**', 'xtask/src/toolchain.rs') }}
+
+      - name: Guest userland
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        run: |
+          python aosp/tools/build_guest.py --arch ${{ matrix.arch }} sysroot builtins bionic libcxx
+          if ($LASTEXITCODE -ne 0) { throw "guest build failed" }
+
+      - name: GLES guest libraries
+        run: |
+          python crates/andruna-gles/tools/build_guest.py --arch ${{ matrix.arch }}
+          if ($LASTEXITCODE -ne 0) { throw "gles stubs failed" }
+
+      - name: Skia and HWUI
+        run: |
+          python aosp/tools/build_guest.py --arch ${{ matrix.arch }} hwui
+          if ($LASTEXITCODE -ne 0) { throw "hwui stage failed" }
+          Get-ChildItem out/guest/${{ matrix.arch }}/hwui/out | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Test fonts
+        run: python tests/skia/fonts.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hwui-guest-${{ matrix.arch }}
+          path: |
+            out/guest/${{ matrix.arch }}/hwui/out
+            out/guest/${{ matrix.arch }}/sysroot/usr/lib
+            out/guest/${{ matrix.arch }}/libcxx-install/lib/libc++.so*
+            out/gles/${{ matrix.arch }}/guest/lib*.so
+            out/fonts/test
+            third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat
+          if-no-files-found: error
+
+      - name: andruna-gles-run
+        if: matrix.arch == 'x64'
+        run: cargo build -p andruna-gles --release
+
+      - name: Raster test
+        id: raster
+        if: matrix.arch == 'x64'
+        continue-on-error: true
+        run: |
+          python tests/skia/run.py --arch x64 --backend raster
+          if ($LASTEXITCODE -ne 0) { throw "raster test failed" }
+
+      - name: Cache ANGLE build
+        if: matrix.arch == 'x64'
+        uses: actions/cache@v4
+        with:
+          path: out/angle/x64
+          key: angle-build-x64-${{ hashFiles('aosp/aosp.lock', 'aosp/angle/**', 'xtask/src/angle.rs', 'xtask/src/toolchain.rs') }}
+
+      - name: Build ANGLE
+        if: matrix.arch == 'x64'
+        run: cargo xtask angle-build --arch x64
+
+      - name: GL test (WARP)
+        id: gl
+        if: matrix.arch == 'x64'
+        continue-on-error: true
+        env:
+          ANDRUNA_ANGLE_DIR: out/angle/x64/bin
+          ANDRUNA_GLES_DEVICE: warp
+        run: |
+          python tests/skia/run.py --arch x64 --backend gl
+          if ($LASTEXITCODE -ne 0) { throw "gl test failed" }
+
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.arch == 'x64'
+        with:
+          name: skia-scene-x64
+          path: out/skia-test/x64/*.png
+
+      - name: Result
+        if: matrix.arch == 'x64' && (steps.raster.outcome != 'success' || steps.gl.outcome != 'success')
+        run: throw "Skia scene test failed (raster ${{ steps.raster.outcome }}, gl ${{ steps.gl.outcome }})"
+
+  arm64:
+    name: raster test (arm64)
+    needs: build
+    runs-on: windows-11-arm
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe" -OutFile rustup-init.exe
+            ./rustup-init.exe -y --default-toolchain none --profile minimal
+            Remove-Item rustup-init.exe
+            "$env:USERPROFILE\.cargo\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+          }
+          rustup show active-toolchain
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: hwui-arm64-cargo-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: hwui-arm64-cargo-
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\llvm-mingw
+          key: llvm-mingw-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchain.rs') }}
+
+      - name: llvm-mingw
+        run: cargo xtask toolchain
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: hwui-guest-arm64
+          path: .
+
+      - name: andruna-elf
+        run: cargo build -p andruna-linker --release --target aarch64-pc-windows-gnullvm
+
+      - name: Raster test
+        env:
+          ANDRUNA_RUNNER: target/aarch64-pc-windows-gnullvm/release/andruna-elf.exe
+        run: |
+          python tests/skia/run.py --arch arm64 --backend raster
+          if ($LASTEXITCODE -ne 0) { throw "raster test failed" }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: skia-scene-arm64
+          path: out/skia-test/arm64/*.png

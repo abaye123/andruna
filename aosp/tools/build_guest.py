@@ -21,6 +21,9 @@ Steps (all output in out/guest/<arch>/ of the repository):
                 libcore), dalvikvm and dex2oat, collected in art/out
                 (aosp/guest/art.cmake; needs the art and libcore patches;
                 not in the default step list)
+  hwui          Skia, libhwui.so and their guest tests, collected in
+                hwui/out (aosp/guest/hwui.cmake; not in the default step
+                list)
 
 Usage: python aosp/tools/build_guest.py [--arch x64|arm64] [step...]
 
@@ -119,7 +122,12 @@ def cmake_common(arch, out):
 
 
 def keep_going():
-    return ["--", "-k", "0"] if os.environ.get("KEEP_GOING") else []
+    """Ninja options: KEEP_GOING=1 keeps going after failures, ANDRUNA_JOBS=N
+    limits parallel jobs (Skia and HWUI need a lot of memory per job)."""
+    opts = ["-k", "0"] if os.environ.get("KEEP_GOING") else []
+    if os.environ.get("ANDRUNA_JOBS"):
+        opts += ["-j", os.environ["ANDRUNA_JOBS"]]
+    return ["--"] + opts if opts else []
 
 
 def stage(arch, out, name, extra=(), build_dir=None):
@@ -343,16 +351,30 @@ def step_builtins(arch, out):
     run([LLVM_MINGW / "bin" / "llvm-ar.exe", "rcs", lib] + objs)
 
 
+def step_hwui(arch, out):
+    """Skia, HWUI and their guest tests (aosp/guest/hwui.cmake), linked
+    against andruna-gles' guest libraries from ANDRUNA_GLES_DIR (default
+    out/gles/<arch>/guest, crates/andruna-gles/tools/build_guest.py). The
+    programs and libraries are collected in hwui/out."""
+    gles = Path(os.environ.get("ANDRUNA_GLES_DIR", ROOT / "out" / "gles" / arch / "guest"))
+    b = stage(arch, out, "hwui", [f"-DANDRUNA_GLES_DIR={gles}"])
+    dst = b / "out"
+    dst.mkdir(exist_ok=True)
+    for name in ("skia_scene", "libhwui.so", "hwui_canvas_test"):
+        if (b / name).exists():
+            shutil.copy2(b / name, dst / name)
+
+
 STEPS = {"sysroot": step_sysroot, "builtins": step_builtins, "bionic": step_bionic,
          "libcxx": step_libcxx, "aosp": step_aosp, "tests": step_tests,
          "linker-tests": step_linker_tests, "binder-tests": step_binder_tests,
-         "art": step_art}
+         "art": step_art, "hwui": step_hwui}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arch", default="x64", choices=ARCH)
-    ap.add_argument("steps", nargs="*", default=[s for s in STEPS if s != "art"])
+    ap.add_argument("steps", nargs="*", default=[s for s in STEPS if s not in ("art", "hwui")])
     args = ap.parse_args()
     out = ROOT / "out" / "guest" / args.arch
     out.mkdir(parents=True, exist_ok=True)

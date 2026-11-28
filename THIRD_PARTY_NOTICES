@@ -92,6 +92,39 @@ in the fetched project (third_party/aosp/<path>).
   tz database, explicit dedication) - output_data/iana/NOTICE;
   output_data/icu_overlay/*.res: Unicode-3.0 - output_data/icu_overlay/LICENSE;
   output_data/android and version files: Apache-2.0 (the project)
+- Skia (libskia, modules/skshaper, modules/skunicode; guest build, phase 3)
+  - platform/external/skia - BSD-3-Clause - LICENSE
+- FreeType (libft2) - platform/external/freetype - used under the FreeType
+  License (FTL), one of its two licenses (the other, GPL-2.0, is not used)
+  - docs/FTL.TXT, LICENSE.TXT. The FTL asks for this credit in the
+  documentation: "Portions of this software are copyright (c) The FreeType
+  Project (https://freetype.org). All rights reserved."
+- HarfBuzz (libharfbuzz_ng, libharfbuzz_subset) - platform/external/harfbuzz_ng
+  - MIT ("Old MIT") - COPYING
+- libpng - platform/external/libpng - PNG Reference Library License
+  version 2 (permissive, zlib-style) - LICENSE
+- libjpeg-turbo (libjpeg) - platform/external/libjpeg-turbo - IJG License
+  (permissive, BSD-style), BSD-3-Clause and Zlib - LICENSE.md, README.ijg.
+  The IJG License asks that the documentation state: "this software is
+  based in part on the work of the Independent JPEG Group."
+- libwebp (decoder and encoder) - platform/external/webp - BSD-3-Clause
+  with Google's patent grant - COPYING, PATENTS
+- Wuffs (GIF decoder) - platform/external/wuffs-mirror-release-c -
+  Apache-2.0 (dual-licensed Apache-2.0 or MIT, used under Apache-2.0) -
+  LICENSE
+- expat - platform/external/expat - MIT - COPYING
+- ICU (libicuuc for HarfBuzz, minikin and SkUnicode) - platform/external/icu
+  - Unicode-3.0 - LICENSE
+- Vulkan headers (included, not linked) - platform/external/vulkan-headers
+  - Apache-2.0 or MIT - LICENSE.md
+- minikin - platform/frameworks/minikin - Apache-2.0 - file headers
+- HWUI (frameworks/base/libs/hwui), aconfig and sysprop declarations of
+  frameworks/base - platform/frameworks/base - Apache-2.0 - NOTICE
+- Khronos EGL and OpenGL ES headers, libui, libgui, nativewindow and
+  nativebase headers - platform/frameworks/native - Apache-2.0 (Khronos
+  headers: Apache-2.0 or MIT, file headers) - NOTICE
+- libutils (RefBase, String8, Looper, Threads), libvndksupport -
+  platform/system/core - Apache-2.0 - libutils/NOTICE, file headers
 
 The AOSP component below is fetched at the same tag but not built yet. It
 is not permissively licensed; it is allowed as a named exception to ADR

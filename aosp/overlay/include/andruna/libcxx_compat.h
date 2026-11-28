@@ -1,5 +1,6 @@
 /*
- * Included first in ART's C++ translation units (-include, art_defaults).
+ * Included first in ART's, Skia's and HWUI's C++ translation units
+ * (-include; art_defaults, aosp/modules/skia.cmake, hwui.cmake).
  *
  * AOSP is built with the libc++ revision in its own prebuilt clang, whose
  * headers still include some standard headers transitively. The newer
@@ -13,6 +14,7 @@
 
 #ifdef __cplusplus
 #include <vector> /* art/libartbase/base/unix_file/fd_file.h */
+#include <cstdlib> /* external/skia/client_utils/android/FrontBufferedStream.cpp */
 #endif
 
 #endif

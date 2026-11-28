@@ -1,0 +1,77 @@
+Use the C++ hyphenator in the ANDRUNA build, which has no Rust toolchain.
+
+The Rust hyphenator (libminikin_rust_ffi) is chosen by the rust_hyphenator
+flag, and loadBinaryForRust and loadBinaryFromPath always use it. Andruna
+builds minikin without Rust (aosp/modules/hwui_deps.cmake), so under
+ANDRUNA every entry point uses HyphenatorCXX, which reads the same .hyb
+format; loadBinaryFromPath reads the file into memory first.
+diff --git a/libs/minikin/Hyphenator.cpp b/libs/minikin/Hyphenator.cpp
+index d9dd348..6096d6c 100644
+--- a/libs/minikin/Hyphenator.cpp
++++ b/libs/minikin/Hyphenator.cpp
+@@ -27,7 +27,12 @@
+ #include "FeatureFlags.h"
+ #include "MinikinInternal.h"
+ #include "minikin/Characters.h"
++#if !defined(ANDRUNA)
+ #include "minikin_cxx_bridge.rs.h"
++#else
++#include <fstream>
++#include <iterator>
++#endif
+ 
+ namespace minikin {
+ 
+@@ -99,6 +104,7 @@ struct Header {
+     }
+ };
+ 
++#if !defined(ANDRUNA)
+ class HyphenatorRust : public Hyphenator {
+ public:
+     HyphenatorRust(const uint8_t* patternData, size_t dataSize, size_t minPrefix, size_t minSuffix,
+@@ -123,25 +129,44 @@ public:
+ private:
+     ::rust::Box<rust::Hyphenator> mHyphenator;
+ };
++#endif  // !defined(ANDRUNA)
+ 
+ // static
+ Hyphenator* Hyphenator::loadBinary(const uint8_t* patternData, size_t dataSize, size_t minPrefix,
+                                    size_t minSuffix, const std::string& locale) {
++#if defined(ANDRUNA)
++    // Built without the Rust hyphenator: the C++ one reads the same format.
++    return HyphenatorCXX::loadBinary(patternData, dataSize, minPrefix, minSuffix, locale);
++#else
+     if (features::rust_hyphenator()) {
+         return new HyphenatorRust(patternData, dataSize, minPrefix, minSuffix, locale);
+     }
+     return HyphenatorCXX::loadBinary(patternData, dataSize, minPrefix, minSuffix, locale);
++#endif
+ }
+ 
+ Hyphenator* Hyphenator::loadBinaryForRust(const uint8_t* patternData, size_t dataSize,
+                                           size_t minPrefix, size_t minSuffix,
+                                           const std::string& locale) {
++#if defined(ANDRUNA)
++    return HyphenatorCXX::loadBinary(patternData, dataSize, minPrefix, minSuffix, locale);
++#else
+     return new HyphenatorRust(patternData, dataSize, minPrefix, minSuffix, locale);
++#endif
+ }
+ 
+ Hyphenator* Hyphenator::loadBinaryFromPath(const std::string& path, size_t minPrefix,
+                                            size_t minSuffix, const std::string& locale) {
++#if defined(ANDRUNA)
++    // The C++ hyphenator keeps a pointer to the pattern data, which lives
++    // as long as the process, like the file the Rust one maps.
++    std::ifstream in(path, std::ios::binary);
++    if (!in) return nullptr;
++    auto* data = new std::vector<uint8_t>(std::istreambuf_iterator<char>(in), {});
++    return HyphenatorCXX::loadBinary(data->data(), data->size(), minPrefix, minSuffix, locale);
++#else
+     return new HyphenatorRust(path, minPrefix, minSuffix, locale);
++#endif
+ }
+ 
+ // static
