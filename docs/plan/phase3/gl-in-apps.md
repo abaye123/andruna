@@ -107,6 +107,14 @@ Release build, hardware GPU, warm file cache.
 | Resize: `set_client_size` to the producer's first present at the new size | 15 to 25 ms (debug build, unlocked session) |
 | Swap overhead, headless, interval 0 | 0.19 ms per `eglSwapBuffers` with the rebind after present |
 
+CI (hosted runners, WARP, a 64 Hz virtual display, run 46093554703):
+first frame 62 ms (x64) and 68 ms (arm64) after spawning the app
+process, resize to the new size 32 and 30 ms, app frame interval 19.4
+and 16.8 ms mean. There the compositor clock reports a 15.6 ms period but
+its ticks average 27.6 and 22.7 ms: the runners' DWM does not compose
+every period, so vsync events skip ticks (their ids count the skipped
+ones). Not investigated further; the reference laptop shows no skips.
+
 The frame interval and resize numbers were taken while the session was
 unlocked. Later in the same session the machine locked: DWM then
 throttles presents of composition swap chains to about 4 frames per
