@@ -129,6 +129,16 @@ pub trait FileOps: core::any::Any + Send + Sync + fmt::Debug {
     ) -> Option<SysResult<usize>> {
         None
     }
+
+    /// A number that changes whenever new events happen on the object
+    /// (data arrives, space frees up, the peer closes), for edge-triggered
+    /// epoll. Read before [`Self::poll`]. The default is the process-wide
+    /// change count ([`crate::waitq::generation`]): an object without its
+    /// own count is reported again after any change in the process, never
+    /// missed.
+    fn poll_generation(&self) -> u64 {
+        crate::waitq::generation()
+    }
 }
 
 /// An open file description.

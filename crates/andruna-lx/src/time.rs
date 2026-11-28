@@ -137,41 +137,72 @@ fn remaining_ns(clk: i32, deadline: i128) -> SysResult<i128> {
 }
 
 /// Sleeps until `deadline` (ns) on clock `clk`, re-checking the clock after
-/// each wait so the sleep never ends early.
-fn sleep_until(clk: i32, deadline: i128) -> SysResult<()> {
+/// each wait so the sleep never ends early. A signal for the thread ends
+/// it with [`Interrupted::Signal`], carrying the time left.
+fn sleep_until(clk: i32, deadline: i128) -> Result<(), Interrupted> {
     loop {
         let left = remaining_ns(clk, deadline)?;
         if left <= 0 {
             return Ok(());
         }
         let units = (left + HUNDRED_NS - 1) / HUNDRED_NS;
-        os::sleep(units.min(i128::from(u64::MAX)) as u64)?;
+        match crate::signal::timed_sleep(units.min(i128::from(u64::MAX)) as u64) {
+            Err(Errno::EINTR) => {
+                let left = remaining_ns(clk, deadline)?.max(0);
+                return Err(Interrupted::Signal(Timespec::from_nanos(left)));
+            }
+            r => r?,
+        }
+    }
+}
+
+/// Why a sleep ended early.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Interrupted {
+    /// A signal arrived (`EINTR`); the time that was left.
+    Signal(Timespec),
+    Error(Errno),
+}
+
+impl From<Errno> for Interrupted {
+    fn from(e: Errno) -> Self {
+        Interrupted::Error(e)
+    }
+}
+
+impl Interrupted {
+    pub fn errno(self) -> Errno {
+        match self {
+            Interrupted::Signal(_) => Errno::EINTR,
+            Interrupted::Error(e) => e,
+        }
     }
 }
 
 /// `nanosleep` (relative, on `CLOCK_MONOTONIC`).
-pub fn nanosleep(req: &Timespec) -> SysResult<()> {
+pub fn nanosleep(req: &Timespec) -> Result<(), Interrupted> {
     clock_nanosleep(CLOCK_MONOTONIC, 0, req)
 }
 
 /// `clock_nanosleep`, returning the error instead of setting `errno` (the
-/// export converts it as the interface requires).
-pub fn clock_nanosleep(clk: i32, flags: i32, req: &Timespec) -> SysResult<()> {
+/// export converts it as the interface requires). The time left on `EINTR`
+/// is what `rem` receives for a relative sleep.
+pub fn clock_nanosleep(clk: i32, flags: i32, req: &Timespec) -> Result<(), Interrupted> {
     match clk {
         CLOCK_REALTIME | CLOCK_REALTIME_ALARM | CLOCK_MONOTONIC | CLOCK_BOOTTIME
         | CLOCK_BOOTTIME_ALARM => {}
-        CLOCK_THREAD_CPUTIME_ID => return Err(Errno::EINVAL),
-        CLOCK_PROCESS_CPUTIME_ID => return Err(Errno::EOPNOTSUPP),
-        _ => return Err(Errno::EINVAL),
+        CLOCK_THREAD_CPUTIME_ID => return Err(Errno::EINVAL.into()),
+        CLOCK_PROCESS_CPUTIME_ID => return Err(Errno::EOPNOTSUPP.into()),
+        _ => return Err(Errno::EINVAL.into()),
     }
     if flags & TIMER_ABSTIME != 0 {
         if !req.has_valid_nsec() || req.tv_sec < 0 {
-            return Err(Errno::EINVAL);
+            return Err(Errno::EINVAL.into());
         }
         sleep_until(clk, req.as_nanos())
     } else {
         if !req.is_valid_duration() {
-            return Err(Errno::EINVAL);
+            return Err(Errno::EINVAL.into());
         }
         if req.as_nanos() == 0 {
             return Ok(());
@@ -244,6 +275,63 @@ mod tests {
     }
 
     #[test]
+    fn signal_interrupts_a_sleep_with_the_time_left() {
+        use crate::linux::signal::*;
+        crate::signal::install_handler();
+        let me = crate::process::gettid();
+        // Block the signal so that it stays pending (no handler runs) and
+        // the sleep reports it.
+        let sig = SIGRTMIN + 7;
+        let old = crate::signal::sigprocmask(SIG_SETMASK, Some(0), 8).unwrap();
+        // A handler, so that the signal is not discarded as ignored.
+        let act = KernelSigaction {
+            handler: 0x1000,
+            flags: 0,
+            restorer: 0,
+            mask: 0,
+        };
+        let prev = crate::signal::sigaction(sig, Some(act), 8).unwrap();
+        crate::signal::sigprocmask(SIG_BLOCK, Some(1 << (sig - 1)), 8).unwrap();
+        // A blocked signal does not interrupt.
+        crate::signal::tgkill(None, me, sig, None).unwrap();
+        let t0 = monotonic_ns();
+        nanosleep(&Timespec {
+            tv_sec: 0,
+            tv_nsec: 20_000_000,
+        })
+        .unwrap();
+        assert!(monotonic_ns() - t0 >= 20_000_000);
+        // Taken out of the queue again.
+        let w = crate::signal::sigtimedwait(1 << (sig - 1), Some(&Timespec::default()), 8).unwrap();
+        assert_eq!(w.si_signo, sig);
+        // Unblocked in the mask the sleep checks, from another thread: the
+        // sleep ends early with the time left. The signal is consumed with
+        // sigtimedwait before the thread could run the (fake) handler.
+        crate::signal::sigprocmask(SIG_UNBLOCK, Some(1 << (sig - 1)), 8).unwrap();
+        let h = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            crate::signal::tgkill(None, me, sig, None).unwrap();
+        });
+        let t0 = monotonic_ns();
+        let r = nanosleep(&Timespec {
+            tv_sec: 10,
+            tv_nsec: 0,
+        });
+        let slept = monotonic_ns() - t0;
+        h.join().unwrap();
+        crate::signal::sigprocmask(SIG_BLOCK, Some(1 << (sig - 1)), 8).unwrap();
+        let w = crate::signal::sigtimedwait(1 << (sig - 1), Some(&Timespec::default()), 8).unwrap();
+        assert_eq!(w.si_signo, sig);
+        crate::signal::sigaction(sig, Some(prev), 8).unwrap();
+        crate::signal::sigprocmask(SIG_SETMASK, Some(old), 8).unwrap();
+        let Err(Interrupted::Signal(left)) = r else {
+            panic!("{r:?}");
+        };
+        assert!(slept < 5_000_000_000, "{slept}");
+        assert!(left.as_nanos() > 4_000_000_000 && left.as_nanos() < 10_000_000_000);
+    }
+
+    #[test]
     fn invalid_arguments() {
         assert_eq!(clock_gettime(12345), Err(Errno::EINVAL));
         assert_eq!(clock_getres(12345), Err(Errno::EINVAL));
@@ -251,21 +339,21 @@ mod tests {
             tv_sec: 0,
             tv_nsec: NSEC_PER_SEC,
         };
-        assert_eq!(nanosleep(&bad), Err(Errno::EINVAL));
+        assert_eq!(nanosleep(&bad), Err(Errno::EINVAL.into()));
         assert_eq!(
             nanosleep(&Timespec {
                 tv_sec: -1,
                 tv_nsec: 0
             }),
-            Err(Errno::EINVAL)
+            Err(Errno::EINVAL.into())
         );
         assert_eq!(
             clock_nanosleep(CLOCK_THREAD_CPUTIME_ID, 0, &Timespec::default()),
-            Err(Errno::EINVAL)
+            Err(Errno::EINVAL.into())
         );
         assert_eq!(
             clock_nanosleep(CLOCK_PROCESS_CPUTIME_ID, 0, &Timespec::default()),
-            Err(Errno::EOPNOTSUPP)
+            Err(Errno::EOPNOTSUPP.into())
         );
     }
 

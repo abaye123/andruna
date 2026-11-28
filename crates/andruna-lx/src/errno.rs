@@ -41,6 +41,7 @@ impl Errno {
     pub const EFAULT: Self = Self(EFAULT);
     pub const EBUSY: Self = Self(EBUSY);
     pub const ETXTBSY: Self = Self(ETXTBSY);
+    pub const EDEADLK: Self = Self(EDEADLK);
     pub const EEXIST: Self = Self(EEXIST);
     pub const ENOTDIR: Self = Self(ENOTDIR);
     pub const EISDIR: Self = Self(EISDIR);

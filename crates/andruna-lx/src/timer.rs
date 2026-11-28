@@ -98,6 +98,8 @@ struct State {
     last_overrun: i32,
     /// Unread expirations of a timerfd.
     expirations: u64,
+    /// Event generation for edge-triggered epoll.
+    events: u64,
 }
 
 #[derive(Debug)]
@@ -150,6 +152,7 @@ impl Core {
             st.interval = new.interval.as_nanos();
             st.overrun = 0;
             st.expirations = 0;
+            st.events += 1;
             st.next = if value == 0 {
                 None
             } else if absolute {
@@ -185,6 +188,7 @@ impl Core {
             Action::None => {}
             Action::Fd => {
                 st.expirations = st.expirations.saturating_add(missed + 1);
+                st.events += 1;
                 waitq::notify();
             }
             &Action::Signal {
@@ -488,6 +492,10 @@ impl FileOps for TimerFd {
 
     fn kind_name(&self) -> &'static str {
         "timerfd"
+    }
+
+    fn poll_generation(&self) -> u64 {
+        lock(&self.core.state).events
     }
 
     fn poll(&self) -> u32 {

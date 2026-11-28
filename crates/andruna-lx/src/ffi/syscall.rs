@@ -72,10 +72,12 @@ pub(crate) unsafe fn dispatch(nr: i64, a: [i64; 6]) -> SysResult<i64> {
             }
             Sysno::Getpid => Ok(i64::from(process::getpid())),
             Sysno::Gettid => Ok(i64::from(process::gettid())),
-            Sysno::Nanosleep => sys_nanosleep(ptr(0) as _),
+            Sysno::Nanosleep => sys_nanosleep(ptr(0) as _, ptr(1) as _),
             Sysno::ClockGettime => sys_clock_gettime(int(0), ptr(1) as _),
             Sysno::ClockGetres => sys_clock_getres(int(0), ptr(1) as _),
-            Sysno::ClockNanosleep => sys_clock_nanosleep(int(0), int(1), ptr(2) as _).map(|()| 0),
+            Sysno::ClockNanosleep => {
+                sys_clock_nanosleep(int(0), int(1), ptr(2) as _, ptr(3) as _).map(|()| 0)
+            }
             Sysno::Futex => sys_futex(ptr(0), int(1), uint(2), ptr(3), ptr(4), uint(5)),
             Sysno::Mremap => mem::mremap(ptr(0), ptr(1), ptr(2), uint(3)).map(|a| a as i64),
             Sysno::Getcwd => sys_getcwd(ptr(0) as *mut u8, ptr(1)),
@@ -393,7 +395,10 @@ unsafe fn sys_futex(
     }
     let waits = matches!(
         cmd,
-        crate::linux::futex::FUTEX_WAIT | crate::linux::futex::FUTEX_WAIT_BITSET
+        crate::linux::futex::FUTEX_WAIT
+            | crate::linux::futex::FUTEX_WAIT_BITSET
+            | crate::linux::futex::FUTEX_LOCK_PI
+            | crate::linux::futex::FUTEX_LOCK_PI2
     );
     let t = if waits && timeout != 0 {
         // SAFETY: a non-NULL timeout is a readable timespec (contract).

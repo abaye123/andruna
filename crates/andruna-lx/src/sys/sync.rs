@@ -47,3 +47,19 @@ pub fn wake_all(addr: usize) {
     // SAFETY: the address is only used as a key; it is not dereferenced.
     unsafe { WakeByAddressAll(addr as *const c_void) }
 }
+
+/// A new auto-reset event, not set.
+pub fn create_event() -> Option<super::OwnedHandle> {
+    use windows::Win32::System::Threading::CreateEventW;
+    // SAFETY: no security attributes and no name; the handle is owned by
+    // the result.
+    unsafe { CreateEventW(None, false, false, None) }
+        .ok()
+        .map(super::OwnedHandle::from_raw)
+}
+
+/// Sets an event.
+pub fn set_event(h: &super::OwnedHandle) {
+    // SAFETY: a live event handle.
+    let _ = unsafe { windows::Win32::System::Threading::SetEvent(h.raw()) };
+}

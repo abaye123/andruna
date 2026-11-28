@@ -91,10 +91,12 @@ fn create_timer() -> Option<OwnedHandle> {
 }
 
 /// Sleeps for `hundred_ns` 100 ns units on a high-resolution waitable timer
-/// (one per thread, created on first use).
-pub fn sleep(hundred_ns: u64) -> SysResult<()> {
+/// (one per thread, created on first use). With `wake`, the sleep also ends
+/// when that event is set; returns whether it did.
+pub fn sleep(hundred_ns: u64, wake: Option<windows::Win32::Foundation::HANDLE>) -> SysResult<bool> {
+    use windows::Win32::System::Threading::WaitForMultipleObjects;
     if hundred_ns == 0 {
-        return Ok(());
+        return Ok(false);
     }
     TIMER.with(|cell| {
         let timer = cell
@@ -107,12 +109,16 @@ pub fn sleep(hundred_ns: u64) -> SysResult<()> {
         // no completion routine.
         unsafe { SetWaitableTimer(timer.raw(), &due, 0, None, None, false) }
             .map_err(Errno::from)?;
-        // SAFETY: waits on a live handle.
-        let r = unsafe { WaitForSingleObject(timer.raw(), INFINITE) };
-        if r == WAIT_OBJECT_0 {
-            Ok(())
-        } else {
-            Err(Errno::EIO)
+        let r = match wake {
+            // SAFETY: waits on a live handle.
+            None => unsafe { WaitForSingleObject(timer.raw(), INFINITE) },
+            // SAFETY: waits on two live handles.
+            Some(w) => unsafe { WaitForMultipleObjects(&[timer.raw(), w], false, INFINITE) },
+        };
+        match r.0.wrapping_sub(WAIT_OBJECT_0.0) {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(Errno::EIO),
         }
     })
 }

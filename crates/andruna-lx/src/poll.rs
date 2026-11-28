@@ -5,9 +5,12 @@
 //!
 //! # Deviations from Linux
 //!
-//! - `EPOLLET` is reported like level-triggered readiness: an object that
-//!   is still ready is reported again. Programs written for edge-triggered
-//!   mode (which read until `EAGAIN`) see extra reports, never missing ones.
+//! - `EPOLLET`: an object is reported when it is ready and new events
+//!   happened on it since its last report (its event generation changed,
+//!   [`FileOps::poll_generation`]), as Linux reports a new edge for every
+//!   wake-up of the object. Pipes, eventfd and timerfd keep their own
+//!   generation; other objects (sockets) use the process-wide change count,
+//!   so they may be reported again after a change elsewhere, never missed.
 //! - `ppoll`, `pselect6` and `epoll_pwait` install the temporary signal
 //!   mask for the wait; a signal it unblocks ends the wait with `EINTR` but
 //!   is delivered only once the caller's own mask allows it.
@@ -156,6 +159,8 @@ struct Interest {
     /// `EPOLLONESHOT` after a report: nothing is reported until
     /// `EPOLL_CTL_MOD`.
     disarmed: bool,
+    /// `EPOLLET`: the object's event generation at the last report.
+    reported: Option<u64>,
 }
 
 /// An epoll instance.
@@ -208,6 +213,7 @@ impl Epoll {
                         events,
                         data,
                         disarmed: false,
+                        reported: None,
                     },
                 );
             }
@@ -220,6 +226,7 @@ impl Epoll {
                 i.events = events;
                 i.data = data;
                 i.disarmed = false;
+                i.reported = None;
             }
             EPOLL_CTL_DEL => {
                 m.remove(&k).ok_or(Errno::ENOENT)?;
@@ -244,11 +251,18 @@ impl Epoll {
                 continue;
             }
             let Some(f) = i.file.upgrade() else { continue };
+            let edge = i.events & EPOLLET != 0;
+            let seen = if edge { f.ops().poll_generation() } else { 0 };
             let ev = f.ops().poll() & ((i.events & !EPOLL_FLAGS) | EPOLL_ALWAYS);
-            if ev != 0 {
+            if ev != 0 && !(edge && i.reported == Some(seen)) {
                 out.push((ev, i.data));
-                if consume && i.events & EPOLLONESHOT != 0 {
-                    i.disarmed = true;
+                if consume {
+                    if i.events & EPOLLONESHOT != 0 {
+                        i.disarmed = true;
+                    }
+                    if edge {
+                        i.reported = Some(seen);
+                    }
                 }
             }
         }
@@ -400,6 +414,22 @@ mod tests {
             .unwrap();
         assert_eq!(epoll.wait(8, Some(0)), Ok(vec![(EPOLLIN, 7)]));
         assert_eq!(epoll.wait(8, Some(0)), Ok(Vec::new()));
+        // Edge-triggered: reported once per new event, again after more
+        // data arrives, never while nothing new happened.
+        epoll
+            .ctl(&e, EPOLL_CTL_MOD, r, Some((EPOLLIN | EPOLLET, 8)))
+            .unwrap();
+        assert_eq!(epoll.wait(8, Some(0)), Ok(vec![(EPOLLIN, 8)]));
+        assert_eq!(epoll.wait(8, Some(0)), Ok(Vec::new()));
+        fs::write(w, UserBuf::from_ref(b"y")).unwrap();
+        assert_eq!(epoll.wait(8, Some(0)), Ok(vec![(EPOLLIN, 8)]));
+        assert_eq!(epoll.wait(8, Some(0)), Ok(Vec::new()));
+        // Drained, then written again while nobody waited: a new edge.
+        let mut two = [0u8; 2];
+        assert_eq!(fs::read(r, UserBuf::from_mut(&mut two)), Ok(2));
+        fs::write(w, UserBuf::from_ref(b"z")).unwrap();
+        assert_eq!(epoll.wait(8, Some(0)), Ok(vec![(EPOLLIN, 8)]));
+        assert_eq!(fs::read(r, UserBuf::from_mut(&mut two)), Ok(1));
         epoll.ctl(&e, EPOLL_CTL_DEL, r, None).unwrap();
         assert_eq!(epoll.ctl(&e, EPOLL_CTL_DEL, r, None), Err(Errno::ENOENT));
 

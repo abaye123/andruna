@@ -28,6 +28,12 @@ pub fn notify() {
     os::wake_all(SEQ.as_ptr() as usize);
 }
 
+/// The number of state changes so far, process-wide: the event generation
+/// of objects that keep none of their own ([`crate::fd::FileOps::poll_generation`]).
+pub fn generation() -> u64 {
+    u64::from(SEQ.load(Ordering::SeqCst))
+}
+
 /// A deadline in `CLOCK_MONOTONIC` nanoseconds.
 pub type Deadline = Option<i128>;
 

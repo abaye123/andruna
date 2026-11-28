@@ -101,6 +101,9 @@ pub struct ThreadSignals {
     wait_addr: AtomicUsize,
     /// Changed and woken by senders when the thread sleeps on it.
     wake_word: AtomicU32,
+    /// Set by senders while the thread sleeps on a timer ([`timed_sleep`]).
+    sleep_event: std::sync::OnceLock<Option<crate::sys::OwnedHandle>>,
+    in_timed_sleep: std::sync::atomic::AtomicBool,
 }
 
 impl ThreadSignals {
@@ -114,6 +117,8 @@ impl ThreadSignals {
             alt_flags: AtomicI32::new(SS_DISABLE),
             wait_addr: AtomicUsize::new(0),
             wake_word: AtomicU32::new(0),
+            sleep_event: std::sync::OnceLock::new(),
+            in_timed_sleep: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -143,6 +148,11 @@ impl ThreadSignals {
     /// Wakes the thread if it sleeps in an interruptible wait.
     fn kick(&self) {
         self.wake_word.fetch_add(1, Ordering::SeqCst);
+        if self.in_timed_sleep.load(Ordering::SeqCst)
+            && let Some(Some(e)) = self.sleep_event.get()
+        {
+            os::set_event(e);
+        }
         let a = self.wait_addr.load(Ordering::SeqCst);
         if a != 0 {
             os::wake_all(a);
@@ -556,6 +566,28 @@ pub fn interrupted() -> bool {
     match current_if_any() {
         Some(t) => deliverable(&t, t.blocked()),
         None => false,
+    }
+}
+
+/// Sleeps `hundred_ns` 100 ns units on the thread's high-resolution timer,
+/// ending early with `EINTR` when a signal arrives for the thread.
+pub fn timed_sleep(hundred_ns: u64) -> SysResult<()> {
+    let t = current();
+    let Some(ev) = t.sleep_event.get_or_init(os::create_event).as_ref() else {
+        return crate::sys::time::sleep(hundred_ns, None).map(|_| ());
+    };
+    t.in_timed_sleep.store(true, Ordering::SeqCst);
+    // A signal queued before the flag was set is seen here; one queued
+    // after it sets the event.
+    let r = if deliverable(&t, t.blocked()) {
+        Ok(true)
+    } else {
+        crate::sys::time::sleep(hundred_ns, Some(ev.raw()))
+    };
+    t.in_timed_sleep.store(false, Ordering::SeqCst);
+    match r? {
+        true if deliverable(&t, t.blocked()) => Err(Errno::EINTR),
+        _ => Ok(()),
     }
 }
 
