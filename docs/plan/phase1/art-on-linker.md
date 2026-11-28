@@ -208,6 +208,38 @@ step lx's documentation names next), a per-process `/proc/self/stat`
 (above), fewer and cheaper file opens, and the loader's 12 to 16 ms for
 26 objects.
 
+**lx round 3 (file views, per-process `/proc/self/stat`).** Method as
+above: release builds of andruna-app from `main` at `379a20d` (before) and
+from branch `p1-lx-round3` (after), the ART root with Conscrypt and its
+boot image, Hello World 8 times per build and mode, interleaved; the
+machine was at 100% load from other work during the runs. Medians, ms
+(min to max); "ART part" is entry point to exit from `ANDRUNA_PROFILE`,
+the system call columns are dispatcher time summed over all threads:
+
+| Mode | Build | Wall | ART part | `mmap` | `openat` |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Interpreter | before | 220 (188 to 695) | 179 (154 to 209) | 18.4 | 23.9 |
+| Interpreter | after | 180 (154 to 392) | **129** (111 to 164) | 6.6 | 3.7 |
+| JIT | before | 217 (175 to 238) | 176 (141 to 199) | 18.6 | 22.2 |
+| JIT | after | 184 (147 to 278) | **137** (113 to 232) | 7.7 | 3.8 |
+| AOT | before | 194 (182 to 314) | 156 (147 to 261) | 49.4 | 23.1 |
+| AOT | after | 180 (158 to 219) | **138** (113 to 159) | 31.4 | 7.9 |
+
+The `openat` difference is the two `/proc/self/stat` opens (now
+per-process queries, microseconds each). The `mmap` difference is mostly
+ICU's 29 MB data file (19.5 ms as a copy, a view now), the vdex files and
+the first segment of each oat file's validating load (at the start of a
+64 KiB-aligned reservation). Still copies: the oat files' second segments
+in that load (their view would start inside the first segment's view) and
+the boot image's fixed mappings: ART places `boot.art` and the oat files
+right after each other at a randomized, page-aligned base, so their
+addresses and file offsets do not agree modulo 64 KiB and Windows cannot
+map them as views (about 15 ms). Merging adjacent views of one file
+would take the first group; aligning ART's
+relocation delta and the image layout to 64 KiB would make them views (an
+ART change, not made). Under sysd the boot image comes from its shared
+view instead (`crates/andruna-lx/src/image.rs`).
+
 `ANDRUNA_PROFILE=1` prints, at exit: phase marks in ms since Windows
 created the process, system call counts and dispatcher time per number,
 the slowest calls with their path or address range argument, and
@@ -307,12 +339,10 @@ patcher source in dex2oat (S1 round 5), and lx's arm64 signal frames.
   `/sys/devices/system/cpu/{online,possible,present}` (`procfs.rs`);
   without the latter, dex2oat ran on one thread (4.2 s for the boot image
   instead of about 1 s).
-- Interim system calls (`interim.rs`), used only where lx answers `ENOSYS`
-  (or, for writable shared file mappings, `ENODEV`): write-back for
-  writable `MAP_SHARED` file mappings on lx's private copy (dex2oat writes
-  vdex and oat files through them), `uname`, rlimits, `getrusage`,
-  `sysinfo`, `getppid`, priorities, `getcpu`, `membarrier`, `mincore`,
-  `umask`, `fsync`, `msync`, `chmod` family.
+- Interim system calls (`interim.rs`), used only where lx answered
+  `ENOSYS` (or, for writable shared file mappings, `ENODEV`). All of them
+  moved into andruna-lx (rounds 2 and 3, `lx-conformance.md`) and the file
+  is gone.
 - A stand-in for logd's socket (`logd.rs`): liblog's records go to the
   guest's standard error as `P/tag(tid): message`, at or above
   `ANDRUNA_LOG_PRIORITY` (default W), until sysd has a log service.
@@ -339,9 +369,6 @@ patcher source in dex2oat (S1 round 5), and lx's arm64 signal frames.
 - arm64 numbers come from one hosted VM (three runs per case); the
   arm64 bionic and libbase gtest suites were not run through the loader
   (only the loader's own guest tests).
-- `/proc/self/stat` still costs one system-wide process query per open
-  (above); start-up after lx round 2 is 10 to 30 ms slower than before it
-  on a loaded desktop.
 - nterp on x86_64 is still off (ART patch 0003): the interpreter numbers
   are the switch interpreter's.
 - The boot jars and test dex files were the S1 build's outputs at the same
@@ -351,5 +378,4 @@ patcher source in dex2oat (S1 round 5), and lx's arm64 signal frames.
   it); since the libcore tests' round 2 it is staged in the ART root
   (ADR 0021). Dex files in the jars are not 4-byte aligned, so ART extracts
   them.
-- libunwindstack is a stand-in; writable shared file mappings are copies
-  written back on `msync`, `munmap` and exit.
+- libunwindstack is a stand-in.
