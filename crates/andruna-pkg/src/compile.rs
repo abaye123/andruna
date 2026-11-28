@@ -9,6 +9,7 @@
 //! either ([`Outcome::Failed`]), as on Android, where an app without
 //! compiled code still runs.
 
+use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -101,7 +102,10 @@ impl Compiler {
             (Ok(o), Ok(e)) => (Stdio::from(o), Stdio::from(e)),
             _ => (Stdio::null(), Stdio::null()),
         };
+        // CREATE_NO_WINDOW: andruna-app is a console program and sysd has no
+        // console; without the flag a console window would flash up.
         let mut child = match Command::new(exe)
+            .creation_flags(0x0800_0000)
             .arg("--art-root")
             .arg(&root)
             .arg("--data")

@@ -28,6 +28,7 @@ pub mod l10n;
 pub mod log;
 pub mod packages;
 pub mod pkg;
+pub mod runtime;
 pub mod server;
 pub mod supervisor;
 mod sys;
@@ -93,6 +94,11 @@ pub enum Mode {
         /// The activity to start (`--activity`), when not the launcher one.
         activity: Option<String>,
     },
+    /// Grants the runtime capability on the install directory and writes the
+    /// boot image (the installer's step; [`runtime`]).
+    PrepareRuntime {
+        root: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug)]
@@ -107,7 +113,8 @@ pub struct ServerConfig {
 
 pub const USAGE: &str = "\
 usage: andruna-sysd [--instance <name>] [--root <dir>] [--idle-timeout-ms <n>] [--ready-event <handle>]
-       andruna-sysd --host <package> [--activity <name>] [--root <dir>]";
+       andruna-sysd --host <package> [--activity <name>] [--root <dir>]
+       andruna-sysd --prepare-runtime [--root <dir>]";
 
 /// Parses the command line (without the program name).
 pub fn parse_args(args: &[String]) -> Result<Mode, String> {
@@ -117,6 +124,7 @@ pub fn parse_args(args: &[String]) -> Result<Mode, String> {
     let mut ready_event = None;
     let mut host = None;
     let mut activity = None;
+    let mut prepare_runtime = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || {
@@ -160,8 +168,15 @@ pub fn parse_args(args: &[String]) -> Result<Mode, String> {
                 }
                 activity = Some(a);
             }
+            "--prepare-runtime" => prepare_runtime = true,
             other => return Err(format!("unexpected argument `{other}`")),
         }
+    }
+    if prepare_runtime {
+        if host.is_some() {
+            return Err("--prepare-runtime and --host exclude each other".into());
+        }
+        return Ok(Mode::PrepareRuntime { root });
     }
     Ok(match host {
         Some(package) => Mode::Host {
@@ -204,7 +219,31 @@ pub fn main_with_args(args: &[String]) -> i32 {
             Ok(l) => host::run(&l, &package, activity.as_deref()),
             Err(_) => EXIT_STARTUP_FAILED,
         },
+        Ok(Mode::PrepareRuntime { root }) => prepare_runtime(root),
         Ok(Mode::Server(cfg)) => run_server(cfg),
+    }
+}
+
+/// `--prepare-runtime`: run by the installer after it copied the files.
+fn prepare_runtime(root: Option<PathBuf>) -> i32 {
+    let layout = match layout(root) {
+        Ok(l) => l,
+        Err(_) => return EXIT_STARTUP_FAILED,
+    };
+    let _ = log::init(&layout.logs_dir(), "sysd");
+    let Some(rt) = runtime::Runtime::beside_exe() else {
+        error!(
+            "prepare_runtime_failed",
+            error = "andruna-app.exe or art\\ is not next to andruna-sysd.exe"
+        );
+        return EXIT_STARTUP_FAILED;
+    };
+    match runtime::prepare(&rt, &layout) {
+        Ok(()) => EXIT_OK,
+        Err(e) => {
+            error!("prepare_runtime_failed", error = e);
+            EXIT_STARTUP_FAILED
+        }
     }
 }
 
@@ -290,6 +329,7 @@ fn serve(cfg: &ServerConfig, layout: Layout) -> std::io::Result<i32> {
     let supervisor = Arc::new(Supervisor::new(host_exe, layout.clone(), activity.clone())?);
     let layout_root = layout.root.clone();
     let store = Arc::new(open_store(&layout, cfg.root.is_none())?);
+    runtime::prepare_in_background(&layout);
     let ctx = Arc::new(Context {
         layout,
         activity: activity.clone(),

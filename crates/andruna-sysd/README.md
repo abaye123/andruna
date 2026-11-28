@@ -33,6 +33,13 @@ What exists now:
   its ART root exist; otherwise installs report the compile step as
   unavailable.
 
+**Runtime** (`src/runtime.rs`, [ADR 0043](../../docs/decisions/0043-runtime-in-the-installer-and-boot-image-at-install.md)):
+`andruna-sysd --prepare-runtime` (run by the installer) grants the
+`andrunaRuntime` capability on the install folder and writes the boot
+image with `andruna-app --compile-boot` when `andruna-app.exe` and `art\`
+are next to sysd. At every start sysd grants again and, when the boot
+image is missing, writes it in a background thread.
+
 **Placeholder.** The host process is meant to be `andruna-app.exe`, which
 does not exist yet. Until it does, sysd starts its own executable as
 `andruna-sysd --host <package>`. That process runs no app code: it logs
@@ -53,6 +60,7 @@ outside a container.
 ```
 andruna-sysd [--instance <name>] [--root <dir>] [--idle-timeout-ms <n>] [--ready-event <handle>]
 andruna-sysd --host <package> [--activity <name>] [--root <dir>]
+andruna-sysd --prepare-runtime [--root <dir>]
 ```
 
 `--root` replaces `%LOCALAPPDATA%\Andruna` and `--instance` the `default`
