@@ -3,14 +3,18 @@ name: GLES
 # ANGLE (D3D11) as Windows DLLs, the andruna-gles guest stubs and test, and
 # andruna-gles's tests on WARP (Direct3D 11's software rasterizer; hosted
 # runners have no GPU). ANGLE's build is cached by the glue and the lock.
+# Then GL in an app process: andruna-app renders through ANGLE into a
+# window of andruna-compositor (andruna-app's tests/gl.rs).
 
 on:
   push:
-    branches: [main, p3-gles]
+    branches: [main, p3-gles, p3-gl-in-apps]
     paths:
       - "aosp/angle/**"
       - "aosp/aosp.lock"
       - "crates/andruna-gles/**"
+      - "crates/andruna-compositor/**"
+      - "crates/andruna-app/**"
       - "crates/andruna-linker/**"
       - "crates/andruna-lx/**"
       - "xtask/**"
@@ -20,6 +24,8 @@ on:
       - "aosp/angle/**"
       - "aosp/aosp.lock"
       - "crates/andruna-gles/**"
+      - "crates/andruna-compositor/**"
+      - "crates/andruna-app/**"
       - "crates/andruna-linker/**"
       - "crates/andruna-lx/**"
       - "xtask/**"
@@ -136,6 +142,16 @@ jobs:
         run: |
           $env:PATH = "C:\tools\llvm-mingw\bin;$env:PATH"
           cargo test -p andruna-gles --target ${{ matrix.target }} -- --nocapture --test-threads=1
+
+      - name: GL in an app process (WARP)
+        env:
+          ANDRUNA_REQUIRE_GLES: "1"
+          ANDRUNA_GLES_DEVICE: warp
+        run: |
+          $env:PATH = "C:\tools\llvm-mingw\bin;$env:PATH"
+          $env:ANDRUNA_ANGLE_DIR = "$PWD\out\angle\${{ matrix.arch }}\bin"
+          $env:ANDRUNA_GLES_GUEST = "$PWD\out\gles\${{ matrix.arch }}\guest"
+          cargo test -p andruna-app --target ${{ matrix.target }} --test gl -- --nocapture
 
       - uses: actions/upload-artifact@v4
         with:
