@@ -115,9 +115,9 @@ public sealed class RealSysdTests : IDisposable
         var focus = await client.FocusWindowAsync("org.example.none");
         Assert.Equal(SysdOutcome.ServiceError, focus.Outcome);
 
-        // Installed packages are the directories app\<package>\.
-        Directory.CreateDirectory(Path.Combine(_root, "app", "org.example.one"));
-        Assert.Equal(["org.example.one"], (await client.ListPackagesAsync()).Value!.Select(p => p.Name));
+        // Which packages sysd lists is sysd's business (the package database of
+        // andruna-pkg, tested there); here only the request round trip matters.
+        Assert.NotNull((await client.ListPackagesAsync()).Value);
 
         // All of it went over one kept connection, which sysd counts.
         var status = await client.GetStatusAsync();
