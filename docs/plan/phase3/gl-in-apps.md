@@ -128,13 +128,14 @@ replaces them:
 | `Choreographer` | `DisplayEventReceiver` on the compositor's vsync (period now consistent with presents) |
 | `TextureView`, `SurfaceTexture` | A buffer queue with `AHardwareBuffer` on shared D3D11 textures and `EGLImage` import (see gles-angle.md, HWUI needs); not served by a composition swap chain |
 | `android.opengl.GLES20`, `EGL14` | The framework's JNI (`libandroid_runtime`) linking the guest `libEGL.so`/`libGLESv2.so`, which work as shown by the JNI program |
-| App processes from sysd | sysd starts app processes in AppContainers (p2-app-lifecycle); it then creates the channel and surfaces exactly as `tests/gl.rs` does, with the handles in the launch handle list |
+| App processes from sysd | sysd starts `andruna-app --host` in the package's AppContainer (ADRs 0037, 0038); the activity manager adds the window channel's handles to that launch handle list and to the assignment (the `--host` path sets no compositor channel yet) and then offers surfaces exactly as `tests/gl.rs` does |
 
 ## Not done
 
-- sysd does not create task windows or start GL app processes yet; the
-  test and `andruna-compositor-host --app` play its part. GL inside an
-  AppContainer was shown by spike S7, not re-checked with this path.
+- sysd starts app hosts but does not create task windows or pass a
+  window channel yet; the test and `andruna-compositor-host --app` play
+  its part. GL inside an AppContainer was shown by spike S7, not
+  re-checked with this path.
 - Input reaches the app process over the same channel but the native and
   Java programs do not consume it (events are finished as not handled).
 - arm64 runs in CI only; not run on a local arm64 device.
